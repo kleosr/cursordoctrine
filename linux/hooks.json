@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "bash ~/.cursor/inject-doctrine.sh",
+        "timeout": 5,
+        "_comment": "5s: inject the agent doctrine + user rules at session start. inject-doctrine.sh reads ~/.cursor/doctrine.md + USER-RULES.md and emits them as {\"additional_context\": ...} JSON (sessionStart does NOT consume raw stdout)."
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "bash ~/.agents/hooks/self-review-trigger.sh",
+        "timeout": 5,
+        "matcher": "^Write$",
+        "_comment": "5s: record the edit in ~/.cursor/.hooks-pending/session-edits-<conversation_id>.txt and stash the self-review prompt in feedback-<conversation_id>.txt. Matcher ^Write$ = agent edits only; unanchored, afterFileEdit also fires on TabWrite (every user tab-completion). The model is the auditor."
+      },
+      {
+        "command": "bash ~/.agents/hooks/minimal-edit-audit.sh",
+        "timeout": 15,
+        "matcher": "^Write$",
+        "_comment": "15s: minimal-editing advisory on the edited file (git --numstat line-count + audit-metrics.py token metrics on .py, from ~/.cursor/skills/minimal-editing/ if installed). Appends findings to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or MINIMAL_EDITING_ENFORCE=0."
+      },
+      {
+        "command": "bash ~/.agents/hooks/anti-slop-audit.sh",
+        "timeout": 15,
+        "matcher": "^Write$",
+        "_comment": "15s: AI-slop advisory, companion to minimal-edit-audit. git diff flags new deps / premature abstractions (Factory/Repository/Mediator/CQRS/DDD) / redundant comments, and injects the anti-slop.md self-review checklist on substantial edits (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Appends to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or ANTI_SLOP_ENFORCE=0."
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "bash ~/.agents/hooks/post-tool-use.sh",
+        "timeout": 5,
+        "_comment": "5s: drain this conversation's pending-feedback file (self-review + advisories, keyed by conversation_id) into additional_context. One-shot. No matcher: fires after EVERY tool so pending is delivered promptly."
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "bash ~/.agents/hooks/permission-gate.sh",
+        "timeout": 5,
+        "failClosed": false,
+        "_comment": "5s: deny a small explicit list of dangerous commands. Default-allow, deny-by-list."
+      }
+    ],
+    "stop": [
+      {
+        "command": "bash ~/.agents/hooks/final-review.sh",
+        "timeout": 5,
+        "loop_limit": 5,
+        "_comment": "5s: ONE comprehensive end-of-implementation review across correctness + reliability + coverage + anti-slop. If the agent edited files this loop (session-edits-<conversation_id> marker), returns {followup_message} so Cursor auto-submits ONE review pass. Bounded by the script's per-conversation reviewed-flag (one review per implementation); loop_limit is the harness-side runaway cap. Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0."
+      }
+    ]
+  }
+}
