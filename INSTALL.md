@@ -34,6 +34,9 @@ Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md, windows\USER-RULES.m
 # substitute the real profile path (forward slashes) at install time:
 $h = $HOME -replace '\\', '/'
 (Get-Content windows\hooks.json -Raw).Replace('~/', "$h/") | Set-Content "$HOME\.cursor\hooks.json" -NoNewline
+# anti-slop scanner used by the final-review hook:
+New-Item -ItemType Directory -Force "$HOME\.cursor\skills\anti-slop\scripts" | Out-Null
+Copy-Item scripts\scan_slop.py "$HOME\.cursor\skills\anti-slop\scripts\" -Force
 ```
 
 Linux (from the repo root, in bash):
@@ -44,6 +47,9 @@ cp linux/hooks/* ~/.agents/hooks/
 cp linux/inject-doctrine.sh linux/doctrine.md linux/USER-RULES.md ~/.cursor/
 cp linux/hooks.json ~/.cursor/hooks.json
 chmod +x ~/.agents/hooks/*.sh ~/.cursor/inject-doctrine.sh
+# anti-slop scanner used by the final-review hook:
+mkdir -p ~/.cursor/skills/anti-slop/scripts
+cp scripts/scan_slop.py ~/.cursor/skills/anti-slop/scripts/
 ```
 
 If `~/.cursor/hooks.json` already exists, merge the hook entries instead of overwriting — preserve anything the user already has.
