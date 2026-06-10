@@ -1,8 +1,6 @@
 # cursordoctrine
 
-Thin self-review hooks for Cursor. Four hook events, one message bus. The model is the auditor — Cursor only carries context and gates blast radius.
-
-![Thin self-review architecture](assets/architecture.png)
+Thin self-review hooks for Cursor. Four hook events, one message bus. The model is the auditor Cursor only carries context and gates blast radius.
 
 ## What this is
 
