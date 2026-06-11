@@ -67,7 +67,11 @@ echo '{"conversation_id":"t1","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/s
 echo '{"conversation_id":"t1"}'       | bash ~/.agents/hooks/post-tool-use.sh     # expect {"additional_context": ...}
 echo '{"conversation_id":"t1","status":"completed"}' | bash ~/.agents/hooks/final-review.sh  # expect {"followup_message": ...} once, then {}
 echo '{}' | bash ~/.cursor/inject-doctrine.sh                                     # expect {"additional_context": ...}
+python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help                    # expect usage text (final review's scanner)
 ```
+
+If the scanner check fails, the final review still works — it falls back to the
+`~/.agents/hooks/anti-slop.md` checklist — but re-run the copy step above.
 
 Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, and `inject-doctrine.ps1` lives in `$HOME\.cursor`).
 
