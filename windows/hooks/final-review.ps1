@@ -79,9 +79,11 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - run `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`,
-     consolidate clones/duplicates to one source of truth; drop premature
-     abstraction, unneeded deps, redundant comments, dead helpers.
+  4. Anti-slop - if ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists, run
+     `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`; otherwise
+     apply ~/.agents/hooks/anti-slop.md to the session diff (a missing scanner
+     is not a failure). Consolidate clones/duplicates to one source of truth;
+     drop premature abstraction, unneeded deps, redundant comments, dead helpers.
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.
 '@
 }

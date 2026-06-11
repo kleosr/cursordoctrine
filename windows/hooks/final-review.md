@@ -36,11 +36,15 @@ code they touch.
 - Add the missing tests; delete tautological ones.
 
 ## 4. Anti-slop
-- Run the whole-codebase duplication scan and consolidate clones:
+- If `~/.cursor/skills/anti-slop/scripts/scan_slop.py` exists (INSTALL.md step 2
+  copies it there), run the whole-codebase duplication scan:
     python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all
-  Same function in many files / identical bodies (the isRecord-class) → ONE
-  shared definition, re-point imports, delete the copies. Invoke the anti-slop
-  skill for the full taxonomy.
+  If it does NOT exist, do not treat that as a failure and do not hunt for the
+  file: apply the checklist in `~/.agents/hooks/anti-slop.md` to the session
+  diff and look for duplicate function bodies in the files you touched.
+- Either way, consolidate clones: same function in many files / identical bodies
+  (the isRecord-class) → ONE shared definition, re-point imports, delete the
+  copies.
 - Premature abstraction (Factory / Repository / Mediator / CQRS / DDD with fewer
   than 2–3 real call sites), unnecessary dependencies, redundant restate-the-code
   comments, dead helpers, accidental complexity → remove.
