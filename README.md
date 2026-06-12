@@ -26,6 +26,7 @@ linux/            bash hooks — install on Linux machines and SSH remotes
   hooks/          same hooks, ported to bash (jq preferred, python3 fallback)
 skills/           Cursor agent skills shipped with the package
   anti-slop/      SKILL.md + the duplication scanner (final review runs it)
+bin/              the npm CLI (npx cursordoctrine install / verify / uninstall)
 INSTALL.md        a ready-to-paste prompt that tells a Cursor agent to
                   install the right folder and verify every hook
 assets/           the architecture diagram above
@@ -45,7 +46,16 @@ The two folders are functionally identical. Windows runs everything through `pws
 
 ## Install
 
-Open `INSTALL.md`, paste its contents into a Cursor agent chat on the target machine, and let the agent copy the files and run the verification checklist. Or do it by hand — the copy commands are in the same file.
+The fast path is npm (Node 18+):
+
+```bash
+npx cursordoctrine@latest install   # copies the hook pack into ~/.agents/hooks + ~/.cursor, merges hooks.json
+npx cursordoctrine verify           # smoke-tests every hook with fake payloads, no restart needed
+```
+
+Then restart Cursor — `hooks.json` is read at startup. `install` is idempotent: re-run it to update, and entries you added to `~/.cursor/hooks.json` yourself are preserved. `npx cursordoctrine uninstall` removes the pack the same way.
+
+No Node? Open `INSTALL.md`, paste its contents into a Cursor agent chat on the target machine, and let the agent copy the files and run the verification checklist. Or do it by hand — the copy commands are in the same file.
 
 Prerequisites: `git` everywhere; `pwsh` on Windows; `bash` plus `jq` or `python3` on Linux.
 

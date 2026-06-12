@@ -1,0 +1,8 @@
+# The npm tarball is packed from a working tree; keep interpreter-sensitive
+# files LF so Linux installs (bash shebangs, node bin shebang) never break.
+*.sh text eol=lf
+*.mjs text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ps1 text
