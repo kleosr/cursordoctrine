@@ -86,3 +86,35 @@ is_cursor_config_path() {
         *) return 1 ;;
     esac
 }
+
+# merge_subagent_edit_markers <json> <parent_cid> -> 0 if anything was folded
+#
+# Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so
+# their session-edits markers are invisible to the parent's stop-hook review.
+# Subagent transcripts live at <transcripts>/<parent-cid>/subagents/<sub-cid>.jsonl,
+# which gives a deterministic parent->subagent mapping: fold each subagent's
+# marker into the parent's and remove the original. No-ops when called from a
+# subagent context (its transcript_path has no sibling 'subagents' dir).
+merge_subagent_edit_markers() {
+    local json="$1" parent_cid="$2"
+    local tp sub_dir pending_dir parent_marker j scid m folded=1
+    tp="$(json_get "$json" transcript_path)"
+    [ -n "$tp" ] || return 1
+    sub_dir="$(dirname "$tp")/subagents"
+    [ -d "$sub_dir" ] || return 1
+    pending_dir="$(hooks_pending_dir)"
+    parent_marker="$pending_dir/session-edits-$parent_cid.txt"
+    for j in "$sub_dir"/*.jsonl; do
+        [ -e "$j" ] || continue
+        scid="$(basename "$j" .jsonl | tr -cd 'A-Za-z0-9_-')"
+        [ -n "$scid" ] || continue
+        [ "$scid" = "$parent_cid" ] && continue
+        m="$pending_dir/session-edits-$scid.txt"
+        [ -f "$m" ] || continue
+        mkdir -p "$pending_dir" 2>/dev/null
+        grep -vE '^[[:space:]]*$' "$m" 2>/dev/null | sort -u >> "$parent_marker" 2>/dev/null
+        rm -f "$m" 2>/dev/null
+        folded=0
+    done
+    return $folded
+}

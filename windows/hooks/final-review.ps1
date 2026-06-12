@@ -54,6 +54,13 @@ if (Test-Path $flag) {
     Emit-None
 }
 
+# Fold completed subagents' edit markers into this conversation's marker so
+# the review covers delegated work (subagent edits fire afterFileEdit under
+# the SUBAGENT's conversation_id; postToolUse never fires for the Task tool,
+# so this stop-time fold is the terminal backstop after the per-tool fold in
+# post-tool-use.ps1).
+Merge-SubagentEditMarkers $obj $cid | Out-Null
+
 # Review only a clean completion; otherwise just clear the marker and stop.
 if ($status -and $status -ne 'completed') {
     Remove-Item $marker -Force -ErrorAction SilentlyContinue

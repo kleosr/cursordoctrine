@@ -12,19 +12,19 @@
       {
         "command": "bash ~/.agents/hooks/self-review-trigger.sh",
         "timeout": 5,
-        "matcher": "^Write$",
-        "_comment": "5s: record the edit in ~/.cursor/.hooks-pending/session-edits-<conversation_id>.txt and stash the self-review prompt in feedback-<conversation_id>.txt. Matcher ^Write$ = agent edits only; unanchored, afterFileEdit also fires on TabWrite (every user tab-completion). The model is the auditor."
+        "matcher": "^(Write|StrReplace|EditNotebook)$",
+        "_comment": "5s: record the edit in ~/.cursor/.hooks-pending/session-edits-<conversation_id>.txt and stash the self-review prompt in feedback-<conversation_id>.txt. The harness normalizes agent file edits (incl. StrReplace) to tool type 'Write' in this event - verified via payload capture - so ^Write$ matches them all; the alternation is defensive against future harness versions reporting raw tool names. Anchored so TabWrite (every user tab-completion) stays excluded. The model is the auditor. NOTE: fires inside subagent contexts too, keyed by the SUBAGENT's conversation_id - see subagentStop + the marker fold in post-tool-use.sh/final-review.sh."
       },
       {
         "command": "bash ~/.agents/hooks/minimal-edit-audit.sh",
         "timeout": 15,
-        "matcher": "^Write$",
+        "matcher": "^(Write|StrReplace|EditNotebook)$",
         "_comment": "15s: minimal-editing advisory on the edited file (git --numstat line-count + audit-metrics.py token metrics on .py, from ~/.cursor/skills/minimal-editing/ if installed). Appends findings to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or MINIMAL_EDITING_ENFORCE=0."
       },
       {
         "command": "bash ~/.agents/hooks/anti-slop-audit.sh",
         "timeout": 15,
-        "matcher": "^Write$",
+        "matcher": "^(Write|StrReplace|EditNotebook)$",
         "_comment": "15s: AI-slop advisory, companion to minimal-edit-audit. git diff flags new deps / premature abstractions (Factory/Repository/Mediator/CQRS/DDD) / redundant comments, and injects the anti-slop.md self-review checklist on substantial edits (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Appends to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or ANTI_SLOP_ENFORCE=0."
       }
     ],
@@ -32,7 +32,16 @@
       {
         "command": "bash ~/.agents/hooks/post-tool-use.sh",
         "timeout": 5,
-        "_comment": "5s: drain this conversation's pending-feedback file (self-review + advisories, keyed by conversation_id) into additional_context. One-shot. No matcher: fires after EVERY tool so pending is delivered promptly."
+        "_comment": "5s: (1) fold completed subagents' session-edits markers into this conversation's marker - subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, and postToolUse does NOT fire for the Task tool (verified by payload logging), so per-tool-boundary folding is how delegated edits reach the parent's stop-hook review - and prime the parent to audit the subagent diff; (2) drain this conversation's pending-feedback file (self-review + advisories) into additional_context. One-shot. No matcher: fires after EVERY tool so pending is delivered promptly."
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "bash ~/.agents/hooks/subagent-stop-review.sh",
+        "timeout": 5,
+        "matcher": "^(generalPurpose|poteto-agent|best-of-n-runner|impeccable-manual-edit-applier)$",
+        "loop_limit": 3,
+        "_comment": "5s: ONE in-subagent final review per implementation before the result returns to the parent. Matcher = editing-capable subagent types only. Marker-gated like final-review.sh: afterFileEdit fires inside subagents keyed by the subagent's conversation_id, so session-edits-<subagent-cid>.txt exists exactly when the run edited files; reviewed-<cid>.flag is the per-implementation brake, loop_limit 3 is the harness-side runaway cap (1 would suppress the review after a resumed subagent's second implementation). Disable: HOOKS_ENFORCE=0 or SUBAGENT_REVIEW_ENFORCE=0."
       }
     ],
     "beforeShellExecution": [
