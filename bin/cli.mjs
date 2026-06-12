@@ -64,7 +64,7 @@ function keyOf(command, keys) {
 function mergeHooks(existing, incoming, keys) {
   const out = structuredClone(existing);
   if (out.version === undefined) out.version = incoming.version;
-  if (!out.hooks || typeof out.hooks !== 'object') out.hooks = {};
+  if (!out.hooks || typeof out.hooks !== 'object' || Array.isArray(out.hooks)) out.hooks = {};
   for (const [event, entries] of Object.entries(incoming.hooks || {})) {
     if (!Array.isArray(out.hooks[event])) out.hooks[event] = [];
     const cur = out.hooks[event];
