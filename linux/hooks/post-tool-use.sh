@@ -24,7 +24,8 @@ cid="$(safe_conversation_id "$input")"
 
 fold_note=""
 if merge_subagent_edit_markers "$input" "$cid"; then
-    fold_note="SUBAGENT WORK DETECTED - a subagent of this conversation edited files (its edits fired hooks in ITS context, not yours). YOU are the auditor of its work: audit its diff (git status / git diff on the files it touched) against ~/.agents/hooks/self-review.md. Fix real bugs; stay silent otherwise. Its files are folded into this conversation's end-of-implementation review."
+    self_review="$(expand_agent_paths "$HOME/.agents/hooks/self-review.md")"
+    fold_note="SUBAGENT WORK DETECTED - a subagent of this conversation edited files (its edits fired hooks in ITS context, not yours). YOU are the auditor of its work: audit its diff (git status / git diff on the files it touched) against $self_review. Fix real bugs; stay silent otherwise. Its files are folded into this conversation's end-of-implementation review."
 fi
 
 pending_file="$(hooks_pending_dir)/feedback-$cid.txt"

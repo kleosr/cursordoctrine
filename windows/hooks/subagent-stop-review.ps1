@@ -73,13 +73,16 @@ behaviour the task asked for):
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - no duplicate helpers, premature abstraction, unneeded deps,
-     redundant comments, dead code.
+  4. Anti-slop - if ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists, run
+     `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`; otherwise
+     apply ~/.agents/hooks/anti-slop.md to the session diff.
 If an axis is clean, say so in one line. Then stop.
 '@
 }
+$body = Expand-AgentPaths $body
 
-$fileList = ($edited | Select-Object -First 30) -join "`n  "
+$resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
+$fileList = ($resolved | Select-Object -First 30) -join "`n  "
 $msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n$body"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
