@@ -24,6 +24,8 @@ windows/          PowerShell hooks (pwsh) — install on Windows machines
 linux/            bash hooks — install on Linux machines and SSH remotes
   hooks.json, inject-doctrine.sh, doctrine.md, USER-RULES.md
   hooks/          same hooks, ported to bash (jq preferred, python3 fallback)
+skills/           Cursor agent skills shipped with the package
+  anti-slop/      SKILL.md + the duplication scanner (final review runs it)
 INSTALL.md        a ready-to-paste prompt that tells a Cursor agent to
                   install the right folder and verify every hook
 assets/           the architecture diagram above
