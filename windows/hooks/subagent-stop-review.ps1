@@ -83,7 +83,7 @@ $fileList = ($edited | Select-Object -First 30) -join "`n  "
 $msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n$body"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
-try { New-Item -ItemType File -Path $flag -Force | Out-Null } catch { }
+New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
 
 Write-HookJson @{ followup_message = $msg }
 exit 0
