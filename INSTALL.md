@@ -82,6 +82,8 @@ Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME
 
 ```powershell
 echo '{"command":"git push --force"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\permission-gate.ps1
+echo '{"conversation_id":"t2","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\self-review-trigger.ps1
+echo '{"conversation_id":"t2","status":"completed"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\subagent-stop-review.ps1  # SUBAGENT FINAL REVIEW once, then {}
 python $HOME\.cursor\skills\anti-slop\scripts\scan_slop.py --help
 ```
 

@@ -72,13 +72,13 @@ function Merge-SubagentEditMarkers($obj, [string]$parentCid) {
         if (-not $scid -or $scid -eq $parentCid) { continue }
         $m = Join-Path $pendingDir "session-edits-$scid.txt"
         if (-not (Test-Path $m)) { continue }
-        try {
-            New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null
-            Get-Content $m | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique |
-                Add-Content -Path $parentMarker
-            Remove-Item $m -Force -ErrorAction SilentlyContinue
-            $folded = $true
-        } catch { }
+        New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
+        $lines = @(Get-Content $m -ErrorAction SilentlyContinue |
+            Where-Object { $_ -and $_.Trim() } | Select-Object -Unique)
+        if ($lines.Count -eq 0) { continue }
+        $lines | Add-Content -Path $parentMarker -ErrorAction SilentlyContinue
+        Remove-Item $m -Force -ErrorAction SilentlyContinue
+        $folded = $true
     }
     return $folded
 }
