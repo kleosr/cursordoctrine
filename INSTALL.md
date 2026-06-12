@@ -1,10 +1,17 @@
 # Agent prompt: install the cursordoctrine hooks
 
+> Fast path: if Node 18+ is on the machine, `npx cursordoctrine@latest install`
+> does step 2 (including the hooks.json merge), and `npx cursordoctrine verify`
+> does step 3. Then restart Cursor and continue from step 4. The prompt below
+> is the manual path for machines without Node.
+
 > Paste everything below this line into a Cursor agent chat on the target machine.
 
 ---
 
 Install the cursordoctrine hook package for Cursor on this machine, then verify it works. This package is for Cursor only — do not wire it into any other tool, project, or editor config.
+
+If `node --version` shows Node 18 or newer, prefer the npm installer: run `npx cursordoctrine@latest install`, then `npx cursordoctrine verify`, then skip to step 4. Otherwise continue with the manual steps.
 
 ## 1. Ask the user which system they are on
 

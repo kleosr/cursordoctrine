@@ -1,0 +1,40 @@
+{
+  "name": "cursordoctrine",
+  "version": "0.1.0",
+  "description": "Thin self-review hooks for Cursor — the model is the auditor. One command installs the doctrine, the hook pack, and the anti-slop skill.",
+  "bin": {
+    "cursordoctrine": "bin/cli.mjs"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "windows/",
+    "linux/",
+    "skills/",
+    "INSTALL.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kleosr/cursordoctrine.git"
+  },
+  "homepage": "https://github.com/kleosr/cursordoctrine#readme",
+  "bugs": {
+    "url": "https://github.com/kleosr/cursordoctrine/issues"
+  },
+  "keywords": [
+    "cursor",
+    "cursor-hooks",
+    "hooks",
+    "agent",
+    "ai-agents",
+    "self-review",
+    "anti-slop",
+    "code-review",
+    "cli"
+  ],
+  "author": "Mario Pulice (kleosr)",
+  "license": "MIT"
+}
