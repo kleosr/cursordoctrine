@@ -19,8 +19,8 @@ Do not guess from the shell you happen to be running in — a Windows machine dr
 
 Check the prerequisites first:
 
-- Windows: PowerShell 7 (`pwsh`) on PATH, plus `git`.
-- Linux: `bash`, `git`, and either `jq` or `python3` (the hooks prefer `jq` and fall back to `python3`; install `jq` if neither is present).
+- Windows: PowerShell 7 (`pwsh`) on PATH, plus `git`. Python 3.9+ if you want the anti-slop scanner (the hooks work without it).
+- Linux: `bash`, `git`, and either `jq` or `python3` (the hooks prefer `jq` and fall back to `python3`; install `jq` if neither is present). Python 3.9+ for the anti-slop scanner.
 
 ## 2. Copy the files
 
@@ -75,7 +75,12 @@ If the scanner check fails, the final review still works — it falls back to th
 skill itself (`~/.cursor/skills/anti-slop/SKILL.md`) needs Python 3.9+ for the
 scanner and nothing else.
 
-Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, and `inject-doctrine.ps1` lives in `$HOME\.cursor`).
+Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, `inject-doctrine.ps1` lives in `$HOME\.cursor`, and use `python` instead of `python3` for the scanner check):
+
+```powershell
+echo '{"command":"git push --force"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\permission-gate.ps1
+python $HOME\.cursor\skills\anti-slop\scripts\scan_slop.py --help
+```
 
 Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 
