@@ -66,6 +66,9 @@ echo '{"command":"git status"}'       | bash ~/.agents/hooks/permission-gate.sh 
 echo '{"conversation_id":"t1","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
 echo '{"conversation_id":"t1"}'       | bash ~/.agents/hooks/post-tool-use.sh     # expect {"additional_context": ...}
 echo '{"conversation_id":"t1","status":"completed"}' | bash ~/.agents/hooks/final-review.sh  # expect {"followup_message": ...} once, then {}
+echo '{"conversation_id":"t2","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
+echo '{"conversation_id":"t2","status":"completed"}' | bash ~/.agents/hooks/subagent-stop-review.sh  # expect {"followup_message": "SUBAGENT FINAL REVIEW ..."} once, then {}
+echo '{"conversation_id":"t2"}'       | bash ~/.agents/hooks/post-tool-use.sh     # drain t2's leftover feedback file
 echo '{}' | bash ~/.cursor/inject-doctrine.sh                                     # expect {"additional_context": ...}
 python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help                    # expect usage text (final review's scanner)
 ```
@@ -91,10 +94,11 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message.
 4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
-6. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
+6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)
+7. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
 
 ## 5. Report
 
 Tell the user what was installed, which checks passed, and anything that failed with the exact error. Do not silently work around a failing check.
 
-Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `MINIMAL_EDITING_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`.
+Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `MINIMAL_EDITING_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.

@@ -50,3 +50,35 @@ function ConvertTo-FwdPath([string]$p) {
     if ($p -match '^/([A-Za-z]):?(/.*)$') { $p = $Matches[1] + ':' + $Matches[2] }
     return $p.Replace('\', '/')
 }
+
+# Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so
+# their session-edits markers are invisible to the parent's stop-hook review.
+# Subagent transcripts live at <transcripts>/<parent-cid>/subagents/<sub-cid>.jsonl,
+# which gives a deterministic parent->subagent mapping: fold each subagent's
+# marker into the parent's and remove the original. Returns $true if anything
+# was folded. No-ops when called from a subagent context (its transcript_path
+# has no sibling 'subagents' dir).
+function Merge-SubagentEditMarkers($obj, [string]$parentCid) {
+    $tp = ''
+    if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
+    if (-not $tp) { return $false }
+    $subDir = Join-Path (Split-Path $tp -Parent) 'subagents'
+    if (-not (Test-Path $subDir)) { return $false }
+    $pendingDir = Get-HooksPendingDir
+    $parentMarker = Join-Path $pendingDir "session-edits-$parentCid.txt"
+    $folded = $false
+    foreach ($j in Get-ChildItem $subDir -Filter '*.jsonl' -ErrorAction SilentlyContinue) {
+        $scid = [System.IO.Path]::GetFileNameWithoutExtension($j.Name) -replace '[^\w\-]', ''
+        if (-not $scid -or $scid -eq $parentCid) { continue }
+        $m = Join-Path $pendingDir "session-edits-$scid.txt"
+        if (-not (Test-Path $m)) { continue }
+        try {
+            New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null
+            Get-Content $m | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique |
+                Add-Content -Path $parentMarker
+            Remove-Item $m -Force -ErrorAction SilentlyContinue
+            $folded = $true
+        } catch { }
+    }
+    return $folded
+}
