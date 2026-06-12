@@ -66,11 +66,10 @@ function Resolve-AgentPath([string]$p) {
     if ($p -match '^~[\\/]') {
         $p = Join-Path $HOME ($p.Substring(2))
     }
-    try {
-        if (Test-Path -LiteralPath $p) {
-            return ConvertTo-FwdPath ((Resolve-Path -LiteralPath $p).Path)
-        }
-    } catch { }
+    if (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue) {
+        $resolved = Resolve-Path -LiteralPath $p -ErrorAction SilentlyContinue
+        if ($resolved) { return ConvertTo-FwdPath $resolved.Path }
+    }
     return ConvertTo-FwdPath $p
 }
 
