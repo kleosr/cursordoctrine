@@ -34,9 +34,9 @@ Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md, windows\USER-RULES.m
 # substitute the real profile path (forward slashes) at install time:
 $h = $HOME -replace '\\', '/'
 (Get-Content windows\hooks.json -Raw).Replace('~/', "$h/") | Set-Content "$HOME\.cursor\hooks.json" -NoNewline
-# anti-slop scanner used by the final-review hook:
-New-Item -ItemType Directory -Force "$HOME\.cursor\skills\anti-slop\scripts" | Out-Null
-Copy-Item scripts\scan_slop.py "$HOME\.cursor\skills\anti-slop\scripts\" -Force
+# anti-slop skill (SKILL.md + the scanner the final-review hook runs):
+New-Item -ItemType Directory -Force "$HOME\.cursor\skills" | Out-Null
+Copy-Item skills\anti-slop "$HOME\.cursor\skills\" -Recurse -Force
 ```
 
 Linux (from the repo root, in bash):
@@ -47,9 +47,9 @@ cp linux/hooks/* ~/.agents/hooks/
 cp linux/inject-doctrine.sh linux/doctrine.md linux/USER-RULES.md ~/.cursor/
 cp linux/hooks.json ~/.cursor/hooks.json
 chmod +x ~/.agents/hooks/*.sh ~/.cursor/inject-doctrine.sh
-# anti-slop scanner used by the final-review hook:
-mkdir -p ~/.cursor/skills/anti-slop/scripts
-cp scripts/scan_slop.py ~/.cursor/skills/anti-slop/scripts/
+# anti-slop skill (SKILL.md + the scanner the final-review hook runs):
+mkdir -p ~/.cursor/skills
+cp -r skills/anti-slop ~/.cursor/skills/
 ```
 
 If `~/.cursor/hooks.json` already exists, merge the hook entries instead of overwriting — preserve anything the user already has.
@@ -71,7 +71,9 @@ python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help                  
 ```
 
 If the scanner check fails, the final review still works — it falls back to the
-`~/.agents/hooks/anti-slop.md` checklist — but re-run the copy step above.
+`~/.agents/hooks/anti-slop.md` checklist — but re-run the copy step above. The
+skill itself (`~/.cursor/skills/anti-slop/SKILL.md`) needs Python 3.9+ for the
+scanner and nothing else.
 
 Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, and `inject-doctrine.ps1` lives in `$HOME\.cursor`).
 
@@ -84,6 +86,7 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message.
 4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
+6. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
 
 ## 5. Report
 

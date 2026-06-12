@@ -46,7 +46,7 @@ Open `INSTALL.md`, paste its contents into a Cursor agent chat on the target mac
 
 Prerequisites: `git` everywhere; `pwsh` on Windows; `bash` plus `jq` or `python3` on Linux.
 
-The final review's duplication scanner (`scripts/scan_slop.py`) installs to `~/.cursor/skills/anti-slop/scripts/`. If it's missing (an install from before it shipped), the review falls back to the `~/.agents/hooks/anti-slop.md` checklist instead of failing.
+The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The final review runs the scanner from there; if it's missing (an install from before it shipped), the review falls back to the `~/.agents/hooks/anti-slop.md` checklist instead of failing.
 
 ## Tuning and kill switches
 
