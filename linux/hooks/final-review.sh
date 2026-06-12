@@ -83,8 +83,17 @@ if [ -z "$body" ]; then
      drop premature abstraction, unneeded deps, redundant comments, dead helpers.
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.'
 fi
+body="$(expand_agent_paths "$body")"
 
-file_list="$(printf '%s\n' "$edited" | head -n 30 | sed 's/^/  /')"
+file_list=""
+while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    rp="$(resolve_agent_path "$p")"
+    file_list="${file_list}  ${rp}"$'\n'
+done <<EOF
+$edited
+EOF
+file_list="$(printf '%s' "$file_list" | head -n 30)"
 msg="FINAL REVIEW (end of implementation) - correctness, reliability, coverage, anti-slop.
 
 Files you changed this session:

@@ -73,12 +73,22 @@ behaviour the task asked for):
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - no duplicate helpers, premature abstraction, unneeded deps,
-     redundant comments, dead code.
+  4. Anti-slop - if ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists, run
+     `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`; otherwise
+     apply ~/.agents/hooks/anti-slop.md to the session diff.
 If an axis is clean, say so in one line. Then stop.'
 fi
+body="$(expand_agent_paths "$body")"
 
-file_list="$(printf '%s\n' "$edited" | head -n 30 | sed 's/^/  /')"
+file_list=""
+while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    rp="$(resolve_agent_path "$p")"
+    file_list="${file_list}  ${rp}"$'\n'
+done <<EOF
+$edited
+EOF
+file_list="$(printf '%s' "$file_list" | head -n 30)"
 msg="SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.
 
 Files you changed this run:

@@ -87,6 +87,24 @@ is_cursor_config_path() {
     esac
 }
 
+# Expand ~/ in agent-facing text to an absolute profile path (bash expands ~,
+# but stop-hook followups should still emit literals agents can copy-paste).
+expand_agent_paths() {
+    local text="$1"
+    local home="${HOME%/}"
+    text="${text//\~\//$home/}"
+    printf '%s' "$text"
+}
+
+# Normalize a file path for agent prompts (expand ~).
+resolve_agent_path() {
+    local p="$1"
+    case "$p" in
+        "~/"*) printf '%s' "$HOME/${p#~/}" ;;
+        *) printf '%s' "$p" ;;
+    esac
+}
+
 # merge_subagent_edit_markers <json> <parent_cid> -> 0 if anything was folded
 #
 # Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so

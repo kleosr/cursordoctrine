@@ -51,6 +51,29 @@ function ConvertTo-FwdPath([string]$p) {
     return $p.Replace('\', '/')
 }
 
+# Expand ~/ in agent-facing text to an absolute profile path. pwsh and many
+# agent tools do not resolve ~ on Windows; stop-hook followups must be literal.
+function Expand-AgentPaths([string]$text) {
+    if (-not $text) { return $text }
+    $homeFwd = $HOME.TrimEnd('\', '/').Replace('\', '/')
+    return $text.Replace('~/', "$homeFwd/")
+}
+
+# Normalize a file path for agent prompts (expand ~, forward slashes).
+function Resolve-AgentPath([string]$p) {
+    if (-not $p) { return $p }
+    $p = $p.Trim()
+    if ($p -match '^~[\\/]') {
+        $p = Join-Path $HOME ($p.Substring(2))
+    }
+    try {
+        if (Test-Path -LiteralPath $p) {
+            return ConvertTo-FwdPath ((Resolve-Path -LiteralPath $p).Path)
+        }
+    } catch { }
+    return ConvertTo-FwdPath $p
+}
+
 # Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so
 # their session-edits markers are invisible to the parent's stop-hook review.
 # Subagent transcripts live at <transcripts>/<parent-cid>/subagents/<sub-cid>.jsonl,

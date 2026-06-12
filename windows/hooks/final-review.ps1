@@ -94,12 +94,14 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.
 '@
 }
+$body = Expand-AgentPaths $body
 
-$fileList = ($edited | Select-Object -First 30) -join "`n  "
+$resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
+$fileList = ($resolved | Select-Object -First 30) -join "`n  "
 $msg = "FINAL REVIEW (end of implementation) - correctness, reliability, coverage, anti-slop.`n`nFiles you changed this session:`n  $fileList`n`n$body"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
-try { New-Item -ItemType File -Path $flag -Force | Out-Null } catch { }
+New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
 
 Write-HookJson @{ followup_message = $msg }
 exit 0

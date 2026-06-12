@@ -23,7 +23,8 @@ $cid = Get-SafeConversationId $obj
 
 $foldNote = ''
 if (Merge-SubagentEditMarkers $obj $cid) {
-    $foldNote = "SUBAGENT WORK DETECTED - a subagent of this conversation edited files (its edits fired hooks in ITS context, not yours). YOU are the auditor of its work: audit its diff (git status / git diff on the files it touched) against ~/.agents/hooks/self-review.md. Fix real bugs; stay silent otherwise. Its files are folded into this conversation's end-of-implementation review."
+    $selfReview = Expand-AgentPaths (Join-Path $HOME '.agents/hooks/self-review.md')
+    $foldNote = "SUBAGENT WORK DETECTED - a subagent of this conversation edited files (its edits fired hooks in ITS context, not yours). YOU are the auditor of its work: audit its diff (git status / git diff on the files it touched) against $selfReview. Fix real bugs; stay silent otherwise. Its files are folded into this conversation's end-of-implementation review."
 }
 
 $pendingFile = Join-Path (Get-HooksPendingDir) "feedback-$cid.txt"

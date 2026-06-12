@@ -1,6 +1,6 @@
 {
   "name": "cursordoctrine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Thin self-review hooks for Cursor — the model is the auditor. One command installs the doctrine, the hook pack, and the anti-slop skill.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
