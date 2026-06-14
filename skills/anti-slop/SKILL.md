@@ -223,10 +223,15 @@ management*, not token volume — one source of truth per concept.
 
 ## Automatic final review
 
-The `stop` hook (`anti-slop-final-review.ps1`) fires after the agent finishes
-an implementation that edited files: it returns a `followup_message` Cursor
-auto-submits, so the model re-audits everything it changed this session and
-removes slop it introduced — one bounded pass.
+The `stop` hook (`~/.agents/hooks/final-review.ps1` on Windows,
+`~/.agents/hooks/final-review.sh` on Linux) fires after the agent finishes an
+implementation that edited files. It extracts the last `<user_query>` from the
+session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
+and auto-submits a `followup_message` so the model audits five axes: intent,
+correctness, reliability, coverage, anti-slop. Axis 4 delegates to this skill's
+scanner (`scan_slop.py --all`) and the canonical checklist at
+`~/.agents/hooks/anti-slop.md` (13 items, including semantic contracts,
+operational slop, and change surface). One bounded pass per implementation.
 
 ## Hard constraints
 
@@ -259,9 +264,11 @@ Diff: {before} → {after} lines.   Tests: {pass | n/a}
 | Install path | `~/.cursor/skills/anti-slop/` |
 | Invoke | `/anti-slop`, or "remove the AI slop" |
 | Scanner | `python scripts/scan_slop.py --all` |
-| Final review | automatic via `stop` hook |
+| Final review | automatic via `stop` hook (`final-review.ps1` / `final-review.sh`) |
+| Hook checklist | `~/.agents/hooks/anti-slop.md` (13 items; per-edit + final-review axis 4) |
 
 The scanner is stdlib-only and needs Python 3.9+. Pairs with the **anti-slop
-hook** (advisory, per edit), the **stop hook** (auto final review), and
-**minimal-editing** (smallest-diff). This skill is the active "delete it now"
-layer those only nudge toward.
+audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the **stop
+hook** (`final-review.ps1` / `.sh`, five-axis session review incl. intent
+trace), and **minimal-editing** (smallest-diff). This skill is the active
+"delete it now" layer those only nudge toward.

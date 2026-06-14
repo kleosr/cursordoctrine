@@ -45,17 +45,23 @@ is present — sandboxed verify run, no transcript — skip this axis.)
 - Add the missing tests; delete tautological ones.
 
 ## 4. Anti-slop
-- If `~/.cursor/skills/anti-slop/scripts/scan_slop.py` exists (INSTALL.md step 2
-  copies it there), run the whole-codebase duplication scan:
-    python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all
-  If it does NOT exist, do not treat that as a failure and do not hunt for the
-  file: apply the checklist in `~/.agents/hooks/anti-slop.md` to the session
-  diff and look for duplicate function bodies in the files you touched.
-- Either way, consolidate clones: same function in many files / identical bodies
-  (the isRecord-class) → ONE shared definition, re-point imports, delete the
-  copies.
-- Premature abstraction (Factory / Repository / Mediator / CQRS / DDD with fewer
-  than 2–3 real call sites), unnecessary dependencies, redundant restate-the-code
-  comments, dead helpers, accidental complexity → remove.
+Axis 0 already caught intent drift. This axis catches code-shape and cost slop
+across the whole session diff.
 
-Fix with edits now; re-run the scan and the tests; then stop.
+Step A — mechanical scan (if available):
+  If `~/.cursor/skills/anti-slop/scripts/scan_slop.py` exists, run:
+    python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all
+  If it does NOT exist, skip Step A (not a failure; do not hunt for the file).
+
+Step B — canonical checklist (always):
+  Read `~/.agents/hooks/anti-slop.md` and apply ALL 13 items to every hunk you
+  changed this session. That file is the single source of truth for slop
+  detection — items 1–10 are structural/code, 11 is semantic contracts, 12 is
+  operational slop (retries, await-in-loop, telemetry spam), 13 is change
+  surface. Fix every hit; consolidate clones to one source of truth.
+
+Step C — session footprint (also in the header above):
+  If "Session footprint" shows >5 files or the request was simple, justify each
+  file or trim. Unjustified files are slop.
+
+Fix with edits now; re-run the scan (if Step A ran) and the tests; then stop.

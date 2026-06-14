@@ -59,7 +59,7 @@ No Node? Open `INSTALL.md`, paste its contents into a Cursor agent chat on the t
 
 Prerequisites: `git` everywhere; `pwsh` on Windows; `bash` plus `jq` or `python3` on Linux.
 
-The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The final review runs the scanner from there; if it's missing (an install from before it shipped), the review falls back to the `~/.agents/hooks/anti-slop.md` checklist instead of failing.
+The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 13 items) is the canonical slop detector for both per-edit advisories and final-review axis 4. The final review runs the scanner from the skill path first when available.
 
 ## Tuning and kill switches
 

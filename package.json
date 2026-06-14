@@ -1,7 +1,7 @@
 {
   "name": "cursordoctrine",
-  "version": "0.2.0",
-  "description": "Thin self-review hooks for Cursor — the model is the auditor. One command installs the doctrine, the hook pack, and the anti-slop skill. Adds an intent-trace final-review axis that catches clean-code-wrong-feature (the worst AI slop).",
+  "version": "0.2.1",
+  "description": "Thin self-review hooks for Cursor — the model is the auditor. Intent-trace final review (Tier 0), unified 13-item anti-slop checklist, operational slop detection.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
   },

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # final-review.sh - stop hook (Cursor, Linux).
 #
-# ONE comprehensive end-of-implementation review across four axes:
-# correctness, reliability, coverage, and anti-slop. When the agent finishes
+# ONE comprehensive end-of-implementation review across five axes:
+# intent, correctness, reliability, coverage, and anti-slop. When the agent finishes
 # an implementation that touched files, Cursor auto-submits this hook's
 # `followup_message` as the next user turn, so the model re-audits everything
 # it changed this session and FIXES what fails.
@@ -76,11 +76,11 @@ if [ -z "$body" ]; then
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - if ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists, run
-     `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`; otherwise
-     apply ~/.agents/hooks/anti-slop.md to the session diff (a missing scanner
-     is not a failure). Consolidate clones/duplicates to one source of truth;
-     drop premature abstraction, unneeded deps, redundant comments, dead helpers.
+  4. Anti-slop - read ~/.agents/hooks/anti-slop.md and apply all 13 items to
+     the session diff. If ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists,
+     run `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all` first.
+     Consolidate clones; drop premature abstraction, unneeded deps, operational
+     slop (retries, await-in-loop, log spam), unjustified files.
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.'
 fi
 body="$(expand_agent_paths "$body")"
