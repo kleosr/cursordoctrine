@@ -3,7 +3,7 @@
 # Counterpart of final-review.ps1 for delegated work. afterFileEdit DOES fire
 # inside subagents (verified: a poteto subagent run left ~58 entries in
 # session-edits-<subagent-cid>.txt), but subagents get no `stop` event, so
-# that marker is never drained and the four-axis review never fires for
+# that marker is never drained and the five-axis review never fires for
 # delegated implementations. This hook closes the loop: when a subagent
 # finishes and ITS conversation has a session-edits marker, return ONE
 # followup_message so the subagent audits its own implementation before the
