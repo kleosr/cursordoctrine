@@ -19,6 +19,13 @@ file. Your job, on this turn, is to:
      - **Logic bugs that the user would actually care about**: a function
        that returns the wrong thing, an off-by-one, a missing `return`, a
        wrong import path.
+     - **Semantic contracts**: did any existing function's BEHAVIOR change
+       without its name, signature, or docstring changing? Names are
+       contracts. `deleteUser()` that now soft-deletes, a getter that now
+       writes, a function that used to throw on bad input and now silently
+       returns null — these are silent contract breaks that callers will
+       rely on and break against. If behavior changed, the name, signature,
+       or docstring must reflect it.
   4. If you find a real bug, **fix it with `Edit`**, then say nothing.
      Do not report it. Do not explain it. The user will see the fix
      in the next message; the bug is gone.

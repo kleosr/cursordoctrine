@@ -1,10 +1,19 @@
 FINAL REVIEW — you just finished an implementation. Before you treat it as done,
-audit EVERYTHING you changed this session across the four axes below and FIX what
+audit EVERYTHING you changed this session across the five axes below and FIX what
 fails. Do NOT revert the behaviour the user asked for. If an axis is already
 clean, say so in one line — do not manufacture work.
 
 Start by re-reading the diff. Scope the review to your session's changes and the
 code they touch.
+
+## 0. Intent trace (HIGHEST PRIORITY — run first)
+The hook extracted your last user message as "ORIGINAL REQUEST" above. For every
+hunk in the diff, answer: which part of the request forced this change? Anything
+that cannot trace to the request is a HALLUCINATED REQUIREMENT — a feature,
+flag, refactor, abstraction, dependency, or "nice to have" that nobody asked for.
+Revert each one. "Clean code, wrong feature" is the worst failure mode and no
+later axis can catch it. This axis outranks all others. (If no ORIGINAL REQUEST
+is present — sandboxed verify run, no transcript — skip this axis.)
 
 ## 1. Correctness
 - The logic does what the task requires — no off-by-one, inverted condition,

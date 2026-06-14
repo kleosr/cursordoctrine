@@ -105,6 +105,76 @@ resolve_agent_path() {
     esac
 }
 
+# extract_last_user_query <json> -> text of the last <user_query> in this
+# conversation's transcript, or '' if there is none. Capped at 2000 chars.
+#
+# This is the Tier 0 intent-trace primitive: the final-review hook prepends the
+# extracted request to its followup so the model must trace every diff hunk back
+# to it. Anything untraceable is a hallucinated requirement.
+#
+# Walks the JSONL backward via tac (preferred) or a portable awk fallback; finds
+# the first (last) user record whose content carries a <user_query> tag.
+extract_last_user_query() {
+    local json="$1"
+    local tp
+    tp="$(json_get "$json" transcript_path)"
+    [ -n "$tp" ] && [ -f "$tp" ] || return 0
+
+    local reversed
+    if command -v tac >/dev/null 2>&1; then
+        reversed="$(tac "$tp" 2>/dev/null)"
+    else
+        # Portable fallback: awk NR table reversed.
+        reversed="$(awk '{a[NR]=$0} END {for(i=NR;i>=1;i--) print a[i]}' "$tp" 2>/dev/null)"
+    fi
+    [ -n "$reversed" ] || return 0
+
+    # Pull the text out via python3 if available (handles JSON content arrays);
+    # fall back to a pure-grep that handles string-typed content.
+    if have_py; then
+        printf '%s' "$reversed" | python3 -c '
+import json, re, sys
+try:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line or "\"role\"" not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict) or rec.get("role") != "user":
+            continue
+        msg = rec.get("message") or {}
+        content = msg.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "text" and p.get("text"):
+                    text += p["text"]
+        m = re.search(r"<user_query>\s*(.+?)\s*</user_query>", text, re.S)
+        if m:
+            q = m.group(1).strip()
+            if len(q) > 2000:
+                q = q[:2000] + "..."
+            print(q)
+            break
+except Exception:
+    pass
+' 2>/dev/null
+        return 0
+    fi
+
+    # No python3: best-effort grep for the common case where the user message
+    # is the only place <user_query> appears in a line. Imperfect but bounded.
+    printf '%s' "$reversed" |
+        grep -m1 -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
+        sed -E 's@</?user_query>@@g' |
+        head -c 2000
+}
+
 # merge_subagent_edit_markers <json> <parent_cid> -> 0 if anything was folded
 #
 # Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so

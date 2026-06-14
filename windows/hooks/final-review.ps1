@@ -98,7 +98,24 @@ $body = Expand-AgentPaths $body
 
 $resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
 $fileList = ($resolved | Select-Object -First 30) -join "`n  "
-$msg = "FINAL REVIEW (end of implementation) - correctness, reliability, coverage, anti-slop.`n`nFiles you changed this session:`n  $fileList`n`n$body"
+
+# Tier 0: extract the last user <user_query> from the transcript so the model
+# can trace every diff hunk back to a concrete request. Anything untraceable is
+# a hallucinated requirement. Empty when there is no transcript or no user_query
+# (sandboxed verify runs, fresh installs) — the axis is then a no-op.
+$userQuery = Get-LastUserQuery $obj
+$intentBlock = ''
+if ($userQuery) {
+    $intentBlock = "ORIGINAL REQUEST (your last user message, for intent trace):`n---`n$userQuery`n---`n`n"
+}
+
+# Tier 5: cross-file change-surface metric. The per-file afterFileEdit audits
+# miss the 50-file rename case; this seeds the whole-session footprint so the
+# model can judge whether the change surface is proportional to the request.
+$uniqueFiles = @($edited | Select-Object -Unique).Count
+$surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
+
+$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
