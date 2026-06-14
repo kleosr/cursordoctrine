@@ -73,7 +73,17 @@ function Resolve-AgentPath([string]$p) {
     return ConvertTo-FwdPath $p
 }
 
-# Extract the last user <user_query> from a Cursor transcript JSONL. The
+# Strip secrets from text before embedding in agent-facing followups. Intent
+# trace must not re-broadcast tokens the user pasted in chat.
+function Redact-SecretsFromIntent([string]$text) {
+    if (-not $text) { return $text }
+    $text = $text -replace '\bnpm_[A-Za-z0-9]{10,}\b', '[REDACTED_NPM_TOKEN]'
+    $text = $text -replace '\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b', '[REDACTED_TOKEN]'
+    $text = $text -replace '(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+', '$1=[REDACTED]'
+    return $text
+}
+
+# Extract the last user <user_query> from a Cursor transcript JSONL.
 # transcript is an array of {role, message} records; we walk backward from the
 # end, find the last user turn whose content has a <user_query> tag, and return
 # its text. Returns '' if there is no transcript or no user_query. Capped at
@@ -108,7 +118,7 @@ function Get-LastUserQuery($obj) {
         if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
             $q = $Matches[1].Trim()
             if ($q.Length -gt 2000) { $q = $q.Substring(0, 2000) + '...' }
-            return $q
+            return (Redact-SecretsFromIntent $q)
         }
     }
     return ''
