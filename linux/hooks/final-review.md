@@ -1,5 +1,5 @@
 FINAL REVIEW — you just finished an implementation. Before you treat it as done,
-audit EVERYTHING you changed this session across the five axes below and FIX what
+audit EVERYTHING you changed this session across the six axes below and FIX what
 fails. Do NOT revert the behaviour the user asked for. If an axis is already
 clean, say so in one line — do not manufacture work.
 
@@ -65,3 +65,24 @@ Step C — session footprint (also in the header above):
   file or trim. Unjustified files are slop.
 
 Fix with edits now; re-run the scan (if Step A ran) and the tests; then stop.
+
+## 5. Wiring completeness
+For every user-visible behavior you added or changed (button, form submit, API
+call, route, state transition, scheduled job), trace its execution path end to
+end and confirm it reaches a REAL EFFECT (persist, mutate, call, render, notify).
+A dead end is slop even if the code is clean. Hunt for the vibe-coding failure
+mode where a layer EXISTS but is not WIRED:
+
+  - `handleSubmit()` that does not persist / does not call the API.
+  - An endpoint that no route or caller invokes.
+  - A DB write / table that nothing reads or writes.
+  - A component that renders but is never mounted / routed to.
+  - A hook / store / context that is declared but never consumed.
+  - A `TODO` / empty body / stubbed `console.log` standing in for the effect.
+
+The bar is: a senior can follow the path click -> handler -> call -> store ->
+render (or the equivalent slice) without hitting a gap. If a step is missing or
+faked, either wire it now or remove the dead half so the diff does not ship
+scaffolding that looks complete but does nothing. Stubs you intend to wire later
+must be marked with a `TODO(wire):` comment naming what is missing; unmarked
+dead ends are failures.
