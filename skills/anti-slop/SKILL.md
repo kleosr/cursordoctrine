@@ -272,7 +272,11 @@ The scanner is stdlib-only and needs Python 3.9+. Pairs with the **anti-slop
 audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the
 **semantic-density-audit hook** (`semantic-density-audit.ps1` / `.sh`, flags
 low-density identifiers per edit — shares `low_density.py` with this scanner's
-`semantic_density` bucket), the **stop hook** (`final-review.ps1` / `.sh`,
-five-axis session review incl. intent trace), and **declared-editing**
-(supersedes the deprecated `minimal-editing` size gate). This skill is the
+`semantic_density` bucket), the **scope-gate-audit hook**
+(`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in declared-scope gate
+that flags edits outside `.scope.json`; shares `scope_match.py` with the
+final-review Step D closing gate), the **stop hook** (`final-review.ps1` / `.sh`,
+six-axis session review incl. intent trace and wiring completeness), and
+**declared-editing** (YAGNI ultra ladder injected at session start;
+supersedes the deprecated `minimal-editing` size gate). This skill is the
 active "delete it now" layer those only nudge toward.

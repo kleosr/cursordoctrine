@@ -28,6 +28,12 @@
         "_comment": "15s: semantic-opacity advisory on the edited file. Extracts added lines from git diff, pipes to density_scan.py (shared low_density module), flags identifiers that communicate no intent (DataManager, process(), utils.ts, CoreEngine). FAIL = bare low-density token or generic-suffix class without domain noun; WARN = defensible DDD with domain noun (PostgresUserRepository) - only fires alongside a FAIL so clean code stays quiet. One denylist shared with scan_slop.py's semantic_density bucket. Appends to pending; never blocks. Disable: HOOKS_ENFORCE=0 or SEMANTIC_DENSITY_ENFORCE=0."
       },
       {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-gate-audit.ps1",
+        "timeout": 10,
+        "matcher": "^(Write|StrReplace|EditNotebook)$",
+        "_comment": "10s (Compuerta 1): declared-scope advisory. OPT-IN: only active when .scope.json exists in the repo root. The agent declares intent + files[] + acceptance; this hook checks every edit against the declared set via scope_match.py (exact, * glob, ** recursive, bare-dir). Out-of-scope edit = [SCOPE VIOLATION] advisory to pending. No .scope.json = silent (fallback to declared-editing ladder + final-review footprint check). Never blocks (Cursor has no preToolUse for file edits). Disable: HOOKS_ENFORCE=0 or SCOPE_GATE_ENFORCE=0."
+      },
+      {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anti-slop-audit.ps1",
         "timeout": 15,
         "matcher": "^(Write|StrReplace|EditNotebook)$",

@@ -86,6 +86,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 | `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
 | `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory (deprecated in 0.3.0) |
+| `SCOPE_GATE_ENFORCE=0` | on | disables the declared-scope advisory (opt-in: only fires when `.scope.json` exists) |
 | `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |
 | `ANTI_SLOP_ENFORCE=0` | on | disables the slop advisory |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
