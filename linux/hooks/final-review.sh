@@ -94,9 +94,31 @@ done <<EOF
 $edited
 EOF
 file_list="$(printf '%s' "$file_list" | head -n 30)"
-msg="FINAL REVIEW (end of implementation) - correctness, reliability, coverage, anti-slop.
 
-Files you changed this session:
+# Tier 0: extract the last user <user_query> from the transcript so the model
+# can trace every diff hunk back to a concrete request. Anything untraceable is
+# a hallucinated requirement. Empty when there is no transcript or no
+# user_query (sandboxed verify runs, fresh installs) - the axis is then a no-op.
+user_query="$(extract_last_user_query "$input")"
+intent_block=""
+[ -n "$user_query" ] && intent_block="ORIGINAL REQUEST (your last user message, for intent trace):
+---
+$user_query
+---
+
+"
+
+# Tier 5: cross-file change-surface metric. The per-file afterFileEdit audits
+# miss the 50-file rename case; this seeds the whole-session footprint so the
+# model can judge whether the change surface is proportional to the request.
+unique_files="$(printf '%s\n' "$edited" | grep -c -v '^$')"
+surface_block="Session footprint: ${unique_files} file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.
+
+"
+
+msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.
+
+${surface_block}${intent_block}Files you changed this session:
 $file_list
 
 $body"

@@ -13,6 +13,8 @@
 #       *Strategy / *Singleton / *Facade / *Builder / *Visitor / *Decorator
 #       class, or CQRS / Event-Sourcing / DDD vocabulary
 #     * redundant comments that merely restate the next line of code
+#     * operational slop (Tier 3): retry-without-backoff, await-in-loop,
+#       telemetry spam (>= 6 log/print statements added in one edit)
 #
 #   Deferred to the model (semantic - no regex can judge these without drowning
 #   the user in false positives): edge cases, duplicated logic, ignored
@@ -128,6 +130,50 @@ foreach ($a in $added) {
     if ($redundant.Count -ge 4) { break }
 }
 
+# --- signal 4: operational slop (Tier 3) ----------------------------------
+# Retry-without-backoff: a retry loop or recursive retry without an obvious
+# sleep/backoff/setTimeout nearby. The whole-file body is scanned so the
+# backoff can sit above or below the retry; this is deliberately seed-grade
+# (high precision), not a verdict.
+$opsFlags = New-Object System.Collections.Generic.List[string]
+$bodyHas = {
+    param($pat)
+    foreach ($a in $added) { if ($a -match $pat) { return $true } }
+    return $false
+}
+$retryWord    = '\b(retry|retryCount|retries|maxRetries|attempt)\w*\b'
+$backoffWord  = '\b(sleep|setTimeout|backoff|back_off|exponential|jitter|delay)\w*\b'
+if (& $bodyHas $retryWord) {
+    $noBackoff = $true
+    foreach ($a in $added) { if ($a -match $backoffWord) { $noBackoff = $false; break } }
+    if ($noBackoff) {
+        $opsFlags.Add("- RETRY WITHOUT BACKOFF: a retry construct was added but no sleep/backoff/setTimeout is visible in this edit's added lines. Unbounded retries = retry storms + token/cost burn; add bounded backoff or confirm the runtime already throttles.")
+    }
+}
+
+# `await` (or `await ctx.db`) inside a loop construct on its own line — N+1 in
+# agent/edge code, not just SQL. We seed on the added-line co-occurrence of a
+# loop keyword and an awaited call; the model judges whether it is genuinely a
+# sequential-await loop (real slop) or a legit streaming pattern.
+$loopWord = '\b(for|while|forEach|map|filter|reduce|flatMap|for\s+await|async\s+for)\b'
+$awaitCall = '\bawait\s+(fetch|ctx\.db|ctx\.run|client\.|axios|prisma\.|supabase\.|db\.|repo\.)'
+if (& $bodyHas $loopWord) {
+    $awaitInLoop = $false
+    foreach ($a in $added) { if ($a -match $awaitCall) { $awaitInLoop = $true; break } }
+    if ($awaitInLoop) {
+        $opsFlags.Add("- AWAIT IN LOOP: a loop construct and an awaited IO call both appear in this edit. Sequential awaits in a loop = N+1 / serial latency; confirm whether Promise.all / a batch call / a single query is the right primitive. (If this is genuinely a streaming pattern, ignore.)")
+    }
+}
+
+# Telemetry spam seed: 6+ console.log / print / fmt.Print / std::cout::<< added
+# in one file. Models paste debug prints liberally; six is well past intent.
+$logRe = '\b(console\.(log|debug|info|warn|error)|print\(|fmt\.Print|std::cout|NSLog|System\.out\.println|println!|dbg!|console\.dir)\b'
+$logCount = 0
+foreach ($a in $added) { if ($a -match $logRe) { $logCount++ } }
+if ($logCount -ge 6) {
+    $opsFlags.Add("- TELEMETRY SPAM: $logCount log/print statements added in this one edit. Debug-level telemetry that nobody reads is slop; consolidate or remove (kept only if this is a real logging entrypoint).")
+}
+
 # --- decide whether to fire ----------------------------------------------
 $srcRe = '\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|cs|cpp|cc|cxx|c|h|hpp|rb|php|swift|scala|m|mm|sh|ps1|lua|dart|ex|exs|vue|svelte)$'
 $addedCode = 0
@@ -139,6 +185,7 @@ $flags = New-Object System.Collections.Generic.List[string]
 if ($depAdded)              { $flags.Add("- DEPENDENCY: " + $base + " gained a dependency - is it necessary, or do the stdlib / existing deps already cover it?") }
 if ($patterns.Count -gt 0)  { $flags.Add("- PREMATURE ABSTRACTION: " + ($patterns -join ', ') + " - is there a real, present problem (2-3+ call sites that exist today) that needs it? If it is speculative, delete it and write the direct code.") }
 if ($redundant.Count -gt 0) { $flags.Add("- REDUNDANT COMMENTS: " + ($redundant -join ' | ') + " - delete comments that restate the code; keep only WHY.") }
+$flags.AddRange($opsFlags)
 
 if ($flags.Count -eq 0 -and -not $substantial) { exit 0 }
 

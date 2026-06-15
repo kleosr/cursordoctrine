@@ -73,6 +73,47 @@ function Resolve-AgentPath([string]$p) {
     return ConvertTo-FwdPath $p
 }
 
+# Extract the last user <user_query> from a Cursor transcript JSONL. The
+# transcript is an array of {role, message} records; we walk backward from the
+# end, find the last user turn whose content has a <user_query> tag, and return
+# its text. Returns '' if there is no transcript or no user_query. Capped at
+# 2000 chars so the follow-up prompt stays bounded.
+#
+# This is the Tier 0 intent-trace primitive: the final-review hook prepends the
+# extracted request to its followup so the model must trace every diff hunk back
+# to it. Anything untraceable is a hallucinated requirement.
+function Get-LastUserQuery($obj) {
+    $tp = ''
+    if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
+    if (-not $tp -or -not (Test-Path -LiteralPath $tp)) { return '' }
+    $lines = @(Get-Content -LiteralPath $tp -ErrorAction SilentlyContinue)
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i]
+        if (-not $line -or $line -notmatch '"role"\s*:\s*"user"') { continue }
+        try {
+            $rec = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+        } catch { continue }
+        if (-not $rec -or -not $rec.message) { continue }
+        $content = $rec.message.content
+        if (-not $content) { continue }
+        # content is an array of {type:text,text:...} or a plain string
+        $text = ''
+        if ($content -is [string]) {
+            $text = $content
+        } else {
+            foreach ($part in $content) {
+                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
+            }
+        }
+        if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
+            $q = $Matches[1].Trim()
+            if ($q.Length -gt 2000) { $q = $q.Substring(0, 2000) + '...' }
+            return $q
+        }
+    }
+    return ''
+}
+
 # Subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, so
 # their session-edits markers are invisible to the parent's stop-hook review.
 # Subagent transcripts live at <transcripts>/<parent-cid>/subagents/<sub-cid>.jsonl,

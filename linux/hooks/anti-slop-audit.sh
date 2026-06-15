@@ -12,6 +12,8 @@
 #       *Strategy / *Singleton / *Facade / *Builder / *Visitor / *Decorator
 #       class, or CQRS / Event-Sourcing / DDD vocabulary
 #     * redundant comments that merely restate the next line of code
+#     * operational slop (Tier 3): retry-without-backoff, await-in-loop,
+#       telemetry spam (>= 6 log/print statements added in one edit)
 #
 # Fires when a static signal trips OR the edit added a substantial block of
 # new source (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Otherwise silent.
@@ -102,6 +104,31 @@ redundant="$(printf '%s\n' "$added" |
         fi
     done | sort -u | head -n 4)"
 
+# --- signal 4: operational slop (Tier 3) ------------------------------------
+# Retry-without-backoff: a retry construct with no sleep/backoff/setTimeout in
+# the added lines. Seed-grade (high precision); the model judges.
+ops_flags=""
+if printf '%s\n' "$added" | grep -qE '\b(retry|retryCount|retries|maxRetries|attempt)[A-Za-z0-9_]*\b'; then
+    if ! printf '%s\n' "$added" | grep -qE '\b(sleep|setTimeout|backoff|back_off|exponential|jitter|delay)[A-Za-z0-9_]*\b'; then
+        ops_flags="${ops_flags}- RETRY WITHOUT BACKOFF: a retry construct was added but no sleep/backoff/setTimeout is visible in this edit's added lines. Unbounded retries = retry storms + token/cost burn; add bounded backoff or confirm the runtime already throttles.
+"
+    fi
+fi
+# Awaited IO call co-occurring with a loop construct on the same edit. N+1 in
+# agent/edge code, not just SQL. The model judges streaming vs serial-await.
+if printf '%s\n' "$added" | grep -qE '\b(for|while|forEach|map|filter|reduce|flatMap|for[[:space:]]+await|async[[:space:]]+for)\b'; then
+    if printf '%s\n' "$added" | grep -qE '\bawait[[:space:]]+(fetch|ctx\.db|ctx\.run|client\.|axios|prisma\.|supabase\.|db\.|repo\.)'; then
+        ops_flags="${ops_flags}- AWAIT IN LOOP: a loop construct and an awaited IO call both appear in this edit. Sequential awaits in a loop = N+1 / serial latency; confirm whether Promise.all / a batch call / a single query is the right primitive. (If this is genuinely a streaming pattern, ignore.)
+"
+    fi
+fi
+# Telemetry spam seed: 6+ log/print statements added in one file.
+log_count="$(printf '%s\n' "$added" | grep -cE '\b(console\.(log|debug|info|warn|error)|print\(|fmt\.Print|std::cout|NSLog|System\.out\.println|println!|dbg!|console\.dir)\b')"
+if [ "$log_count" -ge 6 ]; then
+    ops_flags="${ops_flags}- TELEMETRY SPAM: ${log_count} log/print statements added in this one edit. Debug-level telemetry that nobody reads is slop; consolidate or remove (kept only if this is a real logging entrypoint).
+"
+fi
+
 # --- decide whether to fire -------------------------------------------------
 added_code="$(printf '%s\n' "$added" | grep -cE '[^[:space:]]')"
 checklist_lines="${ANTI_SLOP_CHECKLIST_LINES:-40}"
@@ -118,6 +145,7 @@ flags=""
 "
 [ -n "$redundant" ] && flags="${flags}- REDUNDANT COMMENTS: $(printf '%s' "$redundant" | paste -sd '|' -) - delete comments that restate the code; keep only WHY.
 "
+flags="${flags}${ops_flags}"
 
 if [ -z "$flags" ] && [ "$substantial" = "0" ]; then exit 0; fi
 
