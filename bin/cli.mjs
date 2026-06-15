@@ -40,7 +40,7 @@ const pendingDir = join(cursorDst, '.hooks-pending');
 const hooksJsonDst = join(cursorDst, 'hooks.json');
 
 const injectName = platform === 'windows' ? 'inject-doctrine.ps1' : 'inject-doctrine.sh';
-const doctrineFiles = [injectName, 'doctrine.md', 'USER-RULES.md'];
+const doctrineFiles = [injectName, 'doctrine.md', 'USER-RULES.md', 'declared-editing.md'];
 
 function payloadHookFiles() {
   return readdirSync(join(payload, 'hooks'));

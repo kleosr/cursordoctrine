@@ -6,7 +6,7 @@ Thin self-review hooks for Cursor. Five hook events, one message bus. The model 
 
 A small set of Cursor hooks that make the agent review its own work without bolting a static-analysis pipeline onto every keystroke. There is no regex army and no scoring engine. The hooks do three jobs:
 
-1. **Inject the doctrine** at session start, so every chat begins with the same short governing text (`doctrine.md` + `USER-RULES.md`).
+1. **Inject the doctrine** at session start, so every chat begins with the same short governing text (`doctrine.md` + `USER-RULES.md` + `declared-editing.md` — the YAGNI ultra ladder that prevents over-building before a single line is written).
 2. **Hand the model its own edits back.** After each agent edit, a self-review prompt (plus minimal-edit, semantic-density, and anti-slop advisories when they trip) is stashed and delivered on the next turn. The model reads its own diff, fixes real bugs, and stays quiet otherwise.
 3. **Gate blast radius.** One permission gate denies a short, explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else is allowed.
 
