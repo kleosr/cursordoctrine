@@ -14,7 +14,10 @@
     "windows/",
     "linux/",
     "skills/",
-    "INSTALL.md"
+    "INSTALL.md",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/*.pyo"
   ],
   "repository": {
     "type": "git",
