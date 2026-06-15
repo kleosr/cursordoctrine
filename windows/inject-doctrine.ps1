@@ -29,7 +29,8 @@ function Write-StdoutAscii([string]$s) {
 try {
     $paths = @(
         (Join-Path $PSScriptRoot 'doctrine.md'),
-        (Join-Path $PSScriptRoot 'USER-RULES.md')
+        (Join-Path $PSScriptRoot 'USER-RULES.md'),
+        (Join-Path $PSScriptRoot 'declared-editing.md')
     )
 
     $parts = foreach ($p in $paths) {

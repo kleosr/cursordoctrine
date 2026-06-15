@@ -16,7 +16,7 @@ set +e
 cat >/dev/null
 
 context=""
-for p in "$HOME/.cursor/doctrine.md" "$HOME/.cursor/USER-RULES.md"; do
+for p in "$HOME/.cursor/doctrine.md" "$HOME/.cursor/USER-RULES.md" "$HOME/.cursor/declared-editing.md"; do
     if [ -f "$p" ]; then
         part="$(cat "$p")"
         if [ -n "$context" ]; then context="$context
