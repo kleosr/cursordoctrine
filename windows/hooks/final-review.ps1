@@ -1,7 +1,7 @@
 # final-review.ps1 - stop hook (Cursor).
 #
-# ONE comprehensive end-of-implementation review across five axes:
-# intent, correctness, reliability, coverage, and anti-slop. When the agent finishes an
+# ONE comprehensive end-of-implementation review across six axes:
+# intent, correctness, reliability, coverage, anti-slop, and wiring completeness. When the agent finishes an
 # implementation that touched files, Cursor auto-submits this hook's
 # `followup_message` as the next user turn, so the model re-audits everything it
 # changed this session and FIXES what fails - the model-as-auditor pattern over
@@ -91,6 +91,12 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
      run `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all` first.
      Consolidate clones; drop premature abstraction, unneeded deps, operational
      slop (retries, await-in-loop, log spam), unjustified files.
+  5. Wiring completeness - for every user-visible behavior you added/changed
+     (button, submit, API call, route, state transition), trace its execution
+     path to a REAL EFFECT (persist, mutate, call, render). A dead end is slop:
+     handleSubmit that does not persist, an endpoint no caller invokes, a store
+     never consumed, a stub/TODO/console.log standing in for the effect. Wire it
+     now or remove the dead half; mark later-stubs with TODO(wire):.
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.
 '@
 }
