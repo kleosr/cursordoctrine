@@ -13,9 +13,11 @@ Scopes:
     errors (empty catch, broad except+pass), tautological asserts, pointless
     async wrappers (await Promise.resolve, async executors), deepening guard
     chains (the optional-chaining shape), boolean-pair call traps, SELECT *
-    in .sql files, and Tailwind class soup / magic-px values. All per-file
-    signals also run in AUDIT scope; only new-dependency detection is diff-only
-    (every line of an existing manifest would otherwise read as "new").
+    in .sql files, Tailwind class soup / magic-px values, and SEMANTIC OPACITY
+    (low-density identifiers - DataManager, process(), utils.ts - scored via
+    the shared low_density module). All per-file signals also run in AUDIT
+    scope; only new-dependency detection is diff-only (every line of an
+    existing manifest would otherwise read as "new").
   * AUDIT (--all, or explicit paths): the WHOLE codebase, with the duplication
     analysis that catches the isRecord()-class slop:
       - Clone Proliferation     : same function name in multiple files
@@ -432,6 +434,7 @@ _SIGNALS = {
     "boolean_traps":      ("boolean trap         ", "boolean-trap"),
     "select_star":        ("SELECT *             ", "select-star"),
     "tailwind_slop":      ("tailwind smell       ", "tailwind"),
+    "semantic_density":   ("semantic opacity     ", "semantic-density"),
 }
 _SIGNAL_KEYS = tuple(_SIGNALS)
 
@@ -517,6 +520,22 @@ def scan_lines(rel: str, lines: list[str], audit: bool) -> Finding | None:
             TAILWIND_SOUP.search(ln) or TAILWIND_MAGIC_PX.search(ln)
         ):
             found["tailwind_slop"].append(ln.strip()[:100])
+    # Semantic opacity: low-density identifiers introduced in this file. Lazy
+    # import because low_density imports scan_slop at module load (sibling
+    # resolution) - a top-level import here would cycle. Only declarations
+    # count, not references, so a CALL to processData(x) does not trip unless
+    # the agent also declared function processData on an audited line.
+    if is_source:
+        try:
+            import low_density
+            for item in low_density.format_for_report(
+                    low_density.score_identifiers(lines, rel)):
+                found["semantic_density"].append(item[:140])
+        except Exception:
+            # Never let the density layer break the rest of the scan. If
+            # low_density.py is absent (older install) or errors, the other
+            # twelve signals still run.
+            pass
     found = {k: _uniq(v) for k, v in found.items()}
     added_count = sum(1 for ln in lines if ln.strip())
     substantial = (not audit) and is_source and added_count >= CHECKLIST_LINES

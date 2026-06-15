@@ -1,6 +1,6 @@
 {
   "name": "cursordoctrine",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Thin self-review hooks for Cursor — the model is the auditor. Intent-trace final review (Tier 0), unified 13-item anti-slop checklist, operational slop detection.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"

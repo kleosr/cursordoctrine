@@ -20,7 +20,7 @@ description: >-
   duplicate utilities.
 metadata:
   layer: active-cleanup
-  pairs-with: minimal-editing, anti-slop-hook
+  pairs-with: declared-editing (supersedes minimal-editing), semantic-density-audit
 ---
 
 # Anti-Slop
@@ -160,6 +160,7 @@ Walk every row. Rows tagged *(scanner)* are seeded mechanically by
 | **Duplicated logic** | new code mirrors something already in the repo | Delete the copy; call the existing function. Grep before you keep it. |
 | **Clone proliferation / DRY / Knowledge duplication** | `--all` reports the same function name in ≥2 files, or identical bodies under different names (`isRecord` / `isObject` / `isPlainObject`) | Keep ONE canonical definition; re-point imports; delete the copies. One source of truth per concept. |
 | **Utility explosion / Helper Hell / Fingerprints** | a swarm of tiny `is*` / `assert*` / `safe*` one-liners; fingerprints (`isRecord`, `safeParse`, `sleep`, `retry`, `assertNever`) | Inline single-use micro-helpers; consolidate genuinely shared ones into one module. |
+| **Semantic opacity / low-density names** *(scanner)* | identifiers that exist but communicate no intent: `DataManager`, `CoreEngine`, `process()`, `handleThing`, `utils.ts`, `x1`, `tempFix`, `finalFinal`. FAIL = bare low-density token or generic-suffix class with no domain noun; WARN = defensible DDD with a domain noun (`PostgresUserRepository`). Shared denylist lives in `low_density.py` and fires identically in `scan_slop.py --all` and the per-edit `semantic-density-audit` hook. | Rename to state the concrete responsibility: `DataManager` → `InvoiceRepository` or `PersistUserSessions`; `process` → `GenerateMonthlyReport`; `utils.ts` → `invoice_totals.ts`. Leave WARNs that are intentional DDD. |
 | **Ignored conventions** | style / naming / structure / error-handling differs from the file's neighbours | Rewrite to match the surrounding code. |
 | **Accidental complexity** | indirection / generics / config a junior can't read in 30s | Flatten to the simplest form that works. |
 | **Superficial tests / Test theater** | the test asserts "it runs", mirrors the implementation, or cannot fail; literal tautologies (`expect(true).toBe(true)`, `assert True`) *(scanner)*; snapshot-everything, mocks of mocks, assertion poverty | Rewrite to assert real outcomes and the edge cases; delete tautological tests. |
@@ -268,7 +269,10 @@ Diff: {before} → {after} lines.   Tests: {pass | n/a}
 | Hook checklist | `~/.agents/hooks/anti-slop.md` (13 items; per-edit + final-review axis 4) |
 
 The scanner is stdlib-only and needs Python 3.9+. Pairs with the **anti-slop
-audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the **stop
-hook** (`final-review.ps1` / `.sh`, five-axis session review incl. intent
-trace), and **minimal-editing** (smallest-diff). This skill is the active
-"delete it now" layer those only nudge toward.
+audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the
+**semantic-density-audit hook** (`semantic-density-audit.ps1` / `.sh`, flags
+low-density identifiers per edit — shares `low_density.py` with this scanner's
+`semantic_density` bucket), the **stop hook** (`final-review.ps1` / `.sh`,
+five-axis session review incl. intent trace), and **declared-editing**
+(supersedes the deprecated `minimal-editing` size gate). This skill is the
+active "delete it now" layer those only nudge toward.

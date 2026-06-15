@@ -7,7 +7,7 @@ Thin self-review hooks for Cursor. Five hook events, one message bus. The model 
 A small set of Cursor hooks that make the agent review its own work without bolting a static-analysis pipeline onto every keystroke. There is no regex army and no scoring engine. The hooks do three jobs:
 
 1. **Inject the doctrine** at session start, so every chat begins with the same short governing text (`doctrine.md` + `USER-RULES.md`).
-2. **Hand the model its own edits back.** After each agent edit, a self-review prompt (plus minimal-edit and anti-slop advisories when they trip) is stashed and delivered on the next turn. The model reads its own diff, fixes real bugs, and stays quiet otherwise.
+2. **Hand the model its own edits back.** After each agent edit, a self-review prompt (plus minimal-edit, semantic-density, and anti-slop advisories when they trip) is stashed and delivered on the next turn. The model reads its own diff, fixes real bugs, and stays quiet otherwise.
 3. **Gate blast radius.** One permission gate denies a short, explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else is allowed.
 
 When an implementation finishes, a stop hook fires exactly one final review pass over everything that changed — then stops. The review runs across five axes, the first of which is **intent trace**: the hook extracts your last user message from the transcript and prepends it to the review so the model must trace every diff hunk back to a concrete request. Anything untraceable is a hallucinated requirement and gets reverted — this is the only detector that catches "clean code, wrong feature," which no later axis and no linter can see. Delegated work gets the same treatment: a subagent that edited files reviews its own implementation before its result returns to the parent, and its edits are folded into the parent's final review. Every bound is enforced twice: in the script and in `hooks.json`.
@@ -41,7 +41,7 @@ The two folders are functionally identical. Windows runs everything through `pws
 | Session | `sessionStart` | `inject-doctrine` reads the doctrine + user rules and emits them as `additional_context`. |
 | Every turn | `postToolUse` | Folds completed subagents' edit markers into this conversation's marker, then drains the conversation's pending feedback file into `additional_context`. One-shot, keyed by conversation id. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
-| Edit | `afterFileEdit` + `stop` | `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` and `anti-slop-audit` append advisories when thresholds trip (new deps / premature abstraction / redundant comments / Tier 3 operational slop: retry-without-backoff, await-in-loop, telemetry spam); `final-review` fires one end-of-implementation pass. |
+| Edit | `afterFileEdit` + `stop` | `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` (deprecated in 0.3.0), `semantic-density-audit`, and `anti-slop-audit` append advisories when thresholds trip (new deps / premature abstraction / redundant comments / **semantic opacity**: low-density identifiers like `DataManager`, `process()`, `utils.ts` / Tier 3 operational slop: retry-without-backoff, await-in-loop, telemetry spam); `final-review` fires one end-of-implementation pass. |
 | Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
 
 ## Install
@@ -69,7 +69,8 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 |---|---|---|
 | `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
-| `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory |
+| `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory (deprecated in 0.3.0) |
+| `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |
 | `ANTI_SLOP_ENFORCE=0` | on | disables the slop advisory |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
 | `SUBAGENT_REVIEW_ENFORCE=0` | on | disables the in-subagent review pass |
