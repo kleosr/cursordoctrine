@@ -19,7 +19,13 @@
         "command": "bash ~/.agents/hooks/minimal-edit-audit.sh",
         "timeout": 15,
         "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "15s: minimal-editing advisory on the edited file (git --numstat line-count + audit-metrics.py token metrics on .py, from ~/.cursor/skills/minimal-editing/ if installed). Appends findings to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or MINIMAL_EDITING_ENFORCE=0."
+        "_comment": "15s (DEPRECATED in 0.3.0, superseded by semantic-density-audit + declared-editing; retained for compat, removal slated for 0.4.0): minimal-editing advisory on the edited file (git --numstat line-count). Size-based gate; the intent-declared gate supersedes it. Appends findings to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or MINIMAL_EDITING_ENFORCE=0."
+      },
+      {
+        "command": "bash ~/.agents/hooks/semantic-density-audit.sh",
+        "timeout": 15,
+        "matcher": "^(Write|StrReplace|EditNotebook)$",
+        "_comment": "15s: semantic-opacity advisory on the edited file. Extracts added lines from git diff, pipes to density_scan.py (shared low_density module), flags identifiers that communicate no intent (DataManager, process(), utils.ts, CoreEngine). FAIL = bare low-density token or generic-suffix class without domain noun; WARN = defensible DDD with domain noun (PostgresUserRepository) - only fires alongside a FAIL so clean code stays quiet. One denylist shared with scan_slop.py's semantic_density bucket. Appends to pending; never blocks. Disable: HOOKS_ENFORCE=0 or SEMANTIC_DENSITY_ENFORCE=0."
       },
       {
         "command": "bash ~/.agents/hooks/anti-slop-audit.sh",

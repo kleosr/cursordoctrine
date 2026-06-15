@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # minimal-edit-audit.sh - afterFileEdit minimal-editing advisory (Cursor, Linux).
 #
+# DEPRECATED in 0.3.0 (superseded by semantic-density-audit.sh + the
+# declared-editing discipline; removal slated for 0.4.0). The line-count
+# heuristic here is the size-based gate the cursordoctrine audit identified
+# as the antipattern: it penalizes legitimate large declared changes and
+# misses small quiet drifts. Retained for compatibility with existing installs;
+# new installs register semantic-density-audit.sh alongside it. To opt out of
+# the deprecated hook without uninstalling: MINIMAL_EDITING_ENFORCE=0.
+#
 # Audits the just-edited file for over-editing:
 #   * line-count    - git diff --numstat thresholds (any language).
 #   * token metrics - audit-metrics.py (token-Levenshtein + cognitive
