@@ -635,13 +635,15 @@ def collect_defs(rel: str, lines: list[str]) -> list[Finding]:
         nb = normalize_body(raw, lang)
         sb = structural_body(raw, lang)
         # Non-blank lines only: the brace walk pads raw with edge newlines,
-        # and counting them would let `super(props);` pass the 3-line floor.
+        # and counting them would let `super(props);` pad its body_line count.
         body_lines = sum(1 for s in raw.splitlines() if s.strip()) or 1
-        # Exact-dup hash needs substance (>=3 lines or >=60 chars): one-line
-        # boilerplate like `super(props);` is not knowledge worth consolidating.
+        # Exact-dup hash needs substance (>=12 normalized chars). An earlier
+        # >=3-lines-or->=60-chars floor excluded the skill's own marquee case -
+        # tiny predicates like isRecord/isObject (1 line, ~40 chars) whose
+        # byte-identical bodies are exactly the duplication worth surfacing.
+        # Boilerplate like `return;`/`return x;` stays under the 12-char floor.
         # A truncated body is a prefix, not the function - never call it exact.
-        hash_exact = (not truncated and len(nb) >= 12
-                      and (body_lines >= 3 or len(nb) >= 60))
+        hash_exact = (not truncated and len(nb) >= 12)
         defs.append({
             "name": name, "file": rel, "line": i + 1,
             "exported": _is_exported(name, ln, lang),
