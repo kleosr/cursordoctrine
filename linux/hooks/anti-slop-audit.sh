@@ -154,17 +154,14 @@ checklist_file="$HOME/.agents/hooks/anti-slop.md"
 checklist=""
 [ -f "$checklist_file" ] && checklist="$(cat "$checklist_file")"
 if [ -z "$checklist" ]; then
-    checklist='ANTI-SLOP SELF-REVIEW - audit the edit you just made and FIX (do not explain) any slop:
-  1. Edge cases beyond the happy path (null / empty / zero / boundary / error).
-  2. Duplicated logic that already exists in this repo - call it, do not re-implement.
-  3. Conventions - match the file'"'"'s existing style / naming / structure / error-handling.
-  4. Unnecessary dependencies - remove libs the stdlib or an existing dep covers.
-  5. Premature abstraction - no Factory/Repository/Mediator/CQRS/DDD without 2-3 real call sites today.
-  6. Accidental complexity - flatten indirection a junior cannot read in 30s.
-  7. Tests assert real behaviour and edge cases, not just "it runs".
-  8. Cargo cult - delete any construct whose reason you cannot state.
-  9. Architecture - respect the project'"'"'s layering and boundaries.
- 10. Redundant comments restating code - delete; keep only WHY.'
+    checklist='ANTI-SLOP — read ~/.agents/hooks/anti-slop.md (13 items). Fallback if missing:
+  1–10: edge cases, duplication, conventions, deps, premature abstraction,
+  accidental complexity, tests (no tautologies), cargo cult, architecture,
+  redundant comments / prompt residue.
+  11: semantic contracts (behavior change without name/signature change).
+  12: operational slop (retry w/o backoff, await-in-loop, telemetry spam).
+  13: change surface (too many files for a simple request).
+Fix guilty items now. Never revert what the user asked for.'
 fi
 
 flag_block=""

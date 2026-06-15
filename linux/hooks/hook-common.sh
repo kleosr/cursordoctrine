@@ -159,6 +159,9 @@ try:
             q = m.group(1).strip()
             if len(q) > 2000:
                 q = q[:2000] + "..."
+            q = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", q)
+            q = re.sub(r"\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b", "[REDACTED_TOKEN]", q)
+            q = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+", r"\1=[REDACTED]", q)
             print(q)
             break
 except Exception:
@@ -172,6 +175,7 @@ except Exception:
     printf '%s' "$reversed" |
         grep -m1 -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
         sed -E 's@</?user_query>@@g' |
+        sed -E 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' |
         head -c 2000
 }
 

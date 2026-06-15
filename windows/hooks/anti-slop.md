@@ -1,56 +1,54 @@
-ANTI-SLOP SELF-REVIEW — you just edited a file. Before you do anything else,
-audit your own change against the checklist below. This is NOT the bug pass
-(the self-review trigger covers security/correctness). This is about *slop*:
-code that runs but should not ship.
+ANTI-SLOP SELF-REVIEW — you just edited a file (or you are auditing the
+session diff at final review). Code that runs but should not ship.
 
-For each item: if your edit is guilty, FIX IT NOW with Edit — delete the
-abstraction, inline the duplicate, drop the dependency, remove the comment.
-Do not explain, do not report, just fix. If the edit is clean, say nothing.
+Intent trace (Tier 0 — hallucinated requirements, scope drift) runs FIRST at
+stop via final-review axis 0, not here. This checklist covers code-shape and
+cost slop. Apply every item; if guilty, FIX with Edit — delete, inline, drop.
+Do not explain. If clean, say nothing.
 
-  1. EDGE CASES — Does it only handle the happy path? Check the null / empty /
-     zero / boundary / error inputs the task implies. An unhandled obvious
-     edge case is a bug waiting in production.
+  1. EDGE CASES — Happy path only? Check null / empty / zero / boundary / error
+     inputs the task implies.
 
-  2. DUPLICATION — Did you write logic that already exists in this repo? Look
-     before you add. If it exists, call it; do not re-implement it.
+  2. DUPLICATION — Logic that already exists in this repo? Call it; do not
+     re-implement. Same function in many files (isRecord-class) → one source.
 
-  3. CONVENTIONS — Does it match the FILE's existing style, naming, structure,
-     error-handling, and import patterns? Match the neighbours, not your
-     defaults.
+  3. CONVENTIONS — Match the FILE's style, naming, structure, error-handling,
+     imports. Not your defaults.
 
-  4. DEPENDENCIES — Did you add a library for something the stdlib or an
-     existing dependency already does? Remove it. A new dependency must earn
-     its place.
+  4. DEPENDENCIES — New library for something stdlib or an existing dep covers?
+     Remove it. A dependency must earn its place.
 
-  5. PREMATURE ABSTRACTION — Factory / Repository / Mediator / Strategy /
-     Builder / base classes / interfaces / CQRS / Event Sourcing / DDD
-     layering: is there a REAL, PRESENT problem — two or three concrete call
-     sites that exist TODAY — that requires it? "For future flexibility" is
-     not a reason. Delete it and write the direct code. Abstraction debt is
-     layers without problems.
+  5. PREMATURE ABSTRACTION — Factory / Repository / Mediator / Strategy / Builder /
+     CQRS / Event Sourcing / DDD: is there a REAL problem with 2–3 call sites
+     TODAY? "Future flexibility" is not a reason. Delete and write direct code.
 
-  6. ACCIDENTAL COMPLEXITY — Could a junior read this in 30 seconds? Extra
-     indirection, generics, config, or layers that do not earn their keep →
-     flatten them.
+  6. ACCIDENTAL COMPLEXITY — Could a junior read this in 30 seconds? Flatten
+     indirection, generics, config, layers that do not earn their keep.
 
-  7. TESTS — Do your tests assert real BEHAVIOUR and the edge cases, or do
-     they just prove the code runs / mirror the implementation line-for-line?
-     A test that cannot fail is slop. Make it verify outcomes.
+  7. TESTS (epistemic slop) — Assert real OUTCOMES and edge cases, not "it runs",
+     not a mirror of the implementation, not expect(true).toBe(true). A test
+     that cannot fail is slop.
 
-  8. CARGO CULT — Can you state WHY each non-obvious construct is there? If you
-     reproduced a pattern without the historical reason behind it, that reason
-     may not hold here. Remove what you cannot justify. Replicating a shape you
-     have seen is not the same as needing it.
+  8. CARGO CULT — Can you state WHY each non-obvious construct is there? Remove
+     what you cannot justify. A shape you have seen ≠ a shape you need.
 
-  9. ARCHITECTURE — Does it respect the project's layering and boundaries — no
-     reaching across layers, no business logic in the wrong place, no breaking
-     a constraint the codebase clearly holds? Honour the constraints.
+  9. ARCHITECTURE — Respect layering and boundaries. No reaching across layers,
+     no business logic in the wrong place, no breaking project constraints.
 
- 10. REDUNDANT COMMENTS — Delete comments that restate the code
-     ("// increment i", "# return the result"). Keep only comments that
-     explain WHY, never WHAT.
+ 10. REDUNDANT COMMENTS — Delete comments that restate the code ("// increment
+     i"). Keep only WHY, never WHAT. No prompt residue ("in a real app...").
 
-Hard constraints: never revert the change the USER asked for — slop is the
-stuff you added on top. Do not "improve" beyond removing slop. At most a few
-targeted edits, then stop. The bar: would this pass a senior review at a top
-engineering org without a single "why is this here?" comment.
+ 11. SEMANTIC CONTRACTS (Tier 1) — Did any existing function's BEHAVIOR change
+     without its name, signature, or docstring changing? Names are contracts.
+     deleteUser() that now soft-deletes is silent contract break.
+
+ 12. OPERATIONAL SLOP (Tier 3) — Retry loops without backoff/sleep/jitter?
+     await fetch / ctx.db / prisma inside a for/while/map? Six or more
+     console.log / print added in one edit? Token burn with no user value →
+     remove or bound.
+
+ 13. CHANGE SURFACE (Tier 5) — Did a simple request touch many files? Every
+     file in the diff must trace to the task. Trim unrelated hunks.
+
+Hard constraints: never revert what the USER asked for — slop is what got added
+on top. At most a few targeted edits, then stop.
