@@ -64,6 +64,17 @@ Step C — session footprint (also in the header above):
   If "Session footprint" shows >5 files or the request was simple, justify each
   file or trim. Unjustified files are slop.
 
+Step D — declared scope (closing gate for Compuerta 1):
+  If `.scope.json` exists in the repo root, run the session's full diff against
+  the declared contract. In your shell:
+    for f in $(git diff --name-only HEAD); do
+      python ~/.cursor/skills/anti-slop/scripts/scope_match.py --path "$f" --patterns-file .scope.json
+    done
+  Any file reporting `"in_scope": false` is a scope violation you must justify
+  (add to .scope.json with a one-line reason) or revert. If `.scope.json` does
+  not exist, this step is skipped — the declared-editing ladder and the
+  per-edit scope-gate-audit hook are the opt-in discipline.
+
 Fix with edits now; re-run the scan (if Step A ran) and the tests; then stop.
 
 ## 5. Wiring completeness

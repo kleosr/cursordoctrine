@@ -374,6 +374,7 @@ Kill switches (environment variables, all hooks fail open)
   PERM_GATE_ENFORCE=0          permission gate off
   MINIMAL_EDITING_ENFORCE=0    over-edit advisory off (deprecated in 0.3.0)
   SEMANTIC_DENSITY_ENFORCE=0   semantic-opacity advisory off
+  SCOPE_GATE_ENFORCE=0         declared-scope advisory off
   ANTI_SLOP_ENFORCE=0          slop advisory off
   FINAL_REVIEW_ENFORCE=0       final review off
   SUBAGENT_REVIEW_ENFORCE=0    in-subagent review off
