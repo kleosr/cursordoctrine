@@ -78,6 +78,8 @@ $allowGrowth = $false
 if ($payload.PSObject.Properties['allow_growth'] -and $payload.allow_growth) { $allowGrowth = $true }
 $intent = ''
 if ($payload.PSObject.Properties['intent']) { $intent = [string]$payload.intent }
+$acceptance = ''
+if ($payload.PSObject.Properties['acceptance']) { $acceptance = [string]$payload.acceptance }
 
 # Read the declared files list for the message (best-effort; skip on failure)
 $declaredFiles = ''
@@ -86,6 +88,11 @@ try {
     if ($scopeJson.files) { $declaredFiles = ($scopeJson.files -join ', ') }
 } catch { }
 
+# acceptance line: only quote it when the agent bothered to declare one. A blank
+# acceptance means the Anchor Set was incomplete - surface that gap, since the
+# whole point of the pre-compile phase is to name the deterministic success check.
+$acceptanceLine = if ($acceptance) { $acceptance } else { '(not declared — your Anchor Set is missing the ÉXITO/acceptance field)' }
+
 if ($allowGrowth) {
     # Growth is allowed: informational, not a violation
     $summary = "Scope note - $rel is new vs your declared scope (growth allowed)"
@@ -93,6 +100,9 @@ if ($allowGrowth) {
   You touched a file outside your initial declared set. Since allow_growth is
   true, this is not a violation, but justify it: add $rel to .scope.json or
   explain why the scope grew.
+
+  Your success contract (acceptance): $acceptanceLine
+  Does growing into $rel still serve that?
 "@
 } else {
     # Hard violation: edited outside the declared contract
@@ -101,6 +111,7 @@ if ($allowGrowth) {
   Your contract (.scope.json):
     intent: $intent
     files: $declaredFiles
+    acceptance: $acceptanceLine
 
   You declared these files and touched one outside the set. Either:
     1. Add $rel to .scope.json with a one-line justification, OR

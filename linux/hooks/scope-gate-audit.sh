@@ -78,8 +78,10 @@ if p.get("in_scope"):
     sys.exit(3)   # in scope -> clean
 allow_growth = "1" if p.get("allow_growth") else "0"
 intent = p.get("intent", "")
+acceptance = p.get("acceptance", "")
 print(f"__AG__{allow_growth}")
 print(f"__INTENT__{intent}")
+print(f"__ACCEPT__{acceptance}")
 sys.exit(0)
 PYEOF
 }
@@ -90,6 +92,7 @@ rc=$?
 
 allow_growth="$(printf '%s\n' "$parsed" | grep '__AG__' | sed 's/__AG__//')"
 intent="$(printf '%s\n' "$parsed" | grep '__INTENT__' | sed 's/__INTENT__//')"
+acceptance="$(printf '%s\n' "$parsed" | grep '__ACCEPT__' | sed 's/__ACCEPT__//')"
 
 # Read declared files for the message (best-effort)
 declared_files="$(printf '%s' "$scope_file" | "$py" -c "
@@ -102,16 +105,29 @@ except Exception:
 " "$scope_file" 2>/dev/null)"
 
 # --- compose advisory ------------------------------------------------------
+# acceptance line: only quote it when the agent declared one. A blank acceptance
+# means the Anchor Set was incomplete - surface that gap, since the whole point
+# of the pre-compile phase is to name the deterministic success check.
+if [ -n "$acceptance" ]; then
+    acceptance_line="$acceptance"
+else
+    acceptance_line="(not declared - your Anchor Set is missing the EXITO/acceptance field)"
+fi
+
 if [ "$allow_growth" = "1" ]; then
     summary="Scope note - $rel is new vs your declared scope (growth allowed)"
     body="  You touched a file outside your initial declared set. Since allow_growth is
   true, this is not a violation, but justify it: add $rel to .scope.json or
-  explain why the scope grew."
+  explain why the scope grew.
+
+  Your success contract (acceptance): $acceptance_line
+  Does growing into $rel still serve that?"
 else
     summary="[SCOPE VIOLATION] $rel is NOT in your declared scope"
     body="  Your contract (.scope.json):
     intent: $intent
     files: $declared_files
+    acceptance: $acceptance_line
 
   You declared these files and touched one outside the set. Either:
     1. Add $rel to .scope.json with a one-line justification, OR

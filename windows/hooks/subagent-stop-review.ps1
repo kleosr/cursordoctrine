@@ -43,10 +43,13 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
+$anchorFlag = Join-Path $pendingDir "anchor-declared-$cid.flag"
 
 # One-shot brake: the previous subagentStop for this id emitted the review.
+# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
+# the next subagent implementation (one nudge per body of work).
 if (Test-Path $flag) {
-    Remove-Item $flag, $marker -Force -ErrorAction SilentlyContinue
+    Remove-Item $flag, $marker, $anchorFlag -Force -ErrorAction SilentlyContinue
     Emit-None
 }
 
@@ -81,9 +84,14 @@ If an axis is clean, say so in one line. Then stop.
 }
 $body = Expand-AgentPaths $body
 
+# Regla R1 (re-entry): same suppression as final-review.ps1. A subagent that
+# failed an axis must not build on its own prior wrong diff - reset its prior
+# to the Anchor Set, not to its previous attempt.
+$reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if an axis failed, forget the approach that produced it. Re-read your original task and your Anchor Set (.scope.json, if you wrote one). Fix ONLY what is failing. Do not refactor in this pass.`n"
+
 $resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
 $fileList = ($resolved | Select-Object -First 30) -join "`n  "
-$msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n$body"
+$msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n$body${reentryLine}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null

@@ -40,7 +40,7 @@ const pendingDir = join(cursorDst, '.hooks-pending');
 const hooksJsonDst = join(cursorDst, 'hooks.json');
 
 const injectName = platform === 'windows' ? 'inject-doctrine.ps1' : 'inject-doctrine.sh';
-const doctrineFiles = [injectName, 'doctrine.md', 'USER-RULES.md', 'declared-editing.md'];
+const doctrineFiles = [injectName, 'doctrine.md', 'USER-RULES.md', 'declared-editing.md', 'pre-compile.md'];
 
 function payloadHookFiles() {
   return readdirSync(join(payload, 'hooks'));
@@ -260,6 +260,22 @@ function verify() {
     const second = runHook(hook('subagent-stop-review'), { conversation_id: 'npxv2', status: 'completed' });
     if (!first.includes('SUBAGENT FINAL REVIEW')) return { ok: false, detail: 'no SUBAGENT FINAL REVIEW on first stop' };
     if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
+    return true;
+  });
+
+  check('anchor-set nudge fires on first edit, then goes quiet', () => {
+    // First edit of the implementation -> the pre-compile nudge stashes its
+    // advisory in the pending feedback bus and arms the one-shot flag.
+    const first = runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'x.py') });
+    if (!first.includes('additional_context') || !first.includes('PRE-COMPILE NUDGE')) {
+      // anchor-set-nudge appends to feedback-<cid>.txt (the shared bus) rather
+      // than emitting JSON directly; drain it the same way post-tool-use does.
+      const drained = runHook(hook('post-tool-use'), { conversation_id: 'npxv3' });
+      if (!drained.includes('PRE-COMPILE NUDGE')) return { ok: false, detail: 'nudge did not reach the feedback bus on first edit' };
+    }
+    // Second edit -> flag is armed, nudge must stay silent.
+    const second = runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'y.py') });
+    if (second.includes('PRE-COMPILE NUDGE')) return { ok: false, detail: 'nudge re-fired on second edit (flag not gating)' };
     return true;
   });
 
