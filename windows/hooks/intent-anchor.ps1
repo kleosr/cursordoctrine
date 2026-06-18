@@ -16,12 +16,12 @@
 #
 #   2. RE-COMPILE ON PROMPT CHANGE: hash the current <user_query> (via
 #      Get-LastUserQuery, which reads the transcript) and compare to
-#      last-query-<cid>.hash. If they differ, demand the agent UPDATE
-#      .scope.json to match the new request. If no .scope.json exists, demand
-#      one be written. The scope tracks the request - when the request moves,
-#      the scope moves with it. This part needs transcript_path in the payload;
-#      if it is absent the hook degrades to silent on change-detection but the
-#      re-injection above still runs.
+#      last-query-<cid>.hash. If they differ and a valid .scope.json exists,
+#      demand the agent UPDATE it. If no valid .scope.json exists and the query
+#      is available, WRITE a deterministic scaffold to disk (intent = query,
+#      files/acceptance = TODO placeholders) so re-injection always has real
+#      content from the first tool boundary — contract creation is not left to
+#      the LLM alone.
 #
 # Why postToolUse, not afterFileEdit: afterFileEdit only fires AFTER an edit
 # exists, and Cursor has no preToolUse for file edits. postToolUse fires after
@@ -93,12 +93,53 @@ if (Test-Path -LiteralPath $scopePath) {
     } catch { $scopeExists = $false }   # malformed JSON -> treat as missing
 }
 
+# --- deterministic scaffold (0.4.4) -----------------------------------------
+# When the query is available and there is no valid contract, the hook writes
+# .scope.json itself — intent from <user_query>, obvious TODO placeholders
+# for files/acceptance. Fires on prompt change (incl. first turn: empty prev
+# hash) or whenever the contract is still missing on a turn boundary.
+$scaffoldWritten = $false
+$shouldScaffold = $hasQuery -and (-not $scopeExists)
+if ($shouldScaffold) {
+    try {
+        $scaffold = [ordered]@{
+            intent       = $currentQuery
+            files        = @('<TODO: list files>')
+            acceptance   = '<TODO: deterministic success check>'
+            allow_growth = $false
+        }
+        $json = $scaffold | ConvertTo-Json -Depth 4 -Compress
+        $dir = Split-Path -Parent $scopePath
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+        $scopeIntent = $currentQuery
+        $scopeAcceptance = '<TODO: deterministic success check>'
+        $scopeFiles = '<TODO: list files>'
+        $scopeExists = $true
+        $scaffoldWritten = $true
+    } catch { }
+}
+
 # --- compose the anchor message ---------------------------------------------
 # Re-injection (req 2) is unconditional whenever a contract exists.
-# Recompile-demand (req 1) fires when there is no contract, or the prompt moved.
+# Recompile-demand (req 1) fires when the prompt moved but a real contract exists.
 $queryLine = if ($hasQuery) { $currentQuery } else { '(current request unavailable - no transcript in this event)' }
 
-if (-not $scopeExists) {
+if ($scaffoldWritten) {
+    $msg = @"
+INTENT ANCHOR (scaffold written to .scope.json) - contract materialized from your request.
+
+  intent:     $scopeIntent
+  files:      $scopeFiles
+  acceptance: $scopeAcceptance
+
+The hook wrote this scaffold to $scopePath — intent is locked from your current
+request. Replace the TODO placeholders with real files[] and acceptance before
+editing source. The contract is on disk and will be re-injected every turn.
+"@
+} elseif (-not $scopeExists) {
     $msg = @"
 INTENT ANCHOR (pre-compile) - no .scope.json found in $root.
 

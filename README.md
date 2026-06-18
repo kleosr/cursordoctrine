@@ -98,10 +98,11 @@ The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declar
 
 Writing `.scope.json` once is not enough. As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against the recent history — *Salience Dilution* — and the agent stops checking the contract it wrote at prompt 1. It forgets symmetry, colors, the acceptance bar. This is the failure mode the nudge alone can't fix (a reminder that the contract exists ≠ the contract being in context).
 
-`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) does two things on the **first tool boundary of every turn** (per-turn latch, cleared unconditionally at each stop):
+`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) does three things on the **first tool boundary of every turn** (per-turn latch, cleared unconditionally at each stop):
 
-1. **Re-inject the contract.** Reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context`. The contract is back in the model's attentional focus at the start of each turn's work — **before** edits pile up and dilute it. This runs unconditionally (no transcript needed); it's the core anti-dilution move.
-2. **Re-compile on prompt change.** Hashes the current `<user_query>` and compares to the previous turn's hash (`last-query-<cid>.hash`, which persists across turns). If the request moved, it demands the agent **update** `.scope.json` to match — the scope tracks the request. If no `.scope.json` exists, it demands one be written. (Needs `transcript_path` in the payload; if absent this part degrades to silent but the re-injection still runs.)
+1. **Materialize the contract (0.4.4+).** If `.scope.json` is missing or invalid and the current `<user_query>` is available, the hook **writes a scaffold to disk** — `intent` from your prompt, `files`/`acceptance` as obvious `<TODO: …>` placeholders. Contract creation is no longer probabilistic.
+2. **Re-inject the contract.** Reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context`.
+3. **Re-compile on prompt change.** Hashes the current `<user_query>` and compares to the previous turn's hash. If the request moved and a non-scaffold contract already exists, it demands the agent **update** `.scope.json`.
 
 Crucially, `intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn — something the path-only `scope-gate-audit` can never do. That is what makes "the agent forgot about grid symmetry while editing the right file" catchable: the symmetry requirement is re-stated in front of the model before each edit, not just checked against a file list after.
 

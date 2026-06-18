@@ -17,12 +17,12 @@
 #
 #   2. RE-COMPILE ON PROMPT CHANGE: hash the current <user_query> (via
 #      extract_last_user_query, which reads the transcript) and compare to
-#      last-query-<cid>.hash. If they differ, demand the agent UPDATE
-#      .scope.json to match the new request. If no .scope.json exists, demand
-#      one be written. The scope tracks the request - when the request moves,
-#      the scope moves with it. This part needs transcript_path in the payload;
-#      if it is absent the hook degrades to silent on change-detection but the
-#      re-injection above still runs.
+#      last-query-<cid>.hash. If they differ and a valid .scope.json exists,
+#      demand the agent UPDATE it. If no valid .scope.json exists and the query
+#      is available, WRITE a deterministic scaffold to disk (intent = query,
+#      files/acceptance = TODO placeholders) so re-injection always has real
+#      content from the first tool boundary — contract creation is not left to
+#      the LLM alone.
 #
 # Why postToolUse, not afterFileEdit: afterFileEdit only fires AFTER an edit
 # exists, and Cursor has no preToolUse for file edits. postToolUse fires after
@@ -115,6 +115,36 @@ EOF
     fi
 fi
 
+# --- deterministic scaffold (0.4.4) -------------------------------------------
+# When the query is available and there is no valid contract, write .scope.json
+# on disk — intent from <user_query>, TODO placeholders for files/acceptance.
+scaffold_written=0
+should_scaffold=0
+[ "$has_query" = "1" ] && [ "$scope_exists" != "1" ] && should_scaffold=1
+
+if [ "$should_scaffold" = "1" ]; then
+    if have_py; then
+        if python3 -c '
+import json, sys
+path, intent = sys.argv[1], sys.argv[2]
+obj = {
+    "intent": intent,
+    "files": ["<TODO: list files>"],
+    "acceptance": "<TODO: deterministic success check>",
+    "allow_growth": False,
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(obj, f, ensure_ascii=False)
+' "$scope_path" "$current_query" 2>/dev/null; then
+            scaffold_written=1
+            scope_exists=1
+            scope_intent="$current_query"
+            scope_acceptance="<TODO: deterministic success check>"
+            scope_files="<TODO: list files>"
+        fi
+    fi
+fi
+
 # --- compose the anchor message ---------------------------------------------
 if [ "$has_query" = "1" ]; then
     query_line="$current_query"
@@ -122,7 +152,17 @@ else
     query_line="(current request unavailable - no transcript in this event)"
 fi
 
-if [ "$scope_exists" != "1" ]; then
+if [ "$scaffold_written" = "1" ]; then
+    msg="INTENT ANCHOR (scaffold written to .scope.json) - contract materialized from your request.
+
+  intent:     $scope_intent
+  files:      $scope_files
+  acceptance: $scope_acceptance
+
+The hook wrote this scaffold to $scope_path — intent is locked from your current
+request. Replace the TODO placeholders with real files[] and acceptance before
+editing source. The contract is on disk and will be re-injected every turn."
+elif [ "$scope_exists" != "1" ]; then
     msg="INTENT ANCHOR (pre-compile) - no .scope.json found in $root.
 
 Current request:
