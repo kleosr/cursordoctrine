@@ -41,11 +41,16 @@ anchor_flag="$pending_dir/anchor-declared-$cid.flag"
 # Sweep state from sessions that died before their stop hook ran.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
+# Unconditionally clear the pre-compile nudge's per-turn latch. Every stop is a
+# turn boundary; clearing here (not only inside the reviewed-flag block below)
+# guarantees the nudge re-fires on the first edit of the NEXT turn and can never
+# get stranded silenced. Clearing it only on the SECOND stop left the nudge
+# permanently off for any conversation that never cleanly hit that boundary.
+rm -f "$anchor_flag" 2>/dev/null
+
 # One-shot brake: the previous stop for this conversation emitted the review.
-# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
-# the NEXT implementation (one nudge per body of work, not per session).
 if [ -f "$flag" ]; then
-    rm -f "$flag" "$marker" "$anchor_flag" 2>/dev/null
+    rm -f "$flag" "$marker" 2>/dev/null
     emit_none
 fi
 

@@ -43,7 +43,7 @@
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anchor-set-nudge.ps1",
         "timeout": 5,
         "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "5s: PROACTIVE pre-compile nudge. On the FIRST edit of each implementation (per conversation), remind the agent to compile its Anchor Set (pre-compile.md) into .scope.json BEFORE piling on more code. The reactive audits (self-review / anti-slop / final-review axis 0) only fire after code exists; this catches intent dilution at token ~50 instead of ~5000. One-shot per implementation: gated by anchor-declared-<cid>.flag, which final-review.ps1 / subagent-stop-review.ps1 clear at the same per-implementation boundary as reviewed-<cid>.flag. Advisory only; never blocks. Disable: HOOKS_ENFORCE=0 or ANCHOR_NUDGE_ENFORCE=0."
+        "_comment": "5s: PROACTIVE pre-compile nudge. On the FIRST edit of each agent turn (per conversation), remind the agent to compile its Anchor Set (pre-compile.md) into .scope.json BEFORE piling on more code. The reactive audits (self-review / anti-slop / final-review axis 0) only fire after code exists; this catches intent dilution at token ~50 instead of ~5000. One-shot per turn: gated by anchor-declared-<cid>.flag, armed here on first edit and cleared UNCONDITIONALLY by final-review.ps1 / subagent-stop-review.ps1 on every stop - so it re-fires on the first edit of the next turn and can never get stranded silenced. Advisory only; never blocks. Disable: HOOKS_ENFORCE=0 or ANCHOR_NUDGE_ENFORCE=0."
       }
     ],
     "postToolUse": [

@@ -48,12 +48,19 @@ Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
+# Unconditionally clear the pre-compile nudge's per-turn latch. Every stop is a
+# turn boundary; clearing here (not only inside the reviewed-flag block below)
+# guarantees the nudge re-fires on the first edit of the NEXT turn and can never
+# get stranded silenced. The original design cleared anchor-declared-<cid>.flag
+# only on the SECOND stop (the reviewed-flag path), so any conversation that
+# never cleanly hit that boundary left the nudge permanently off - the agent
+# then stopped being reminded to write .scope.json.
+Remove-Item $anchorFlag -Force -ErrorAction SilentlyContinue
+
 # One-shot brake: the previous stop for this conversation emitted the review.
 # Clear the flag (and whatever the review pass itself edited) and end the loop.
-# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
-# the NEXT implementation (one nudge per body of work, not per session).
 if (Test-Path $flag) {
-    Remove-Item $flag, $marker, $anchorFlag -Force -ErrorAction SilentlyContinue
+    Remove-Item $flag, $marker -Force -ErrorAction SilentlyContinue
     Emit-None
 }
 

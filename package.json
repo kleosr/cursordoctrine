@@ -1,7 +1,7 @@
 {
   "name": "cursordoctrine",
-  "version": "0.4.1",
-  "description": "Thin self-review hooks for Cursor — the model is the auditor. Pre-compile Anchor Set phase (proactive intent compilation), intent-trace final review (Tier 0), unified 13-item anti-slop checklist, operational slop detection.",
+  "version": "0.4.2",
+  "description": "Thin self-review hooks for Cursor — the model is the auditor. Pre-compile Anchor Set phase (proactive intent compilation, fires once per turn), intent-trace final review (Tier 0), unified 13-item anti-slop checklist, operational slop detection.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
   },

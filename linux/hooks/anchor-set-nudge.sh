@@ -2,20 +2,20 @@
 # anchor-set-nudge.sh - afterFileEdit "pre-compile" nudge (Cursor, Linux).
 #
 # Proactive counterpart to the reactive audits. On the FIRST file edit of an
-# implementation (per conversation), remind the agent to compile its Anchor Set
-# (pre-compile.md) and write .scope.json BEFORE piling on more code. The
-# reactive stack (self-review, anti-slop, final-review) only fires AFTER code
-# exists; this nudge catches intent dilution at token ~50, not at the ~5000 of
-# the stop-hook axis 0. A clean final review of the wrong feature is still the
-# wrong feature - the Anchor Set exists so the right feature is on the rails
-# from the first edit.
+# agent turn, remind the agent to compile its Anchor Set (pre-compile.md) and
+# write .scope.json BEFORE piling on more code. The reactive stack (self-review,
+# anti-slop, final-review) only fires AFTER code exists; this nudge catches
+# intent dilution at token ~50, not at the ~5000 of the stop-hook axis 0. A
+# clean final review of the wrong feature is still the wrong feature - the
+# Anchor Set exists so the right feature is on the rails from the first edit.
 #
-# One-shot PER IMPLEMENTATION, not per session: gated by an
-# anchor-declared-<cid>.flag in the pending dir. That flag is cleared by
-# final-review.sh / subagent-stop-review.sh at the SAME per-implementation
-# boundary where they clear session-edits-<cid>.txt and reviewed-<cid>.flag
-# (the stop after a review pass). So a long conversation with N implementations
-# gets N nudges, not one - every new body of work re-earns the reminder.
+# Fires ONCE PER TURN (per conversation): gated by an anchor-declared-<cid>.flag
+# in the pending dir, armed here on first edit and cleared UNCONDITIONALLY by
+# final-review.sh / subagent-stop-review.sh on every stop. So a long
+# conversation with N turns gets up to N nudges - every new turn re-earns the
+# reminder on its first edit. The clear is unconditional (not gated on the
+# reviewed-flag path) so the latch can never get stranded silenced mid-session,
+# which would silently stop reminding the agent to write .scope.json.
 #
 # Advisory only: never blocks, never reads the diff, ALWAYS exits 0. Appends to
 # the shared feedback-<cid>.txt bus; post-tool-use.sh delivers it next turn.

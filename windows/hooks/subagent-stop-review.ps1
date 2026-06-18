@@ -45,11 +45,14 @@ $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
 $anchorFlag = Join-Path $pendingDir "anchor-declared-$cid.flag"
 
+# Unconditionally clear the pre-compile nudge's per-turn latch so it re-fires
+# on the first edit of the next subagent run. Clearing here (not only inside
+# the reviewed-flag block below) can never strand the nudge silenced.
+Remove-Item $anchorFlag -Force -ErrorAction SilentlyContinue
+
 # One-shot brake: the previous subagentStop for this id emitted the review.
-# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
-# the next subagent implementation (one nudge per body of work).
 if (Test-Path $flag) {
-    Remove-Item $flag, $marker, $anchorFlag -Force -ErrorAction SilentlyContinue
+    Remove-Item $flag, $marker -Force -ErrorAction SilentlyContinue
     Emit-None
 }
 
