@@ -9,8 +9,8 @@
 
 <div align="center">
   <h1>cursordoctrine</h1>
-  <p><strong>Thin self-review hooks for Cursor.</strong></p>
-  <p>Five hook events, one message bus.<br />The model audits its own work. Cursor carries context and gates blast radius.</p>
+  <p><strong>Self-review hooks for Cursor — proactive and reactive.</strong></p>
+  <p>Five hook events, one message bus.<br />The model compiles its intent, audits its own work, and stays on the rails. Cursor carries context and gates blast radius.</p>
 </div>
 
 <br />
@@ -19,17 +19,34 @@
 
 ## What this is
 
-Cursor hooks that make the agent review its own edits without bolting a static-analysis pipeline onto every keystroke. No regex army, no scoring engine. Three jobs:
+Cursor hooks that make the agent review its own edits without bolting a static-analysis pipeline onto every keystroke. No regex army, no scoring engine. Four jobs:
 
-1. **Inject the doctrine** at session start — every chat starts with the same short governing text (`doctrine.md`, `USER-RULES.md`, and `declared-editing.md`, the YAGNI ultra ladder that stops over-building before a line gets written).
-2. **Hand the model its own edits back** — after each agent edit, a self-review prompt goes into a pending file (plus minimal-edit, semantic-density, and anti-slop advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
-3. **Gate blast radius** — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else passes.
+1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*, and write that contract to `.scope.json`. On the first edit of each implementation a `anchor-set-nudge` advisory fires to catch intent dilution at token ~50 instead of waiting for the stop-hook review at token ~5000.
+2. **Inject the doctrine** at session start — every chat starts with the same short governing text (`doctrine.md`, `USER-RULES.md`, `declared-editing.md` the YAGNI ultra ladder, and `pre-compile.md` the thin intent-compilation phase).
+3. **Hand the model its own edits back** (reactive) — after each agent edit, a self-review prompt goes into a pending file (plus semantic-density, scope-gate, anti-slop, and the pre-compile nudge advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
+4. **Gate blast radius** — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else passes.
 
-When an implementation finishes, the stop hook runs one final review over everything that changed, then stops. Five axes. The first is **intent trace**: the hook pulls your last user message from the transcript and prepends it to the review so the model has to tie every diff hunk to a concrete request. Anything it can't trace is a hallucinated requirement and gets reverted. That's the only check that catches "clean code, wrong feature" — linters and later axes miss it.
+When an implementation finishes, the stop hook runs one final review over everything that changed, then stops. Six axes. The first is **intent trace**: the hook pulls your last user message from the transcript and prepends it to the review so the model has to tie every diff hunk to a concrete request. Anything it can't trace is a hallucinated requirement and gets reverted. That's the only check that catches "clean code, wrong feature" — linters and later axes miss it.
 
 Subagents get the same treatment. If a delegated run edited files, it reviews its own work before the result goes back to the parent. Those edits fold into the parent's final review. Every bound is enforced twice: in the script and in `hooks.json`.
 
 Cursor only. Installs into `~/.cursor` and `~/.agents/hooks`. Doesn't touch your projects.
+
+## Prerequisites
+
+> **PowerShell 7 (`pwsh`) is required on Windows.** The hooks run via `pwsh.exe -NoProfile -File ...`. Windows PowerShell 5.1 (`powershell.exe`) is not supported — install PowerShell 7 separately.
+
+| Platform | Required | Optional (recommended) |
+|---|---|---|
+| **Windows** | `git`, **PowerShell 7 (`pwsh`) on PATH** | Python 3.9+ (powers the anti-slop scanner; hooks work without it) |
+| **Linux / SSH remotes** | `bash`, `git`, and `jq` **or** `python3` | Python 3.9+ (anti-slop scanner) |
+
+Install PowerShell 7:
+
+- **Windows**: `winget install --id Microsoft.PowerShell --source winget` (or grab the MSI from the [PowerShell GitHub releases](https://github.com/PowerShell/PowerShell/releases)). Confirm with `pwsh -Version`.
+- **Linux**: follow the [official package instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-linux) — only needed if you run the `windows/` pack on a Linux box (unusual); normal Linux installs use the `linux/` bash pack.
+
+`npx cursordoctrine install` warns at the end if `pwsh` (Windows) or `bash`+`jq`/`python3` (Linux) or Python are missing, so you'll know up front.
 
 ## Install
 
@@ -44,38 +61,72 @@ Restart Cursor after install — `hooks.json` is read at startup. `install` is i
 
 No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist. Copy commands are in the same file if you prefer doing it by hand.
 
-Prerequisites: `git` everywhere; `pwsh` on Windows; `bash` plus `jq` or `python3` on Linux.
-
 The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 13 items) is the canonical slop detector for per-edit advisories and final-review axis 4. Final review runs the scanner from the skill path first when it's there.
+
+## The proactive phase: the Anchor Set
+
+The reactive stack (self-review, anti-slop, final-review) only fires *after* code exists. If the agent drifted from the request on its first token, a clean final review of the wrong feature is still the wrong feature. The pre-compile phase puts the right feature on the rails first.
+
+`pre-compile.md` (injected at session start alongside the doctrine) asks the agent to emit, terse, before any code:
+
+1. **OBJECTIVE** — one operational sentence. Not "improve X" but "make X return Y when Z".
+2. **CONSTRAINTS** — local negations: what it will NOT do (no schema migration, no new dep, no refactor of the surrounding function).
+3. **SCOPE** — files to touch (exact, derived from the objective) and files untouchable.
+4. **DETERMINISTIC SUCCESS** — the one command, test, or observable check that decides done.
+
+It then writes that contract to `.scope.json` in the repo root:
+
+```json
+{
+  "intent": "make /api/login return 401 instead of 500 on a bad password",
+  "files": ["src/api/login.ts", "tests/login.test.ts"],
+  "acceptance": "tests/login.test.ts passes; curl /api/login with wrong password returns 401",
+  "allow_growth": false
+}
+```
+
+Two machine-checkable consequences:
+
+- **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) audits every edit against `files[]` and quotes `intent` + `acceptance` back on a violation. Editing outside the declared set is the textbook scope-creep signal.
+- **final-review axis 0** (intent trace) traces every diff hunk back to `intent`. Anything untraceable is a hallucinated requirement.
+
+On the **first edit of each implementation**, `anchor-set-nudge` drops a reminder into the feedback bus: *did you write your Anchor Set to `.scope.json`?* One nudge per body of work — the flag is cleared at the same per-implementation boundary where the final-review one-shot brake fires, so a long chat with N implementations gets N nudges.
+
+The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declared-editing.md` ladder's rung 1 governs when it's overkill.
 
 ## The five flows
 
 | Flow | Event | What happens |
 |---|---|---|
-| Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing and emits them as `additional_context`. |
+| Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing + **pre-compile** and emits them as `additional_context`. |
 | Every turn | `postToolUse` | Folds completed subagents' edit markers into this conversation's marker, then drains the conversation's pending feedback file into `additional_context`. One-shot, keyed by conversation id. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
-| Edit | `afterFileEdit` + `stop` | `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` (deprecated in 0.3.0), `semantic-density-audit`, and `anti-slop-audit` append advisories when thresholds trip (new deps / premature abstraction / redundant comments / **semantic opacity**: low-density identifiers like `DataManager`, `process()`, `utils.ts` / Tier 3 operational slop: retry-without-backoff, await-in-loop, telemetry spam); `final-review` fires one end-of-implementation pass. |
+| Edit | `afterFileEdit` + `stop` | **Proactive:** `anchor-set-nudge` fires once per implementation to push the Anchor Set. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` (deprecated), `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation six-axis pass. |
 | Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
 
 ## Layout
 
 ```
-windows/          PowerShell hooks (pwsh) — install on Windows machines
+windows/          PowerShell 7 hooks (pwsh) — install on Windows machines
   hooks.json      hook wiring for ~/.cursor/hooks.json
-  inject-doctrine.ps1, doctrine.md, USER-RULES.md, declared-editing.md
-  hooks/          the eight scripts + the three prompt files
+  inject-doctrine.ps1, doctrine.md, USER-RULES.md,
+  declared-editing.md, pre-compile.md
+  hooks/          the ten hook scripts + hook-common.ps1 (shared) + 3 prompt files
+                  (anti-slop.md, self-review.md, final-review.md)
 linux/            bash hooks — install on Linux machines and SSH remotes
-  hooks.json, inject-doctrine.sh, doctrine.md, USER-RULES.md, declared-editing.md
+  hooks.json, inject-doctrine.sh, doctrine.md, USER-RULES.md,
+  declared-editing.md, pre-compile.md
   hooks/          same hooks, ported to bash (jq preferred, python3 fallback)
 skills/           Cursor agent skills shipped with the package
   anti-slop/      SKILL.md + the duplication scanner (final review runs it)
+                  scripts/scope_match.py — the .scope.json matcher shared by
+                  scope-gate-audit and final-review (returns intent + acceptance)
 bin/              the npm CLI (npx cursordoctrine install / verify / uninstall)
 INSTALL.md        ready-to-paste prompt that tells a Cursor agent to
                   install the right folder and verify every hook
 ```
 
-Both folders do the same thing. Windows runs everything through `pwsh.exe`. Linux runs bash, which is what you want on a remote over SSH (check your `~/.ssh/config` host — hooks live on the remote's `$HOME`, not your laptop).
+Both folders do the same thing. Windows runs everything through `pwsh.exe` (PowerShell 7 — Windows PowerShell 5.1 is not supported). Linux runs bash, which is what you want on a remote over SSH (check your `~/.ssh/config` host — hooks live on the remote's `$HOME`, not your laptop).
 
 ## Tuning and kill switches
 
@@ -85,6 +136,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 |---|---|---|
 | `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
+| `ANCHOR_NUDGE_ENFORCE=0` | on | disables the pre-compile nudge (first-edit Anchor Set reminder) |
 | `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory (deprecated in 0.3.0) |
 | `SCOPE_GATE_ENFORCE=0` | on | disables the declared-scope advisory (opt-in: only fires when `.scope.json` exists) |
 | `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |
@@ -98,7 +150,8 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 
 - **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id. No repo litter. Concurrent sessions can't drain each other's prompts. Stale state older than 7 days gets swept on every stop.
 - **`afterFileEdit` output isn't consumed by Cursor**, so edit hooks write to a pending file and `post-tool-use` re-emits it at the next tool boundary. That's the whole message bus.
-- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation.
+- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation. The `anchor-set-nudge` flag and the review flag clear together at that boundary — one nudge + one review per body of work.
+- **The `.scope.json` contract is opt-in.** No `.scope.json` in the repo root → `scope-gate-audit` stays silent and the system falls back to the `declared-editing` ladder plus the final-review footprint check. Writing the file is how the agent opts into a machine-checked scope.
 - **Subagents are first-class.** `afterFileEdit` fires inside subagents keyed by the subagent's conversation id. The harness normalizes agent edits (incl. `StrReplace`) to tool type `Write`, and `postToolUse` never fires for the `Task` tool — verified by payload capture. Matchers cover `Write|StrReplace|EditNotebook` defensively. `subagentStop` reviews the subagent in its own context. The parent folds orphaned subagent markers (from the `subagents/` transcript directory) into its own at every tool boundary and at stop.
 
 Self-contained. No build. Open `hooks.json` and read it — that's the whole system in one file.

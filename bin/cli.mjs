@@ -388,6 +388,7 @@ Examples
 Kill switches (environment variables, all hooks fail open)
   HOOKS_ENFORCE=0              everything advisory off
   PERM_GATE_ENFORCE=0          permission gate off
+  ANCHOR_NUDGE_ENFORCE=0       pre-compile nudge off (first-edit Anchor Set reminder)
   MINIMAL_EDITING_ENFORCE=0    over-edit advisory off (deprecated in 0.3.0)
   SEMANTIC_DENSITY_ENFORCE=0   semantic-opacity advisory off
   SCOPE_GATE_ENFORCE=0         declared-scope advisory off
