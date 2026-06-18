@@ -94,12 +94,23 @@ On the **first edit of each agent turn**, `anchor-set-nudge` drops a reminder in
 
 The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declared-editing.md` ladder's rung 1 governs when it's overkill.
 
+### Keeping the contract alive: `intent-anchor` (anti-Salience-Dilution)
+
+Writing `.scope.json` once is not enough. As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against the recent history — *Salience Dilution* — and the agent stops checking the contract it wrote at prompt 1. It forgets symmetry, colors, the acceptance bar. This is the failure mode the nudge alone can't fix (a reminder that the contract exists ≠ the contract being in context).
+
+`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) does two things on the **first tool boundary of every turn** (per-turn latch, cleared unconditionally at each stop):
+
+1. **Re-inject the contract.** Reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context`. The contract is back in the model's attentional focus at the start of each turn's work — **before** edits pile up and dilute it. This runs unconditionally (no transcript needed); it's the core anti-dilution move.
+2. **Re-compile on prompt change.** Hashes the current `<user_query>` and compares to the previous turn's hash (`last-query-<cid>.hash`, which persists across turns). If the request moved, it demands the agent **update** `.scope.json` to match — the scope tracks the request. If no `.scope.json` exists, it demands one be written. (Needs `transcript_path` in the payload; if absent this part degrades to silent but the re-injection still runs.)
+
+Crucially, `intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn — something the path-only `scope-gate-audit` can never do. That is what makes "the agent forgot about grid symmetry while editing the right file" catchable: the symmetry requirement is re-stated in front of the model before each edit, not just checked against a file list after.
+
 ## The five flows
 
 | Flow | Event | What happens |
 |---|---|---|
 | Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing + **pre-compile** and emits them as `additional_context`. |
-| Every turn | `postToolUse` | Folds completed subagents' edit markers into this conversation's marker, then drains the conversation's pending feedback file into `additional_context`. One-shot, keyed by conversation id. |
+| Every turn | `postToolUse` | **`intent-anchor`** (registered first) re-injects `.scope.json` into `additional_context` at the first tool boundary of each turn — the anti-Salience-Dilution move that keeps `intent` + `acceptance` in the model's attentional focus before edits pile up. If the prompt changed since last turn, it demands the contract be updated. Then `post-tool-use` folds subagent markers and drains the feedback file. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
 | Edit | `afterFileEdit` + `stop` | **Proactive:** `anchor-set-nudge` fires once per turn (on its first edit) to push the Anchor Set. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` (deprecated), `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation six-axis pass. |
 | Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
@@ -137,6 +148,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 | `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
 | `ANCHOR_NUDGE_ENFORCE=0` | on | disables the pre-compile nudge (first-edit Anchor Set reminder) |
+| `INTENT_ANCHOR_ENFORCE=0` | on | disables the thin-intent re-injection (per-turn `.scope.json` echo into `additional_context`) |
 | `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory (deprecated in 0.3.0) |
 | `SCOPE_GATE_ENFORCE=0` | on | disables the declared-scope advisory (opt-in: only fires when `.scope.json` exists) |
 | `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |

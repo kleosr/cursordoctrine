@@ -120,4 +120,4 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 
 Tell the user what was installed, which checks passed, and anything that failed with the exact error. Do not silently work around a failing check.
 
-Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `ANCHOR_NUDGE_ENFORCE=0` (pre-compile nudge off), `MINIMAL_EDITING_ENFORCE=0` (deprecated in 0.3.0), `SEMANTIC_DENSITY_ENFORCE=0`, `SCOPE_GATE_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.
+Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `ANCHOR_NUDGE_ENFORCE=0` (pre-compile nudge off), `INTENT_ANCHOR_ENFORCE=0` (thin-intent re-injection off), `MINIMAL_EDITING_ENFORCE=0` (deprecated in 0.3.0), `SEMANTIC_DENSITY_ENFORCE=0`, `SCOPE_GATE_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.

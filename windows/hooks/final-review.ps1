@@ -40,7 +40,8 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
-$anchorFlag = Join-Path $pendingDir "anchor-declared-$cid.flag"
+$anchorFlag  = Join-Path $pendingDir "anchor-declared-$cid.flag"
+$intentLatch = Join-Path $pendingDir "intent-injected-$cid.flag"
 
 # Sweep state from sessions that died before their stop hook ran. Cheap (one
 # directory listing on an event that fires once per agent loop).
@@ -48,14 +49,16 @@ Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-# Unconditionally clear the pre-compile nudge's per-turn latch. Every stop is a
-# turn boundary; clearing here (not only inside the reviewed-flag block below)
-# guarantees the nudge re-fires on the first edit of the NEXT turn and can never
-# get stranded silenced. The original design cleared anchor-declared-<cid>.flag
-# only on the SECOND stop (the reviewed-flag path), so any conversation that
-# never cleanly hit that boundary left the nudge permanently off - the agent
-# then stopped being reminded to write .scope.json.
-Remove-Item $anchorFlag -Force -ErrorAction SilentlyContinue
+# Unconditionally clear the per-turn latches so the next turn re-fires. Every
+# stop is a turn boundary; clearing here (not only inside the reviewed-flag
+# block below) guarantees these re-fire on the first edit/tool of the NEXT
+# turn and can never get stranded silenced mid-session:
+#   - anchor-declared-<cid>.flag  (anchor-set-nudge, first-edit reminder)
+#   - intent-injected-<cid>.flag  (intent-anchor, first-tool re-injection)
+# last-query-<cid>.hash is NOT cleared here - it must persist turn-to-turn so
+# intent-anchor can detect prompt changes; the 7-day sweep above reaps it when
+# a conversation truly dies.
+Remove-Item $anchorFlag, $intentLatch -Force -ErrorAction SilentlyContinue
 
 # One-shot brake: the previous stop for this conversation emitted the review.
 # Clear the flag (and whatever the review pass itself edited) and end the loop.
