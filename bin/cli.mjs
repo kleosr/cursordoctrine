@@ -263,19 +263,40 @@ function verify() {
     return true;
   });
 
-  check('anchor-set nudge fires on first edit, then goes quiet', () => {
-    // First edit of the implementation -> the pre-compile nudge stashes its
-    // advisory in the pending feedback bus and arms the one-shot flag.
-    const first = runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'x.py') });
-    if (!first.includes('additional_context') || !first.includes('PRE-COMPILE NUDGE')) {
-      // anchor-set-nudge appends to feedback-<cid>.txt (the shared bus) rather
-      // than emitting JSON directly; drain it the same way post-tool-use does.
-      const drained = runHook(hook('post-tool-use'), { conversation_id: 'npxv3' });
-      if (!drained.includes('PRE-COMPILE NUDGE')) return { ok: false, detail: 'nudge did not reach the feedback bus on first edit' };
+  check('anchor-set nudge fires once per turn, stop re-arms it', () => {
+    // anchor-set-nudge appends to feedback-<cid>.txt (the shared bus) rather
+    // than emitting JSON directly; drain it the same way post-tool-use does.
+    const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
+
+    // --- Turn 1 -------------------------------------------------------------
+    // First edit -> nudge stashes into the feedback bus and arms the latch.
+    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'x.py') });
+    if (!drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
+      return { ok: false, detail: 'nudge did not reach the feedback bus on first edit' };
     }
-    // Second edit -> flag is armed, nudge must stay silent.
-    const second = runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'y.py') });
-    if (second.includes('PRE-COMPILE NUDGE')) return { ok: false, detail: 'nudge re-fired on second edit (flag not gating)' };
+    // Second edit same turn -> latch armed, nudge must stay silent.
+    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'y.py') });
+    if (drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
+      return { ok: false, detail: 'nudge re-fired on second edit (latch not gating)' };
+    }
+    // End of turn: final-review clears the latch unconditionally. Drive a
+    // review-less stop (no session-edits marker) so it hits the clear path and
+    // exits {}, same as a turn that produced no reviewable edits.
+    const stopOut = runHook(hook('final-review'), { conversation_id: 'npxv3', status: 'completed' });
+    if (stopOut !== '{}' && stopOut.replace(/\s/g, '') !== '{}') {
+      // A review fired (fine - the earlier edit left a session-edits marker via
+      // self-review-trigger if one ran). What matters is the latch got cleared;
+      // we verify that with the next-turn re-fire below.
+    }
+    // --- Turn 2 -------------------------------------------------------------
+    // First edit of the NEXT turn -> latch was cleared at the stop boundary, so
+    // the nudge MUST re-fire. This is the regression that 0.4.0 shipped broken:
+    // the latch only cleared on the fragile second-stop path, so it stranded
+    // and the nudge went permanently silent mid-session.
+    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'z.py') });
+    if (!drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
+      return { ok: false, detail: 'nudge did NOT re-fire on the next turn (latch stranded at the stop boundary)' };
+    }
     return true;
   });
 

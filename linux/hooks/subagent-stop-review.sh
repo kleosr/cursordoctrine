@@ -46,11 +46,14 @@ marker="$pending_dir/session-edits-$cid.txt"
 flag="$pending_dir/reviewed-$cid.flag"
 anchor_flag="$pending_dir/anchor-declared-$cid.flag"
 
+# Unconditionally clear the pre-compile nudge's per-turn latch so it re-fires
+# on the first edit of the next subagent run. Clearing here (not only inside
+# the reviewed-flag block below) can never strand the nudge silenced.
+rm -f "$anchor_flag" 2>/dev/null
+
 # One-shot brake: the previous subagentStop for this id emitted the review.
-# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
-# the next subagent implementation (one nudge per body of work).
 if [ -f "$flag" ]; then
-    rm -f "$flag" "$marker" "$anchor_flag" 2>/dev/null
+    rm -f "$flag" "$marker" 2>/dev/null
     emit_none
 fi
 

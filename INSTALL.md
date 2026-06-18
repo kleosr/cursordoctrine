@@ -109,7 +109,7 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 
 1. Restart Cursor (hooks.json is read at startup).
 2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §2; ask "what is the Anchor Set?" and it should answer from `pre-compile.md` (Objective / Constraints / Scope / Deterministic success).
-3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message, and (if it's the first edit of the implementation) a `PRE-COMPILE NUDGE` reminder to write its Anchor Set to `.scope.json`.
+3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message, and (if it's the first edit of that turn) a `PRE-COMPILE NUDGE` reminder to write its Anchor Set to `.scope.json`. The nudge re-fires on the first edit of each new turn.
 4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
 6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)
