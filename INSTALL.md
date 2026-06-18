@@ -26,7 +26,7 @@ Do not guess from the shell you happen to be running in — a Windows machine dr
 
 Check the prerequisites first:
 
-- Windows: PowerShell 7 (`pwsh`) on PATH, plus `git`. Python 3.9+ if you want the anti-slop scanner (the hooks work without it).
+- Windows: **PowerShell 7 (`pwsh`) on PATH**, plus `git`. Python 3.9+ if you want the anti-slop scanner (the hooks work without it). Confirm with `pwsh -Version` — Windows PowerShell 5.1 (`powershell.exe`) is NOT supported; install PowerShell 7 via `winget install --id Microsoft.PowerShell --source winget` if missing.
 - Linux: `bash`, `git`, and either `jq` or `python3` (the hooks prefer `jq` and fall back to `python3`; install `jq` if neither is present). Python 3.9+ for the anti-slop scanner.
 
 ## 2. Copy the files
@@ -36,7 +36,7 @@ Windows (from the repo root, in pwsh):
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.agents\hooks", "$HOME\.cursor" | Out-Null
 Copy-Item windows\hooks\* "$HOME\.agents\hooks\" -Force
-Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md, windows\USER-RULES.md "$HOME\.cursor\" -Force
+Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md, windows\USER-RULES.md, windows\declared-editing.md, windows\pre-compile.md "$HOME\.cursor\" -Force
 # hooks.json ships with ~/ placeholders; pwsh -File does NOT expand ~, so
 # substitute the real profile path (forward slashes) at install time:
 $h = $HOME -replace '\\', '/'
@@ -51,7 +51,7 @@ Linux (from the repo root, in bash):
 ```bash
 mkdir -p ~/.agents/hooks ~/.cursor
 cp linux/hooks/* ~/.agents/hooks/
-cp linux/inject-doctrine.sh linux/doctrine.md linux/USER-RULES.md ~/.cursor/
+cp linux/inject-doctrine.sh linux/doctrine.md linux/USER-RULES.md linux/declared-editing.md linux/pre-compile.md ~/.cursor/
 cp linux/hooks.json ~/.cursor/hooks.json
 chmod +x ~/.agents/hooks/*.sh ~/.cursor/inject-doctrine.sh
 # anti-slop skill (SKILL.md + the scanner the final-review hook runs):
@@ -76,6 +76,11 @@ echo '{"conversation_id":"t1","status":"completed"}' | bash ~/.agents/hooks/fina
 echo '{"conversation_id":"t2","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
 echo '{"conversation_id":"t2","status":"completed"}' | bash ~/.agents/hooks/subagent-stop-review.sh  # expect {"followup_message": "SUBAGENT FINAL REVIEW ..."} once, then {}
 echo '{"conversation_id":"t2"}'       | bash ~/.agents/hooks/post-tool-use.sh     # drain t2's leftover feedback file
+# anchor-set nudge: fires PRE-COMPILE NUDGE on the first edit, silent on the second
+echo '{"conversation_id":"t3","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/anchor-set-nudge.sh
+echo '{"conversation_id":"t3"}'       | bash ~/.agents/hooks/post-tool-use.sh     # expect additional_context containing "PRE-COMPILE NUDGE"
+echo '{"conversation_id":"t3","file_path":"/tmp/y.py"}' | bash ~/.agents/hooks/anchor-set-nudge.sh  # second edit -> flag armed -> silent
+echo '{"conversation_id":"t3"}'       | bash ~/.agents/hooks/post-tool-use.sh     # expect {} (nothing new stashed)
 echo '{}' | bash ~/.cursor/inject-doctrine.sh                                     # expect {"additional_context": ...}
 python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help                    # expect usage text (final review's scanner)
 ```
@@ -91,6 +96,10 @@ Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME
 echo '{"command":"git push --force"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\permission-gate.ps1
 echo '{"conversation_id":"t2","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\self-review-trigger.ps1
 echo '{"conversation_id":"t2","status":"completed"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\subagent-stop-review.ps1  # SUBAGENT FINAL REVIEW once, then {}
+# anchor-set nudge: fires PRE-COMPILE NUDGE on the first edit, silent on the second
+echo '{"conversation_id":"t3","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\anchor-set-nudge.ps1
+echo '{"conversation_id":"t3"}'  | pwsh.exe -NoProfile -File $HOME\.agents\hooks\post-tool-use.ps1   # additional_context with "PRE-COMPILE NUDGE"
+echo '{"conversation_id":"t3","file_path":"C:\tmp\y.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\anchor-set-nudge.ps1  # second edit -> silent
 python $HOME\.cursor\skills\anti-slop\scripts\scan_slop.py --help
 ```
 
@@ -99,15 +108,16 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 ## 4. Verify inside Cursor
 
 1. Restart Cursor (hooks.json is read at startup).
-2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §2.
-3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message.
+2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §2; ask "what is the Anchor Set?" and it should answer from `pre-compile.md` (Objective / Constraints / Scope / Deterministic success).
+3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message, and (if it's the first edit of the implementation) a `PRE-COMPILE NUDGE` reminder to write its Anchor Set to `.scope.json`.
 4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
 6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)
 7. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
+8. (Optional, opt-in scope gate) Have the agent write a `.scope.json` in the repo root (`intent` + `files[]` + `acceptance`), then edit a file outside `files[]`. The next turn should carry a `[SCOPE VIOLATION]` advisory quoting the declared `intent` and `acceptance`. Delete the file to disable the gate.
 
 ## 5. Report
 
 Tell the user what was installed, which checks passed, and anything that failed with the exact error. Do not silently work around a failing check.
 
-Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `MINIMAL_EDITING_ENFORCE=0` (deprecated in 0.3.0), `SEMANTIC_DENSITY_ENFORCE=0`, `SCOPE_GATE_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.
+Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `ANCHOR_NUDGE_ENFORCE=0` (pre-compile nudge off), `MINIMAL_EDITING_ENFORCE=0` (deprecated in 0.3.0), `SEMANTIC_DENSITY_ENFORCE=0`, `SCOPE_GATE_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.

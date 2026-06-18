@@ -4,7 +4,7 @@
 # Counterpart of final-review.sh for delegated work. afterFileEdit DOES fire
 # inside subagents (verified: a subagent run left its edits in
 # session-edits-<subagent-cid>.txt), but subagents get no `stop` event, so
-# that marker is never drained and the five-axis review never fires for
+# that marker is never drained and the six-axis review never fires for
 # delegated implementations. This hook closes the loop: when a subagent
 # finishes and ITS conversation has a session-edits marker, return ONE
 # followup_message so the subagent audits its own implementation before the

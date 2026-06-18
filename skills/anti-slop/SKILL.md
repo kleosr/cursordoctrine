@@ -228,8 +228,8 @@ The `stop` hook (`~/.agents/hooks/final-review.ps1` on Windows,
 `~/.agents/hooks/final-review.sh` on Linux) fires after the agent finishes an
 implementation that edited files. It extracts the last `<user_query>` from the
 session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
-and auto-submits a `followup_message` so the model audits five axes: intent,
-correctness, reliability, coverage, anti-slop. Axis 4 delegates to this skill's
+and auto-submits a `followup_message` so the model audits six axes: intent,
+correctness, reliability, coverage, anti-slop, wiring completeness. Axis 4 delegates to this skill's
 scanner (`scan_slop.py --all`) and the canonical checklist at
 `~/.agents/hooks/anti-slop.md` (13 items, including semantic contracts,
 operational slop, and change surface). One bounded pass per implementation.
