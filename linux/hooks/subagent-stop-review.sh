@@ -45,11 +45,12 @@ pending_dir="$(hooks_pending_dir)"
 marker="$pending_dir/session-edits-$cid.txt"
 flag="$pending_dir/reviewed-$cid.flag"
 anchor_flag="$pending_dir/anchor-declared-$cid.flag"
+intent_latch="$pending_dir/intent-injected-$cid.flag"
 
-# Unconditionally clear the pre-compile nudge's per-turn latch so it re-fires
-# on the first edit of the next subagent run. Clearing here (not only inside
-# the reviewed-flag block below) can never strand the nudge silenced.
-rm -f "$anchor_flag" 2>/dev/null
+# Unconditionally clear the per-turn latches so the next subagent run re-fires.
+# Clearing here (not only inside the reviewed-flag block below) can never strand
+# them silenced. last-query-<cid>.hash is kept (cross-turn prompt-change detect).
+rm -f "$anchor_flag" "$intent_latch" 2>/dev/null
 
 # One-shot brake: the previous subagentStop for this id emitted the review.
 if [ -f "$flag" ]; then

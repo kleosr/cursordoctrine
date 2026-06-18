@@ -37,16 +37,20 @@ pending_dir="$(hooks_pending_dir)"
 marker="$pending_dir/session-edits-$cid.txt"
 flag="$pending_dir/reviewed-$cid.flag"
 anchor_flag="$pending_dir/anchor-declared-$cid.flag"
+intent_latch="$pending_dir/intent-injected-$cid.flag"
 
 # Sweep state from sessions that died before their stop hook ran.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
-# Unconditionally clear the pre-compile nudge's per-turn latch. Every stop is a
-# turn boundary; clearing here (not only inside the reviewed-flag block below)
-# guarantees the nudge re-fires on the first edit of the NEXT turn and can never
-# get stranded silenced. Clearing it only on the SECOND stop left the nudge
-# permanently off for any conversation that never cleanly hit that boundary.
-rm -f "$anchor_flag" 2>/dev/null
+# Unconditionally clear the per-turn latches so the next turn re-fires. Every
+# stop is a turn boundary; clearing here (not only inside the reviewed-flag
+# block below) guarantees these re-fire on the first edit/tool of the NEXT
+# turn and can never get stranded silenced mid-session:
+#   - anchor-declared-<cid>.flag  (anchor-set-nudge, first-edit reminder)
+#   - intent-injected-<cid>.flag  (intent-anchor, first-tool re-injection)
+# last-query-<cid>.hash is NOT cleared here - it persists turn-to-turn so
+# intent-anchor can detect prompt changes; the 7-day sweep above reaps it.
+rm -f "$anchor_flag" "$intent_latch" 2>/dev/null
 
 # One-shot brake: the previous stop for this conversation emitted the review.
 if [ -f "$flag" ]; then

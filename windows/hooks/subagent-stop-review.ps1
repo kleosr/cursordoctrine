@@ -43,12 +43,13 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
-$anchorFlag = Join-Path $pendingDir "anchor-declared-$cid.flag"
+$anchorFlag  = Join-Path $pendingDir "anchor-declared-$cid.flag"
+$intentLatch = Join-Path $pendingDir "intent-injected-$cid.flag"
 
-# Unconditionally clear the pre-compile nudge's per-turn latch so it re-fires
-# on the first edit of the next subagent run. Clearing here (not only inside
-# the reviewed-flag block below) can never strand the nudge silenced.
-Remove-Item $anchorFlag -Force -ErrorAction SilentlyContinue
+# Unconditionally clear the per-turn latches so the next subagent run re-fires.
+# Clearing here (not only inside the reviewed-flag block below) can never strand
+# them silenced. last-query-<cid>.hash is kept (cross-turn prompt-change detect).
+Remove-Item $anchorFlag, $intentLatch -Force -ErrorAction SilentlyContinue
 
 # One-shot brake: the previous subagentStop for this id emitted the review.
 if (Test-Path $flag) {

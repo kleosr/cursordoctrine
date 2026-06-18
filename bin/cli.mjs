@@ -300,6 +300,50 @@ function verify() {
     return true;
   });
 
+  check('intent-anchor re-injects .scope.json every turn; latch re-arms at stop', () => {
+    // intent-anchor appends to feedback-<cid>.txt (the shared bus); drain via
+    // post-tool-use the same way the harness delivers additional_context.
+    const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
+    const anchorCid = 'npxv4';
+    const scopePath = join(HOME, '.scope.json');
+
+    const cleanup = () => { try { rmSync(scopePath, { force: true }); } catch {} };
+    cleanup();
+
+    // --- Case A: no .scope.json -> demand one be written --------------
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    let d = drainedOf(anchorCid);
+    if (!d.includes('INTENT ANCHOR') || !d.includes('NOT compiled your Anchor Set')) {
+      cleanup(); return { ok: false, detail: 'no-scope branch did not demand compilation' };
+    }
+
+    // --- Stop clears the latch (the regression path from 0.4.1) -------
+    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
+
+    // --- Case B: scope exists -> re-inject contract every turn --------
+    writeFileSync(scopePath, JSON.stringify({
+      intent: 'fix grid symmetry and color tokens',
+      files: ['src/grid.tsx'],
+      acceptance: 'grid renders symmetric; tokens match palette',
+    }));
+    // Turn 2 (no transcript in sandbox -> query unavailable -> re-inject branch).
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    d = drainedOf(anchorCid);
+    if (!d.includes('fix grid symmetry and color tokens') || !d.includes('INTENT ANCHOR')) {
+      cleanup(); return { ok: false, detail: 'contract not re-injected on turn 2' };
+    }
+
+    // --- Stop clears the latch again; turn 3 must re-inject too -------
+    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    d = drainedOf(anchorCid);
+    if (!d.includes('fix grid symmetry and color tokens')) {
+      cleanup(); return { ok: false, detail: 'contract not re-injected on turn 3 (latch stranded at stop)' };
+    }
+    cleanup();
+    return true;
+  });
+
   check('doctrine injection emits additional_context', () =>
     runHook(join(cursorDst, injectName), {}).includes('additional_context'));
 
@@ -410,6 +454,7 @@ Kill switches (environment variables, all hooks fail open)
   HOOKS_ENFORCE=0              everything advisory off
   PERM_GATE_ENFORCE=0          permission gate off
   ANCHOR_NUDGE_ENFORCE=0       pre-compile nudge off (first-edit Anchor Set reminder)
+  INTENT_ANCHOR_ENFORCE=0      thin-intent re-injection off (per-turn .scope.json echo)
   MINIMAL_EDITING_ENFORCE=0    over-edit advisory off (deprecated in 0.3.0)
   SEMANTIC_DENSITY_ENFORCE=0   semantic-opacity advisory off
   SCOPE_GATE_ENFORCE=0         declared-scope advisory off

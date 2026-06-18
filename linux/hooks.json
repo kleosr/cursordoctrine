@@ -48,6 +48,11 @@
     ],
     "postToolUse": [
       {
+        "command": "bash ~/.agents/hooks/intent-anchor.sh",
+        "timeout": 5,
+        "_comment": "5s: THIN INTENT COMPILATION (anti Salience Dilution). Registered FIRST so it appends to the feedback bus before post-tool-use.sh drains it (same-tool delivery). On the FIRST tool boundary of each turn (per-turn latch intent-injected-<cid>.flag, cleared unconditionally at every stop), (1) re-injects the existing .scope.json (intent/files/acceptance) into additional_context so the contract is back in the model's attentional focus before edits pile up - UNCONDITIONAL, no transcript needed; (2) if the current <user_query> hash differs from last-query-<cid>.hash, demands the agent UPDATE .scope.json to match the new request (scope tracks the request). No .scope.json -> demand one be written. Needs transcript_path for change-detection; degrades to silent there but re-injection still runs. Advisory only; never blocks. Disable: HOOKS_ENFORCE=0 or INTENT_ANCHOR_ENFORCE=0."
+      },
+      {
         "command": "bash ~/.agents/hooks/post-tool-use.sh",
         "timeout": 5,
         "_comment": "5s: (1) fold completed subagents' session-edits markers into this conversation's marker - subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, and postToolUse does NOT fire for the Task tool (verified by payload logging), so per-tool-boundary folding is how delegated edits reach the parent's stop-hook review - and prime the parent to audit the subagent diff; (2) drain this conversation's pending-feedback file (self-review + advisories) into additional_context. One-shot. No matcher: fires after EVERY tool so pending is delivered promptly."
