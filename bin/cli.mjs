@@ -74,6 +74,26 @@ function mergeHooks(existing, incoming, keys) {
       if (i >= 0) cur[i] = entry;
       else cur.push(entry);
     }
+    // Re-order our entries to match the shipped hooks.json (merge used to leave
+    // stale order — e.g. post-tool-use before intent-anchor — breaking same-tool
+    // delivery of the anchor message).
+    const foreign = cur.filter((x) => x && !isOurs(x.command, keys));
+    const reordered = [];
+    const used = new Set();
+    for (const entry of entries) {
+      const k = keyOf(entry.command, keys);
+      if (!k || !isOurs(entry.command, keys)) continue;
+      const found = cur.find((x) => x && keyOf(x.command, keys) === k);
+      if (found) {
+        reordered.push(found);
+        used.add(k);
+      }
+    }
+    for (const x of cur) {
+      const k = keyOf(x?.command, keys);
+      if (isOurs(x?.command, keys) && k && !used.has(k)) reordered.push(x);
+    }
+    out.hooks[event] = [...reordered, ...foreign];
   }
   let preserved = 0;
   for (const entries of Object.values(out.hooks)) {
@@ -300,42 +320,62 @@ function verify() {
     return true;
   });
 
-  check('intent-anchor re-injects .scope.json every turn; latch re-arms at stop', () => {
-    // intent-anchor appends to feedback-<cid>.txt (the shared bus); drain via
-    // post-tool-use the same way the harness delivers additional_context.
+  check('intent-anchor scaffolds .scope.json and re-injects every turn', () => {
     const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
     const anchorCid = 'npxv4';
     const scopePath = join(HOME, '.scope.json');
+    const transcriptPath = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv4.jsonl');
+    const testQuery = 'fix grid symmetry and color tokens';
 
-    const cleanup = () => { try { rmSync(scopePath, { force: true }); } catch {} };
+    const cleanup = () => {
+      try { rmSync(scopePath, { force: true }); } catch {}
+      try { rmSync(transcriptPath, { force: true }); } catch {}
+    };
     cleanup();
 
-    // --- Case A: no .scope.json -> demand one be written --------------
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    // Fake transcript so Get-LastUserQuery / scaffold can read the request.
+    const transcriptLine = JSON.stringify({
+      role: 'user',
+      message: { content: `<user_query>${testQuery}</user_query>` },
+    });
+    writeFileSync(transcriptPath, transcriptLine + '\n', 'utf8');
+
+    const anchorPayload = { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath };
+
+    // --- Case A: no .scope.json -> hook writes scaffold on disk ----------
+    runHook(hook('intent-anchor'), anchorPayload);
     let d = drainedOf(anchorCid);
-    if (!d.includes('INTENT ANCHOR') || !d.includes('NOT compiled your Anchor Set')) {
-      cleanup(); return { ok: false, detail: 'no-scope branch did not demand compilation' };
+    if (!existsSync(scopePath)) {
+      cleanup(); return { ok: false, detail: '.scope.json was not written to disk' };
+    }
+    let scope;
+    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); } catch {
+      cleanup(); return { ok: false, detail: '.scope.json scaffold is not valid JSON' };
+    }
+    if (scope.intent !== testQuery) {
+      cleanup(); return { ok: false, detail: `scaffold intent mismatch: ${scope.intent}` };
+    }
+    if (!d.includes('scaffold written') || !d.includes(testQuery)) {
+      cleanup(); return { ok: false, detail: 'scaffold branch did not inject written contract' };
     }
 
-    // --- Stop clears the latch (the regression path from 0.4.1) -------
+    // --- Stop clears the latch -------------------------------------------
     runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
 
-    // --- Case B: scope exists -> re-inject contract every turn --------
+    // --- Case B: scope exists -> re-inject contract every turn -----------
     writeFileSync(scopePath, JSON.stringify({
       intent: 'fix grid symmetry and color tokens',
       files: ['src/grid.tsx'],
       acceptance: 'grid renders symmetric; tokens match palette',
     }));
-    // Turn 2 (no transcript in sandbox -> query unavailable -> re-inject branch).
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath });
     d = drainedOf(anchorCid);
     if (!d.includes('fix grid symmetry and color tokens') || !d.includes('INTENT ANCHOR')) {
       cleanup(); return { ok: false, detail: 'contract not re-injected on turn 2' };
     }
 
-    // --- Stop clears the latch again; turn 3 must re-inject too -------
     runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME });
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath });
     d = drainedOf(anchorCid);
     if (!d.includes('fix grid symmetry and color tokens')) {
       cleanup(); return { ok: false, detail: 'contract not re-injected on turn 3 (latch stranded at stop)' };
