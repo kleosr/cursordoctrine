@@ -5,7 +5,16 @@ One job: given a repo-relative path and a list of declared-scope patterns
 (from .scope.json `files`), return whether the path is in scope. Shared
 between the per-edit scope-gate-audit hook (afterFileEdit) and final-review's
 declared-scope check (Step C), so the two never disagree on what counts as
-"in scope".
+"in scope". It also surfaces the contract's `intent` and `acceptance` fields
+so the calling hook can quote them back to the agent.
+
+.scope.json schema (intent + files[] + acceptance + allow_growth):
+  {
+    "intent":       "one operational sentence of objective",
+    "files":        [ "repo-relative globs", ... ],
+    "acceptance":   "the deterministic check that decides success",
+    "allow_growth": false
+  }
 
 Pattern support:
   - exact path:   src/components/LoginButton.tsx
@@ -17,7 +26,8 @@ Stdlib only; Python 3.9+. REPORTS only - never edits.
 
 CLI:
   scope_match.py --path src/auth/session.ts --patterns-file .scope.json
-  -> prints JSON {"in_scope": false, "matched_by": null} and exits 0
+  -> prints JSON {"in_scope": false, "matched_by": null, "acceptance": "..."}
+     and exits 0
   -> if .scope.json is missing or unparseable, prints {"in_scope": true,
      "skipped": "no .scope.json"} (fail-open: no contract = no gate)
 """
@@ -129,6 +139,7 @@ def main() -> int:
             "matched_by": by,
             "allow_growth": bool(scope.get("allow_growth", False)),
             "intent": scope.get("intent", ""),
+            "acceptance": scope.get("acceptance", ""),
         }
 
     print(json.dumps(result))

@@ -36,13 +36,16 @@ cid="$(safe_conversation_id "$input")"
 pending_dir="$(hooks_pending_dir)"
 marker="$pending_dir/session-edits-$cid.txt"
 flag="$pending_dir/reviewed-$cid.flag"
+anchor_flag="$pending_dir/anchor-declared-$cid.flag"
 
 # Sweep state from sessions that died before their stop hook ran.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
 # One-shot brake: the previous stop for this conversation emitted the review.
+# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
+# the NEXT implementation (one nudge per body of work, not per session).
 if [ -f "$flag" ]; then
-    rm -f "$flag" "$marker" 2>/dev/null
+    rm -f "$flag" "$marker" "$anchor_flag" 2>/dev/null
     emit_none
 fi
 
@@ -91,6 +94,14 @@ Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one 
 fi
 body="$(expand_agent_paths "$body")"
 
+# Regla R1 (re-entry): if this review pass is a re-audit after a failed gate or
+# axis, suppress History Propagation - the model must NOT build on its own prior
+# wrong diff. Reset its prior to the Anchor Set, not to its previous attempt.
+reentry_line="
+
+RE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, if you wrote one). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.
+"
+
 file_list=""
 while IFS= read -r p; do
     [ -n "$p" ] || continue
@@ -127,7 +138,7 @@ msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, co
 ${surface_block}${intent_block}Files you changed this session:
 $file_list
 
-$body"
+${body}${reentry_line}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 touch "$flag" 2>/dev/null

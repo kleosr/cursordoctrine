@@ -30,7 +30,8 @@ try {
     $paths = @(
         (Join-Path $PSScriptRoot 'doctrine.md'),
         (Join-Path $PSScriptRoot 'USER-RULES.md'),
-        (Join-Path $PSScriptRoot 'declared-editing.md')
+        (Join-Path $PSScriptRoot 'declared-editing.md'),
+        (Join-Path $PSScriptRoot 'pre-compile.md')
     )
 
     $parts = foreach ($p in $paths) {

@@ -40,6 +40,7 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
+$anchorFlag = Join-Path $pendingDir "anchor-declared-$cid.flag"
 
 # Sweep state from sessions that died before their stop hook ran. Cheap (one
 # directory listing on an event that fires once per agent loop).
@@ -49,8 +50,10 @@ Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
 
 # One-shot brake: the previous stop for this conversation emitted the review.
 # Clear the flag (and whatever the review pass itself edited) and end the loop.
+# Also clear anchor-declared-<cid>.flag so the pre-compile nudge re-fires for
+# the NEXT implementation (one nudge per body of work, not per session).
 if (Test-Path $flag) {
-    Remove-Item $flag, $marker -Force -ErrorAction SilentlyContinue
+    Remove-Item $flag, $marker, $anchorFlag -Force -ErrorAction SilentlyContinue
     Emit-None
 }
 
@@ -102,6 +105,11 @@ Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one 
 }
 $body = Expand-AgentPaths $body
 
+# Regla R1 (re-entry): if this review pass is a re-audit after a failed gate or
+# axis, suppress History Propagation - the model must NOT build on its own prior
+# wrong diff. Reset its prior to the Anchor Set, not to its previous attempt.
+$reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, if you wrote one). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.`n"
+
 $resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
 $fileList = ($resolved | Select-Object -First 30) -join "`n  "
 
@@ -121,7 +129,7 @@ if ($userQuery) {
 $uniqueFiles = @($edited | Select-Object -Unique).Count
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
 
-$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
+$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body${reentryLine}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
