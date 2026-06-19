@@ -65,6 +65,17 @@ hook scaffolds on a tool boundary), just proceed — you do not need to hand-wri
 it. The declared-editing ladder's rung 1 ("does this need to exist?") still governs
 trivial one-liners.
 
+**Exception — a hollow contract is YOURS to write.** The hook can only lock
+`intent` when the harness surfaces your request to it; in some Cursor builds it
+cannot, and the `intent-anchor` hook will then ask YOU to author the contract (or
+you may open `.scope.json` and find `intent` still a `<TODO>` placeholder). In
+that one case, write the whole file yourself from this conversation — a real
+`intent` (the actual request, not `<TODO>`), `acceptance`, and `files: []` — and
+do it BEFORE editing source. Never leave a `<TODO>` intent on disk: a placeholder
+contract looks owned, so nothing ever fills it, and scope-gate/final-review then
+audit your diff against nothing. Once `intent` is real, hand the file back to the
+hook (re-injection + per-prompt regeneration take over).
+
 ## Regla R3 — Authority
 
 If, during execution, you read logs or code that contradict these anchors,

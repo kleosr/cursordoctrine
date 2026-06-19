@@ -14,18 +14,22 @@
 #      at the START of each turn's work, before edits pile up and dilute the
 #      original intent. Works UNCONDITIONALLY - no transcript needed.
 #
-#   2. AUTO-CREATE .scope.json (UNCONDITIONAL on a real root): if no valid
-#      contract exists in the repo root, WRITE one now - intent locked from the
-#      query when available, otherwise `intent: <TODO>` for the agent to fill.
-#      Creation does NOT require transcript_path; only regeneration does. This
-#      was the 0.5.3 bug: creation was gated on $hasQuery, so when Cursor didn't
-#      surface the transcript on the first postToolUse fire, the scope never
-#      appeared and the agent had no contract to work from.
-#   3. REGENERATE on prompt CHANGE: when the current <user_query> hash differs
-#      from the contract's _intent_hash, overwrite the scaffold with the new
-#      intent + empty files + TODO acceptance. Requires $hasQuery (you can only
-#      detect a change if you can read the request). Fixed vs the broken 0.4.4
-#      build: never writes to $HOME (bails if no real root resolves -> no
+#   2. AUTO-CREATE .scope.json (only when the request is READABLE): if no valid
+#      contract exists and we can read <user_query>, WRITE one now with intent
+#      locked from the query. We NEVER persist a hollow `intent: <TODO>` file:
+#      that 0.5.3 "unconditional creation" caused "el .scope.json se escribe
+#      solo sin nada" - when Cursor doesn't surface transcript_path on
+#      postToolUse the hook can't read the request, so it wrote a placeholder
+#      with an empty _intent_hash. The file then looks owned (pre-compile.md
+#      tells the agent to leave it alone) and never gets the real intent. When
+#      the request is unreadable we write nothing and emit the pre-compile
+#      demand so the AGENT authors a real contract from the chat it already has.
+#   3. REGENERATE on prompt CHANGE or HOLLOW contract: when the current
+#      <user_query> hash differs from the contract's _intent_hash, OR the
+#      on-disk contract has no real intent (empty / <TODO> placeholder),
+#      overwrite it with the new intent + empty files + TODO acceptance.
+#      Requires $hasQuery (you can only lock intent if you can read the
+#      request). Never writes to $HOME (bails if no real root resolves -> no
 #      ghost files).
 #   4. RE-INJECT on same-prompt turns: when the query is unchanged (contract
 #      already current), the hook re-injects the existing contract into the
@@ -112,6 +116,7 @@ $scopeFiles = ''
 $scopeStale = $false    # true when the on-disk contract belongs to a DIFFERENT prompt -> regenerate (resets files[])
 $needsHeal = $false     # true when a model-written contract matches THIS prompt but lacks _intent_hash -> backfill in place
 $scopeHasHash = $false
+$scopeHollow = $false   # true when the on-disk contract has no real intent (empty or a <TODO> placeholder) -> unusable
 $scopePath = Join-Path $root '.scope.json'
 if (Test-Path -LiteralPath $scopePath) {
     try {
@@ -122,6 +127,12 @@ if (Test-Path -LiteralPath $scopePath) {
         if ([string]::IsNullOrWhiteSpace($scopeFiles)) { $scopeFiles = '(none yet - auto-tracked as you edit)' }
         $scopeExists = $true
         $scopeHasHash = ($sj.PSObject.Properties['_intent_hash'] -and -not [string]::IsNullOrWhiteSpace([string]$sj._intent_hash))
+        # Hollow = no real intent on disk: empty, or still the hook's <TODO> placeholder.
+        # A hollow contract is worse than none (it looks owned, so neither hook nor agent
+        # fills it; scope-gate appends files to it and final-review audits against <TODO>).
+        # Treat it as unusable: regenerate when we can read the request, else hand the agent
+        # the pre-compile demand to write a real one.
+        $scopeHollow = ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\s*<TODO')
         # Staleness, hash-agnostic so it survives MODEL-written contracts:
         #   - hook-written (has _intent_hash): stale when that hash != current query hash.
         #   - model-written (no _intent_hash - the legacy pre-compile.md schema): we cannot
@@ -133,7 +144,10 @@ if (Test-Path -LiteralPath $scopePath) {
         #     wrote it for THIS request; heal in place (backfill the bookkeeping, keep its
         #     files[]/acceptance) so the NEXT prompt is detected by hash like any hook contract.
         if ($hasQuery) {
-            if ($scopeHasHash) {
+            if ($scopeHollow) {
+                # Hollow + we can read the request -> overwrite with the real intent now.
+                $scopeStale = $true
+            } elseif ($scopeHasHash) {
                 $scopeStale = ([string]$sj._intent_hash -ne $currentHash)
             } elseif ($promptChanged) {
                 $scopeStale = $true
@@ -145,22 +159,25 @@ if (Test-Path -LiteralPath $scopePath) {
 }
 
 # --- auto-create / regenerate / heal .scope.json ----------------------------
-# CREATION does NOT require the query: if there's a root and no scope yet,
-# scaffold it NOW with intent=<TODO> (the agent fills it from the chat it's
-# already responding to). This was the 0.5.3 bug - creation was gated on
-# $hasQuery, so when Cursor didn't surface transcript_path in the first
-# postToolUse fire, the scope never got created. The agent never had a
-# contract to work from.
-# REGENERATION requires the query: a prompt change is only detectable when we
-# can read the request. A fresh scaffold resets files[] -> ".scope fresco por
-# prompt, sin arrastre entre features."
+# CREATION and REGENERATION both REQUIRE the query. We only ever write a
+# contract whose intent we actually know - never a hollow <TODO> scaffold.
+# Persisting a placeholder file (the 0.5.3 "unconditional creation") was the
+# bug behind "el .scope.json se escribe solo sin nada": when Cursor doesn't
+# surface transcript_path on postToolUse, the hook can't read the request, so
+# it wrote intent=<TODO> with an empty _intent_hash. That file looks owned, so
+# pre-compile.md tells the agent to leave it alone, and it never gets the real
+# intent. When the request is unreadable we now write NOTHING and instead hand
+# the agent the pre-compile demand to author a real contract from the chat it
+# is already responding to. A fresh write resets files[] -> ".scope fresco por
+# prompt, sin arrastre entre features." (Hollow on-disk contracts are folded
+# into $scopeStale above, so a readable request also overwrites them here.)
 $regenerated = $false
-$shouldCreate = -not $scopeExists
+$shouldCreate = (-not $scopeExists) -and $hasQuery
 $shouldRegen  = $hasQuery -and $scopeExists -and $scopeStale
 if ($shouldCreate -or $shouldRegen) {
     try {
-        $intentVal  = if ($hasQuery) { $currentQuery } else { '<TODO: state the operational objective - what is strictly necessary>' }
-        $traceQuery = if ($hasQuery) { $currentQuery } else { '' }
+        $intentVal  = $currentQuery
+        $traceQuery = $currentQuery
         $scaffold = [ordered]@{
             intent        = $intentVal
             files         = @()
@@ -220,18 +237,22 @@ records every file you edit, so do not maintain it by hand. Set acceptance to
 the one deterministic check that decides done, THEN proceed. This contract will
 be re-injected every turn until your request changes again.
 "@
-} elseif (-not $scopeExists) {
+} elseif (-not $scopeExists -or $scopeHollow) {
+    $state = if ($scopeHollow) { "the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)" } else { "no .scope.json found in $root, and the current request was unavailable to scaffold from" }
     $msg = @"
-INTENT ANCHOR (pre-compile) - no .scope.json found in $root, and the current
-request was unavailable to scaffold from.
+INTENT ANCHOR (pre-compile) - $state.
 
 Current request:
   $queryLine
 
-Write .scope.json in the repo root yourself:
-  intent:     one operational sentence (what is strictly necessary)
-  files:      the exact files you will touch
+YOU write the real contract to $scopePath now, from THIS conversation, BEFORE
+editing source. Do not leave the <TODO> placeholder:
+  intent:     one operational sentence - the ACTUAL request (not "<TODO>")
   acceptance: the one deterministic check that decides done
+  files:      [] (leave empty - the scope hook records every file you edit)
+
+This is the one case where you own the file: once intent is real, the hook
+takes over (re-injection + per-prompt regeneration).
 "@
 } else {
     # Contract exists and matches the current prompt -> re-inject it.
