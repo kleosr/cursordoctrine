@@ -53,6 +53,18 @@ $prompt = Redact-SecretsFromIntent $prompt
 $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 
+# --- stash the verbatim prompt FIRST (before root resolution) ----------------
+# beforeSubmitPrompt can ship a payload WITHOUT cwd/workspace_roots on some
+# Cursor builds. We must still capture the verbatim prompt so intent-anchor
+# (postToolUse, which DOES carry cwd) writes .scope.json with the RIGHT intent
+# on its first fire - instead of falling back to <user_query> parsing that can
+# be unreadable or contaminated by hook followups. The stash lives under
+# $HOME/.cursor/.hooks-pending (no repo root needed), so it is always safe.
+try {
+    New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null
+    [System.IO.File]::WriteAllText((Get-CurrentPromptPath $cid), $prompt, [System.Text.UTF8Encoding]::new($false))
+} catch { }
+
 # --- repo root (workspace_roots / cwd; NO $HOME fallback - no ghost files) ----
 $root = ''
 $cands = @()
@@ -64,12 +76,6 @@ if (-not $root -and $env:CURSOR_PROJECT_DIR) {
     if (Test-Path -LiteralPath $cpd) { $root = $cpd }
 }
 if (-not $root) { exit 0 }
-
-# --- stash the prompt so intent-anchor reads the same ground-truth text -------
-try {
-    New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null
-    [System.IO.File]::WriteAllText((Get-CurrentPromptPath $cid), $prompt, [System.Text.UTF8Encoding]::new($false))
-} catch { }
 
 # --- write / regenerate .scope.json (hash-gated) ------------------------------
 $currentHash = Get-Sha256Hex $prompt

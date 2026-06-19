@@ -458,6 +458,55 @@ function verify() {
     return true;
   });
 
+  check('intent-precompile writes .scope.json before first token (no <TODO>)', () => {
+    // THE contract-first guarantee: beforeSubmitPrompt materializes .scope.json
+    // with intent locked from `prompt` and a SEEDED acceptance (never a bare
+    // <TODO>), hash-gated so the agent's refinements survive a same-prompt turn
+    // and a new prompt regenerates. If this regresses, the scope appears late
+    // (via intent-anchor) and/or ships a <TODO> - the exact complaints.
+    const preCid = 'npxv7';
+    const repoDir = HOME;
+    const scopePath = join(repoDir, '.scope.json');
+    const promptPath = join(pendingDir, `current-prompt-${preCid}.txt`);
+    const q1 = 'fix the dashboard bug in individual accounts';
+    const q2 = 'now wire the spend chart to the new endpoint';
+    const cleanup = () => {
+      try { rmSync(scopePath, { force: true }); } catch {}
+      try { rmSync(promptPath, { force: true }); } catch {}
+    };
+    const fail = (detail) => { cleanup(); return { ok: false, detail }; };
+    cleanup();
+
+    // Case A: new prompt -> WRITE .scope.json with intent=q1, real acceptance, hash.
+    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q1 });
+    if (!existsSync(scopePath)) return fail('intent-precompile did not write .scope.json');
+    let s;
+    try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
+    catch { return fail('.scope.json is not valid JSON'); }
+    if (s.intent !== q1) return fail(`intent mismatch (want q1): ${s.intent}`);
+    if (!s.acceptance || /<TODO/i.test(s.acceptance)) return fail('acceptance is a bare <TODO> (the regression)');
+    if (!s._generated_by || !/intent-precompile/i.test(s._generated_by)) return fail(`not written by intent-precompile: ${s._generated_by}`);
+    if (!s._intent_hash) return fail('missing _intent_hash (per-prompt regeneration breaks)');
+
+    // Case B: same prompt -> NOT rewritten (hash-gated; agent refinements survive).
+    writeFileSync(scopePath, JSON.stringify({ ...s, acceptance: 'AGENT-SENTINEL' }, null, 2), 'utf8');
+    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q1 });
+    let sb;
+    try { sb = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return fail('same-prompt run corrupted the file'); }
+    if (sb.acceptance !== 'AGENT-SENTINEL') return fail('same-prompt run overwrote the agent refinement (must be left intact)');
+
+    // Case C: new prompt -> REGENERATE with intent=q2, and stash the verbatim prompt
+    // so intent-anchor gets ground truth even when beforeSubmitPrompt lacks cwd.
+    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q2 });
+    let sc;
+    try { sc = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return fail('new-prompt run corrupted the file'); }
+    if (sc.intent !== q2) return fail(`new prompt did not regenerate (want q2): ${sc.intent}`);
+    if (!existsSync(promptPath) || readFileSync(promptPath, 'utf8') !== q2) return fail('verbatim prompt not stashed for intent-anchor');
+
+    cleanup();
+    return true;
+  });
+
   check('doctrine injection emits additional_context', () =>
     runHook(join(cursorDst, injectName), {}).includes('additional_context'));
 

@@ -18,6 +18,34 @@ it every turn. Treat it as your operating contract, not optional:
 - If a hook surfaces the contract, defer to it: it outranks momentum. Edit
   inside the declared scope; if you must grow it, justify it, don't sneak past.
 
+## Code shape — hard stops (garbage-pattern blacklist)
+AI vibe-coding defaults that must NOT ship. Each has a fixed Stop rule; if you
+wrote the anti-pattern, apply the Stop before the diff is done. The anti-slop
+checklist (injected per edit) restates these with examples.
+
+- ARROW CODE (deep nesting) — nesting more than two if/for deep. Stop: guard
+  clauses / early returns; top-to-bottom, no deep indents.
+- SYMPTOM MASKING — `value ?? default` or a silent try/catch to hide a
+  null/error instead of fixing the cause. Stop: fail-fast; throw on invalid
+  state, never catch just to swallow.
+- BOOLEAN TRAP — a boolean flag that flips a function's behavior
+  (`process(data, true)`). Stop: two named functions, or a Strategy / enum.
+- SWITCH / IF-ELSE BLOAT — a giant switch or long if/else-if chain. Stop:
+  dictionary dispatch / map lookup (`Record<State, Handler>`), or Command.
+- MIXED LEVELS OF ABSTRACTION (SLAP) — one function mixes DB, validation,
+  formatting. Stop: one level per function; extract named helpers.
+- PHANTOM STATE (temporal coupling) — callers must run init() before process().
+  Stop: explicit state machine, or a state guard at the top of every public
+  method that throws when not ready.
+- PRIMITIVE OBSESSION — loose strings/numbers for things with domain rules
+  (userId, email, amount). Stop: a named value object / branded type.
+- LOOP-DRIVEN LOGIC — for-loops to transform arrays when the language has
+  map / filter / reduce. Stop: pure higher-order functions; reserve for-loops
+  for genuine early-exit, index-based, or perf-critical paths.
+
+Negations bind harder than the objective: a constraint the task contradicts is a
+bug in your reading of the task - ask before you override it.
+
 ## Loop
 1. Read what you need to understand the task.
 2. Make the minimal correct edit.
