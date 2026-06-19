@@ -25,7 +25,7 @@
         "command": "bash ~/.agents/hooks/scope-gate-audit.sh",
         "timeout": 10,
         "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "10s (Compuerta 1): declared-scope advisory. OPT-IN: only active when .scope.json exists in the repo root. The agent declares intent + files[] + acceptance; this hook checks every edit against the declared set via scope_match.py (exact, * glob, ** recursive, bare-dir). Out-of-scope edit = [SCOPE VIOLATION] advisory to pending. No .scope.json = silent (fallback to declared-editing ladder + final-review footprint check). Never blocks (Cursor has no preToolUse for file edits). Disable: HOOKS_ENFORCE=0 or SCOPE_GATE_ENFORCE=0."
+        "_comment": "10s (Compuerta 1, mechanical): scope auto-record. OPT-IN: only active when .scope.json exists in the repo root. intent-anchor scaffolds files:[]; this hook APPENDS every edited file to files[] (drops the scaffold placeholder, dedups, preserves all other fields) via jq with a python3 fallback, so files[] is always an accurate ledger of the session footprint that final-review audits against intent. No model effort required - the agent never maintains files[] by hand. Replaces the old [SCOPE VIOLATION] advisory (with auto-record an edit can never be out-of-declared-scope). No JSON tool / no .scope.json = silent. Never blocks, always exits 0. Disable: HOOKS_ENFORCE=0 or SCOPE_GATE_ENFORCE=0."
       },
       {
         "command": "bash ~/.agents/hooks/anti-slop-audit.sh",

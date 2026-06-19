@@ -17,11 +17,13 @@
 #   2. AUTO-CREATE / REGENERATE .scope.json: when the current <user_query>
 #      differs from the contract on disk (no contract yet, OR _intent_hash
 #      mismatch), the hook WRITES a scaffold to the REPO ROOT: intent locked
-#      from the prompt, files/acceptance as TODO placeholders the agent
-#      refines. This is the user-requested behavior: every new prompt ->
-#      a fresh .scope.json the agent works from. Fixed vs the broken 0.4.4
-#      build: never writes to $HOME (bails if no real root resolves -> no
-#      ghost files), and regenerates on prompt CHANGE not just on absence.
+#      from the prompt, files as an EMPTY array (scope-gate-audit.ps1 fills it
+#      mechanically as the agent edits - the agent never maintains files[] by
+#      hand), acceptance as a TODO the agent sets. This is the user-requested
+#      behavior: every new prompt -> a fresh .scope.json the agent works from.
+#      Fixed vs the broken 0.4.4 build: never writes to $HOME (bails if no real
+#      root resolves -> no ghost files), regenerates on prompt CHANGE not just
+#      on absence.
 #   3. RE-INJECT on same-prompt turns: when the query is unchanged (contract
 #      already current), the hook re-injects the existing contract into the
 #      feedback bus so it stays in the model's attentional focus each turn.
@@ -101,7 +103,8 @@ if (Test-Path -LiteralPath $scopePath) {
         $sj = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json
         if ($sj.intent)     { $scopeIntent = [string]$sj.intent }
         if ($sj.acceptance) { $scopeAcceptance = [string]$sj.acceptance }
-        if ($sj.files)      { $scopeFiles = ($sj.files -join ', ') }
+        if ($sj.files)      { $scopeFiles = (@($sj.files) -join ', ') }
+        if ([string]::IsNullOrWhiteSpace($scopeFiles)) { $scopeFiles = '(none yet - auto-tracked as you edit)' }
         $scopeExists = $true
         # The contract is "stale" if its recorded intent hash != current query
         # hash. We persist the query hash inside .scope.json under _intent_hash
@@ -116,8 +119,8 @@ if (Test-Path -LiteralPath $scopePath) {
 # The user wants: every NEW prompt -> a fresh .scope.json the agent works from.
 # So we WRITE the scaffold when (a) there is no valid contract, OR (b) the
 # contract on disk is stale (its _intent_hash != current query hash). Intent is
-# locked from the current <user_query>; files/acceptance are TODO placeholders
-# the agent refines. Fixed vs 0.4.4:
+# locked from the current <user_query>; files starts EMPTY (scope-gate-audit
+# auto-records edits into it); acceptance is a TODO the agent sets. Fixed vs 0.4.4:
 #   - NEVER writes to $HOME (bail above if no real root) -> no ghost files.
 #   - Regenerates on prompt CHANGE, not just on absence -> "each prompt, new file".
 #   - Records _intent_hash so staleness is self-contained in the file.
@@ -127,7 +130,7 @@ if ($shouldWrite) {
     try {
         $scaffold = [ordered]@{
             intent        = $currentQuery
-            files         = @('<TODO: list files you will touch>')
+            files         = @()
             acceptance    = '<TODO: the one deterministic check that decides done>'
             allow_growth  = $false
             _intent_hash  = $currentHash
@@ -137,7 +140,7 @@ if ($shouldWrite) {
         [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
         $scopeIntent     = $currentQuery
         $scopeAcceptance = '<TODO: the one deterministic check that decides done>'
-        $scopeFiles      = '<TODO: list files you will touch>'
+        $scopeFiles      = '(auto-tracked - the scope hook records every file you edit)'
         $scopeExists     = $true
         $scopeStale      = $false
         $regenerated     = $true
@@ -158,9 +161,10 @@ INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
   acceptance: $scopeAcceptance
 
 The hook wrote a fresh scaffold to $scopePath from your current request. intent
-is locked from what you just asked. Fill the TODO placeholders with the real
-files you will touch and the deterministic acceptance check, THEN proceed. This
-contract will be re-injected every turn until your request changes again.
+is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
+records every file you edit, so do not maintain it by hand. Set acceptance to
+the one deterministic check that decides done, THEN proceed. This contract will
+be re-injected every turn until your request changes again.
 "@
 } elseif (-not $scopeExists) {
     $msg = @"
