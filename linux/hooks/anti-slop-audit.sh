@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # anti-slop-audit.sh - afterFileEdit "AI slop" advisory (Cursor, Linux).
 #
-# Companion to minimal-edit-audit.sh. That hook guards ONE slop axis -
-# over-editing. This hook guards the rest of the taxonomy: the parts static
-# analysis can cheaply and precisely flag, plus a self-review checklist for
-# the parts it cannot.
+# Guards the parts of the slop taxonomy static analysis can cheaply and
+# precisely flag, plus a self-review checklist for the parts it cannot.
 #
 #   Statically flagged (high-precision, deliberately low false-positive):
 #     * new dependency added to a manifest
@@ -174,6 +172,9 @@ msg="Anti-slop audit - $rel
 ${flag_block}${checklist}
 
 (Advisory; the bug pass is the self-review trigger. Disable: ANTI_SLOP_ENFORCE=0)"
+# Expand ~ so the model gets literal absolute paths (followups should be
+# copy-pasteable; bash expands ~ but the agent may not be in a bash context).
+msg="$(expand_agent_paths "$msg")"
 
 # --- append to the shared pending file --------------------------------------
 cid="$(safe_conversation_id "$input")"

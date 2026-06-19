@@ -56,26 +56,18 @@ Step A — mechanical scan (if available):
 Step B — canonical checklist (always):
   Read `~/.agents/hooks/anti-slop.md` and apply ALL 13 items to every hunk you
   changed this session. That file is the single source of truth for slop
-  detection — items 1–10 are structural/code, 11 is semantic contracts, 12 is
-  operational slop (retries, await-in-loop, telemetry spam), 13 is change
-  surface. Fix every hit; consolidate clones to one source of truth.
+  detection — it is NOT repeated here. Fix every hit; consolidate clones to one
+  source of truth.
 
 Step C — session footprint (also in the header above):
   If "Session footprint" shows >5 files or the request was simple, justify each
   file or trim. Unjustified files are slop.
 
-Step D — declared scope (closing gate for Compuerta 1):
-  If `.scope.json` exists in the repo root, run the session's full diff against
-  the declared contract. In your shell:
-    for f in $(git diff --name-only HEAD); do
-      python ~/.cursor/skills/anti-slop/scripts/scope_match.py --path "$f" --patterns-file .scope.json
-    done
-  Any file reporting `"in_scope": false` is a scope violation you must justify
-  (add to .scope.json with a one-line reason) or revert. If `.scope.json` does
-  not exist, this step is skipped — the declared-editing ladder and the
-  per-edit scope-gate-audit hook are the opt-in discipline.
-
 Fix with edits now; re-run the scan (if Step A ran) and the tests; then stop.
+(The per-edit `scope-gate-audit` hook already checks `.scope.json` files[] on
+every edit — Step D of older versions ran that loop again here. Removed: it
+duplicated the live hook and burned tokens. If `.scope.json` exists, trust the
+per-edit gate; the intent trace in axis 0 is the whole-session backstop.)
 
 ## 5. Wiring completeness
 For every user-visible behavior you added or changed (button, form submit, API

@@ -1,7 +1,7 @@
 {
   "name": "cursordoctrine",
-  "version": "0.4.6",
-  "description": "Thin self-review hooks for Cursor — the model is the auditor. Proactive intent compilation (pre-compile Anchor Set + auto-scaffolded .scope.json that regenerates per prompt and re-injects every turn against Salience Dilution), intent-trace final review (Tier 0), unified 13-item anti-slop checklist, operational slop detection.",
+  "version": "0.5.1",
+  "description": "Thin self-review hooks for Cursor — the model is the auditor. Pruned + deduplicated: intent-anchor (auto-scaffolded .scope.json per prompt + per-turn re-injection against Salience Dilution), intent-trace final review, unified anti-slop checklist as single source of truth.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
   },

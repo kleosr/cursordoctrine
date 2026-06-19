@@ -20,7 +20,7 @@ description: >-
   duplicate utilities.
 metadata:
   layer: active-cleanup
-  pairs-with: declared-editing (supersedes minimal-editing), semantic-density-audit
+  pairs-with: declared-editing, semantic-density-audit
 ---
 
 # Anti-Slop
@@ -275,8 +275,7 @@ low-density identifiers per edit — shares `low_density.py` with this scanner's
 `semantic_density` bucket), the **scope-gate-audit hook**
 (`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in declared-scope gate
 that flags edits outside `.scope.json`; shares `scope_match.py` with the
-final-review Step D closing gate), the **stop hook** (`final-review.ps1` / `.sh`,
+**stop hook** (`final-review.ps1` / `.sh`,
 six-axis session review incl. intent trace and wiring completeness), and
-**declared-editing** (YAGNI ultra ladder injected at session start;
-supersedes the deprecated `minimal-editing` size gate). This skill is the
-active "delete it now" layer those only nudge toward.
+**declared-editing** (YAGNI ultra ladder injected at session start).
+This skill is the active "delete it now" layer those only nudge toward.
