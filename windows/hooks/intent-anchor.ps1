@@ -127,12 +127,14 @@ if (Test-Path -LiteralPath $scopePath) {
         if ([string]::IsNullOrWhiteSpace($scopeFiles)) { $scopeFiles = '(none yet - auto-tracked as you edit)' }
         $scopeExists = $true
         $scopeHasHash = ($sj.PSObject.Properties['_intent_hash'] -and -not [string]::IsNullOrWhiteSpace([string]$sj._intent_hash))
-        # Hollow = no real intent on disk: empty, or still the hook's <TODO> placeholder.
+        # Hollow = no real intent on disk: empty, the hook's <TODO> placeholder, OR
+        # hook-generated review boilerplate that a stale extractor locked in as the
+        # intent (the contamination loop - "FINAL REVIEW (end of implementation)...").
         # A hollow contract is worse than none (it looks owned, so neither hook nor agent
-        # fills it; scope-gate appends files to it and final-review audits against <TODO>).
+        # fills it; scope-gate appends files to it and final-review audits against garbage).
         # Treat it as unusable: regenerate when we can read the request, else hand the agent
         # the pre-compile demand to write a real one.
-        $scopeHollow = ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\s*<TODO')
+        $scopeHollow = ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\s*<TODO' -or (Test-IsHookGeneratedQuery $scopeIntent))
         # Staleness, hash-agnostic so it survives MODEL-written contracts:
         #   - hook-written (has _intent_hash): stale when that hash != current query hash.
         #   - model-written (no _intent_hash - the legacy pre-compile.md schema): we cannot

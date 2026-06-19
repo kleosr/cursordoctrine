@@ -150,12 +150,14 @@ EOF
     #     changed (or a new session) => regenerate and RESET files[] (the "arrastre entre
     #     features" fix). Same prompt this session => heal in place (backfill bookkeeping, keep
     #     files[]/acceptance) so the NEXT prompt is detected by hash.
-    # Hollow = no real intent on disk: empty, or still the hook's <TODO> placeholder.
-    # A hollow contract is worse than none (it looks owned, so neither hook nor agent
-    # fills it). Treat it as unusable: regenerate when the request is readable, else
-    # hand the agent the pre-compile demand to author a real one.
+    # Hollow = no real intent on disk: empty, the hook's <TODO> placeholder, OR
+    # hook-generated review boilerplate that a stale extractor locked in (the
+    # contamination loop - "FINAL REVIEW (end of implementation)..."). A hollow
+    # contract is worse than none (it looks owned, so neither hook nor agent fills
+    # it). Treat it as unusable: regenerate when the request is readable, else hand
+    # the agent the pre-compile demand to author a real one.
     case "$scope_intent" in
-        ""|"<TODO"*) scope_hollow=1 ;;
+        ""|"<TODO"*|"FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*) scope_hollow=1 ;;
     esac
     if [ "$scope_exists" = "1" ] && [ "$has_query" = "1" ]; then
         if [ "$scope_hollow" = "1" ]; then
