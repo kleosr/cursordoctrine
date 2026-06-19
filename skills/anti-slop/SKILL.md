@@ -228,7 +228,7 @@ The `stop` hook (`~/.agents/hooks/final-review.ps1` on Windows,
 `~/.agents/hooks/final-review.sh` on Linux) fires after the agent finishes an
 implementation that edited files. It extracts the last `<user_query>` from the
 session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
-and auto-submits a `followup_message` so the model audits six axes: intent,
+and auto-submits a `followup_message` so the model audits seven axes: intent,
 correctness, reliability, coverage, anti-slop, wiring completeness. Axis 4 delegates to this skill's
 scanner (`scan_slop.py --all`) and the canonical checklist at
 `~/.agents/hooks/anti-slop.md` (13 items, including semantic contracts,
@@ -276,6 +276,6 @@ low-density identifiers per edit — shares `low_density.py` with this scanner's
 (`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in declared-scope gate
 that flags edits outside `.scope.json`; shares `scope_match.py` with the
 **stop hook** (`final-review.ps1` / `.sh`,
-six-axis session review incl. intent trace and wiring completeness), and
+seven-axis session review incl. intent trace, wiring completeness, and mechanics & stack integrity), and
 **declared-editing** (YAGNI ultra ladder injected at session start).
 This skill is the active "delete it now" layer those only nudge toward.

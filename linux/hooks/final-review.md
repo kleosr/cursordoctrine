@@ -56,26 +56,18 @@ Step A — mechanical scan (if available):
 Step B — canonical checklist (always):
   Read `~/.agents/hooks/anti-slop.md` and apply ALL 13 items to every hunk you
   changed this session. That file is the single source of truth for slop
-  detection — items 1–10 are structural/code, 11 is semantic contracts, 12 is
-  operational slop (retries, await-in-loop, telemetry spam), 13 is change
-  surface. Fix every hit; consolidate clones to one source of truth.
+  detection — it is NOT repeated here. Fix every hit; consolidate clones to one
+  source of truth.
 
 Step C — session footprint (also in the header above):
   If "Session footprint" shows >5 files or the request was simple, justify each
   file or trim. Unjustified files are slop.
 
-Step D — declared scope (closing gate for Compuerta 1):
-  If `.scope.json` exists in the repo root, run the session's full diff against
-  the declared contract. In your shell:
-    for f in $(git diff --name-only HEAD); do
-      python ~/.cursor/skills/anti-slop/scripts/scope_match.py --path "$f" --patterns-file .scope.json
-    done
-  Any file reporting `"in_scope": false` is a scope violation you must justify
-  (add to .scope.json with a one-line reason) or revert. If `.scope.json` does
-  not exist, this step is skipped — the declared-editing ladder and the
-  per-edit scope-gate-audit hook are the opt-in discipline.
-
 Fix with edits now; re-run the scan (if Step A ran) and the tests; then stop.
+(The per-edit `scope-gate-audit` hook already checks `.scope.json` files[] on
+every edit — Step D of older versions ran that loop again here. Removed: it
+duplicated the live hook and burned tokens. If `.scope.json` exists, trust the
+per-edit gate; the intent trace in axis 0 is the whole-session backstop.)
 
 ## 5. Wiring completeness
 For every user-visible behavior you added or changed (button, form submit, API
@@ -97,3 +89,38 @@ faked, either wire it now or remove the dead half so the diff does not ship
 scaffolding that looks complete but does nothing. Stubs you intend to wire later
 must be marked with a `TODO(wire):` comment naming what is missing; unmarked
 dead ends are failures.
+
+## 6. Mechanics & Stack Integrity
+Stateless, cheap mechanical checks. These are patterns the regex scanner CANNOT
+catch (they need semantic/transversal judgement), so do them by reading the
+diff. If a pattern below is present, FIX it — do not explain, delete and write
+the correct pattern.
+
+Backend / DB:
+  - N+1 query: a query/fetch inside a loop over a list -> batch it or join.
+  - Non-idempotent mutation: a POST/PUT that double-applies on retry -> make it
+    idempotent (idempotency-key) or wrap in a transaction.
+  - Transactional integrity: multi-write ops (DB/API/files) without rollback or
+    a compensating action on partial failure -> wrap in a transaction or Saga.
+  - Missing boundary validation: external input (API/params/DB/URL) trusted
+    without a schema (Zod/Pydantic/Joi) -> validate at the boundary; never
+    hand-validate deeper in the logic.
+
+Frontend (React / Next / Astro / Tailwind):
+  - Zombie listener: a useEffect that adds a listener/subscription/timer
+    without a cleanup `return` -> add it.
+  - God component: a single file doing fetch + state + business logic + JSX
+    (>150 lines) -> split hooks / logic / render.
+  - Tailwind soup & magic tokens: a className with >~6 utilities repeated across
+    elements, or hardcoded hex / z-[9999] -> extract to a component or cva,
+    use design tokens.
+  - Index-as-key in non-static lists -> use a unique id.
+
+Determinism / purity:
+  - Date.now(), Math.random(), process.env read inline in business logic ->
+    inject them (param or a context module) so the function is pure & testable.
+  - In-place mutation of shared state (arr.push, obj.prop =) when a caller holds
+    a reference -> return new structures ([...arr, x], .map/.filter).
+
+You do NOT need to run a tool for these — read the diff and apply the named fix.
+If none apply, say so in one line.

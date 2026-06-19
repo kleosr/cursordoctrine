@@ -89,3 +89,38 @@ faked, either wire it now or remove the dead half so the diff does not ship
 scaffolding that looks complete but does nothing. Stubs you intend to wire later
 must be marked with a `TODO(wire):` comment naming what is missing; unmarked
 dead ends are failures.
+
+## 6. Mechanics & Stack Integrity
+Stateless, cheap mechanical checks. These are patterns the regex scanner CANNOT
+catch (they need semantic/transversal judgement), so do them by reading the
+diff. If a pattern below is present, FIX it — do not explain, delete and write
+the correct pattern.
+
+Backend / DB:
+  - N+1 query: a query/fetch inside a loop over a list -> batch it or join.
+  - Non-idempotent mutation: a POST/PUT that double-applies on retry -> make it
+    idempotent (idempotency-key) or wrap in a transaction.
+  - Transactional integrity: multi-write ops (DB/API/files) without rollback or
+    a compensating action on partial failure -> wrap in a transaction or Saga.
+  - Missing boundary validation: external input (API/params/DB/URL) trusted
+    without a schema (Zod/Pydantic/Joi) -> validate at the boundary; never
+    hand-validate deeper in the logic.
+
+Frontend (React / Next / Astro / Tailwind):
+  - Zombie listener: a useEffect that adds a listener/subscription/timer
+    without a cleanup `return` -> add it.
+  - God component: a single file doing fetch + state + business logic + JSX
+    (>150 lines) -> split hooks / logic / render.
+  - Tailwind soup & magic tokens: a className with >~6 utilities repeated across
+    elements, or hardcoded hex / z-[9999] -> extract to a component or cva,
+    use design tokens.
+  - Index-as-key in non-static lists -> use a unique id.
+
+Determinism / purity:
+  - Date.now(), Math.random(), process.env read inline in business logic ->
+    inject them (param or a context module) so the function is pure & testable.
+  - In-place mutation of shared state (arr.push, obj.prop =) when a caller holds
+    a reference -> return new structures ([...arr, x], .map/.filter).
+
+You do NOT need to run a tool for these — read the diff and apply the named fix.
+If none apply, say so in one line.
