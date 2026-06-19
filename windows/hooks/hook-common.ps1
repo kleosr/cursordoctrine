@@ -83,11 +83,36 @@ function Redact-SecretsFromIntent([string]$text) {
     return $text
 }
 
-# Extract the last user <user_query> from a Cursor transcript JSONL.
+# A <user_query> turn can actually be a HOOK-GENERATED message replayed by Cursor
+# as a user turn: final-review.ps1 and subagent-stop-review.ps1 emit a
+# {followup_message} that Cursor auto-submits as the next user turn, and the
+# self-review / intent-anchor injections get drained into additional_context.
+# If Get-LastUserQuery returns one of those, intent-anchor locks the REVIEW
+# BOILERPLATE into .scope.json as the "intent" (the contamination loop that put
+# "FINAL REVIEW (end of implementation)..." in the contract). Detect them by the
+# fixed headers the hooks emit and skip past them to the real human turn.
+function Test-IsHookGeneratedQuery([string]$text) {
+    if (-not $text) { return $false }
+    return ($text -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)')
+}
+
+# The final-review / subagent-review followups embed the real human request as:
+#   ORIGINAL REQUEST (...):\n---\n<request>\n---
+# When the transcript has been trimmed to just the hook turn, recover the human
+# request from that block instead of returning the boilerplate.
+function Get-EmbeddedOriginalRequest([string]$text) {
+    if (-not $text) { return '' }
+    if ($text -match '(?s)ORIGINAL REQUEST[^\r\n]*\r?\n-{3,}\r?\n(.+?)\r?\n-{3,}') {
+        return $Matches[1].Trim()
+    }
+    return ''
+}
+
+# Extract the last *human* user <user_query> from a Cursor transcript JSONL.
 # transcript is an array of {role, message} records; we walk backward from the
-# end, find the last user turn whose content has a <user_query> tag, and return
-# its text. Returns '' if there is no transcript or no user_query. Capped at
-# 2000 chars so the follow-up prompt stays bounded.
+# end, skipping hook-generated turns (see above), and return the first real human
+# turn's text. Returns '' if there is no transcript or no human user_query. Capped
+# at 2000 chars so the follow-up prompt stays bounded.
 #
 # This is the Tier 0 intent-trace primitive: the final-review hook prepends the
 # extracted request to its followup so the model must trace every diff hunk back
@@ -97,6 +122,7 @@ function Get-LastUserQuery($obj) {
     if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
     if (-not $tp -or -not (Test-Path -LiteralPath $tp)) { return '' }
     $lines = @(Get-Content -LiteralPath $tp -ErrorAction SilentlyContinue)
+    $embeddedFallback = ''
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $line = $lines[$i]
         if (-not $line -or $line -notmatch '"role"\s*:\s*"user"') { continue }
@@ -117,9 +143,21 @@ function Get-LastUserQuery($obj) {
         }
         if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
             $q = $Matches[1].Trim()
+            # Hook-generated turn -> not the human's words. Remember the embedded
+            # ORIGINAL REQUEST (from the most recent such turn) and keep walking.
+            if (Test-IsHookGeneratedQuery $q) {
+                if (-not $embeddedFallback) { $embeddedFallback = Get-EmbeddedOriginalRequest $q }
+                continue
+            }
             if ($q.Length -gt 2000) { $q = $q.Substring(0, 2000) + '...' }
             return (Redact-SecretsFromIntent $q)
         }
+    }
+    # No real human turn survived in the transcript -> fall back to the request
+    # embedded in the latest hook followup, if we found one.
+    if ($embeddedFallback) {
+        if ($embeddedFallback.Length -gt 2000) { $embeddedFallback = $embeddedFallback.Substring(0, 2000) + '...' }
+        return (Redact-SecretsFromIntent $embeddedFallback)
     }
     return ''
 }

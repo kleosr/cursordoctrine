@@ -105,7 +105,7 @@ resolve_agent_path() {
     esac
 }
 
-# extract_last_user_query <json> -> text of the last <user_query> in this
+# extract_last_user_query <json> -> text of the last *human* <user_query> in this
 # conversation's transcript, or '' if there is none. Capped at 2000 chars.
 #
 # This is the Tier 0 intent-trace primitive: the final-review hook prepends the
@@ -113,7 +113,14 @@ resolve_agent_path() {
 # to it. Anything untraceable is a hallucinated requirement.
 #
 # Walks the JSONL backward via tac (preferred) or a portable awk fallback; finds
-# the first (last) user record whose content carries a <user_query> tag.
+# the first (last) user record whose content carries a <user_query> tag - SKIPPING
+# hook-generated turns. final-review.sh / subagent-stop-review.sh emit a
+# {followup_message} that Cursor replays as a user turn (and self-review /
+# intent-anchor inject into additional_context); returning one of those would lock
+# the review boilerplate into .scope.json as the intent (the contamination loop).
+# Hook turns are detected by their fixed headers; if the transcript has been
+# trimmed to just the hook turn, recover the real request from the embedded
+# "ORIGINAL REQUEST ... --- <request> ---" block.
 extract_last_user_query() {
     local json="$1"
     local tp
@@ -134,6 +141,14 @@ extract_last_user_query() {
     if have_py; then
         printf '%s' "$reversed" | python3 -c '
 import json, re, sys
+HOOK_HDR = re.compile(r"^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)", re.M)
+EMBEDDED = re.compile(r"ORIGINAL REQUEST[^\r\n]*\r?\n-{3,}\r?\n(.+?)\r?\n-{3,}", re.S)
+def redact(q):
+    q = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", q)
+    q = re.sub(r"\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b", "[REDACTED_TOKEN]", q)
+    q = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+", r"\1=[REDACTED]", q)
+    return q
+embedded_fallback = ""
 try:
     for line in sys.stdin:
         line = line.strip()
@@ -155,15 +170,26 @@ try:
                 if isinstance(p, dict) and p.get("type") == "text" and p.get("text"):
                     text += p["text"]
         m = re.search(r"<user_query>\s*(.+?)\s*</user_query>", text, re.S)
-        if m:
-            q = m.group(1).strip()
-            if len(q) > 2000:
-                q = q[:2000] + "..."
-            q = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", q)
-            q = re.sub(r"\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b", "[REDACTED_TOKEN]", q)
-            q = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+", r"\1=[REDACTED]", q)
-            print(q)
-            break
+        if not m:
+            continue
+        q = m.group(1).strip()
+        # Hook-generated turn -> not the human words. Remember the embedded
+        # ORIGINAL REQUEST (latest such turn) and keep walking back.
+        if HOOK_HDR.search(q):
+            if not embedded_fallback:
+                em = EMBEDDED.search(q)
+                if em:
+                    embedded_fallback = em.group(1).strip()
+            continue
+        if len(q) > 2000:
+            q = q[:2000] + "..."
+        print(redact(q))
+        break
+    else:
+        if embedded_fallback:
+            if len(embedded_fallback) > 2000:
+                embedded_fallback = embedded_fallback[:2000] + "..."
+            print(redact(embedded_fallback))
 except Exception:
     pass
 ' 2>/dev/null
@@ -172,9 +198,14 @@ except Exception:
 
     # No python3: best-effort grep for the common case where the user message
     # is the only place <user_query> appears in a line. Imperfect but bounded.
+    # Drop hook-generated turns (FINAL REVIEW / SUBAGENT / SELF-REVIEW / INTENT
+    # ANCHOR) so we never lock review boilerplate as the intent; take the first
+    # surviving human <user_query>.
     printf '%s' "$reversed" |
-        grep -m1 -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
+        grep -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
         sed -E 's@</?user_query>@@g' |
+        grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)' 2>/dev/null |
+        head -n1 |
         sed -E 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' |
         head -c 2000
 }
