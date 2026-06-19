@@ -1,6 +1,6 @@
 {
   "name": "cursordoctrine",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Thin self-review hooks for Cursor — the model is the auditor. Pruned + deduplicated: intent-anchor (auto-scaffolded .scope.json per prompt + per-turn re-injection against Salience Dilution), intent-trace final review, unified anti-slop checklist as single source of truth.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
