@@ -14,14 +14,17 @@
 #      at the START of each turn's work, before edits pile up and dilute the
 #      original intent. Works UNCONDITIONALLY - no transcript needed.
 #
-#   2. RE-COMPILE ON PROMPT CHANGE: hash the current <user_query> (via
-#      Get-LastUserQuery, which reads the transcript) and compare to
-#      last-query-<cid>.hash. If they differ and a valid .scope.json exists,
-#      demand the agent UPDATE it. If no valid .scope.json exists and the query
-#      is available, WRITE a deterministic scaffold to disk (intent = query,
-#      files/acceptance = TODO placeholders) so re-injection always has real
-#      content from the first tool boundary — contract creation is not left to
-#      the LLM alone.
+#   2. AUTO-CREATE / REGENERATE .scope.json: when the current <user_query>
+#      differs from the contract on disk (no contract yet, OR _intent_hash
+#      mismatch), the hook WRITES a scaffold to the REPO ROOT: intent locked
+#      from the prompt, files/acceptance as TODO placeholders the agent
+#      refines. This is the user-requested behavior: every new prompt ->
+#      a fresh .scope.json the agent works from. Fixed vs the broken 0.4.4
+#      build: never writes to $HOME (bails if no real root resolves -> no
+#      ghost files), and regenerates on prompt CHANGE not just on absence.
+#   3. RE-INJECT on same-prompt turns: when the query is unchanged (contract
+#      already current), the hook re-injects the existing contract into the
+#      feedback bus so it stays in the model's attentional focus each turn.
 #
 # Why postToolUse, not afterFileEdit: afterFileEdit only fires AFTER an edit
 # exists, and Cursor has no preToolUse for file edits. postToolUse fires after
@@ -70,18 +73,28 @@ if ($hasQuery) {
 }
 
 # --- repo root (same resolution as scope-gate-audit.ps1) ---------------------
+# Resolve cwd -> workspace_roots -> CURSOR_PROJECT_DIR. We do NOT fall back to
+# $HOME: writing .scope.json into $HOME was the 0.4.4 "ghost file" bug. If we
+# cannot resolve a real project root, the hook stays silent (no scaffold, no
+# demand) rather than litter the user's home directory.
 $root = ''
 $cands = @()
 if ($obj.PSObject.Properties['cwd'] -and $obj.cwd) { $cands += [string]$obj.cwd }
 if ($obj.PSObject.Properties['workspace_roots']) { foreach ($w in $obj.workspace_roots) { $cands += [string]$w } }
 foreach ($c in $cands) { $f = ConvertTo-FwdPath $c; if ($f -and (Test-Path -LiteralPath $f)) { $root = $f.TrimEnd('/'); break } }
-if (-not $root) { $root = (& { if ($env:CURSOR_PROJECT_DIR) { $env:CURSOR_PROJECT_DIR } else { $HOME } }).Replace('\', '/').TrimEnd('/') }
+if (-not $root -and $env:CURSOR_PROJECT_DIR) {
+    $cpd = $env:CURSOR_PROJECT_DIR.Replace('\', '/').TrimEnd('/')
+    if (Test-Path -LiteralPath $cpd) { $root = $cpd }
+}
+# No $HOME fallback. If we still have no root, bail (cannot know where to write).
+if (-not $root) { exit 0 }
 
 # --- read the existing contract (if any) -------------------------------------
 $scopeExists = $false
 $scopeIntent = ''
 $scopeAcceptance = ''
 $scopeFiles = ''
+$scopeStale = $false   # true if the on-disk contract predates the current query
 $scopePath = Join-Path $root '.scope.json'
 if (Test-Path -LiteralPath $scopePath) {
     try {
@@ -90,89 +103,80 @@ if (Test-Path -LiteralPath $scopePath) {
         if ($sj.acceptance) { $scopeAcceptance = [string]$sj.acceptance }
         if ($sj.files)      { $scopeFiles = ($sj.files -join ', ') }
         $scopeExists = $true
+        # The contract is "stale" if its recorded intent hash != current query
+        # hash. We persist the query hash inside .scope.json under _intent_hash
+        # so staleness survives even if last-query-<cid>.hash was swept.
+        if ($hasQuery -and $sj.PSObject.Properties['_intent_hash']) {
+            $scopeStale = ([string]$sj._intent_hash -ne $currentHash)
+        }
     } catch { $scopeExists = $false }   # malformed JSON -> treat as missing
 }
 
-# --- deterministic scaffold (0.4.4) -----------------------------------------
-# When the query is available and there is no valid contract, the hook writes
-# .scope.json itself — intent from <user_query>, obvious TODO placeholders
-# for files/acceptance. Fires on prompt change (incl. first turn: empty prev
-# hash) or whenever the contract is still missing on a turn boundary.
-$scaffoldWritten = $false
-$shouldScaffold = $hasQuery -and (-not $scopeExists)
-if ($shouldScaffold) {
+# --- auto-create / regenerate .scope.json (the 0.4.4 behavior, fixed) --------
+# The user wants: every NEW prompt -> a fresh .scope.json the agent works from.
+# So we WRITE the scaffold when (a) there is no valid contract, OR (b) the
+# contract on disk is stale (its _intent_hash != current query hash). Intent is
+# locked from the current <user_query>; files/acceptance are TODO placeholders
+# the agent refines. Fixed vs 0.4.4:
+#   - NEVER writes to $HOME (bail above if no real root) -> no ghost files.
+#   - Regenerates on prompt CHANGE, not just on absence -> "each prompt, new file".
+#   - Records _intent_hash so staleness is self-contained in the file.
+$regenerated = $false
+$shouldWrite = $hasQuery -and (-not $scopeExists -or $scopeStale)
+if ($shouldWrite) {
     try {
         $scaffold = [ordered]@{
-            intent       = $currentQuery
-            files        = @('<TODO: list files>')
-            acceptance   = '<TODO: deterministic success check>'
-            allow_growth = $false
+            intent        = $currentQuery
+            files         = @('<TODO: list files you will touch>')
+            acceptance    = '<TODO: the one deterministic check that decides done>'
+            allow_growth  = $false
+            _intent_hash  = $currentHash
+            _generated_by = 'intent-anchor hook'
         }
-        $json = $scaffold | ConvertTo-Json -Depth 4 -Compress
-        $dir = Split-Path -Parent $scopePath
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        }
+        $json = $scaffold | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
-        $scopeIntent = $currentQuery
-        $scopeAcceptance = '<TODO: deterministic success check>'
-        $scopeFiles = '<TODO: list files>'
-        $scopeExists = $true
-        $scaffoldWritten = $true
-    } catch { }
+        $scopeIntent     = $currentQuery
+        $scopeAcceptance = '<TODO: the one deterministic check that decides done>'
+        $scopeFiles      = '<TODO: list files you will touch>'
+        $scopeExists     = $true
+        $scopeStale      = $false
+        $regenerated     = $true
+    } catch { }   # write failed (perms / locked) -> fall through to demand msg
 }
 
 # --- compose the anchor message ---------------------------------------------
-# Re-injection (req 2) is unconditional whenever a contract exists.
-# Recompile-demand (req 1) fires when the prompt moved but a real contract exists.
+# Three states: regenerated this turn (new prompt), no contract (and no query
+# to scaffold from), or re-injecting an existing current contract.
 $queryLine = if ($hasQuery) { $currentQuery } else { '(current request unavailable - no transcript in this event)' }
 
-if ($scaffoldWritten) {
+if ($regenerated) {
     $msg = @"
-INTENT ANCHOR (scaffold written to .scope.json) - contract materialized from your request.
+INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
 
   intent:     $scopeIntent
   files:      $scopeFiles
   acceptance: $scopeAcceptance
 
-The hook wrote this scaffold to $scopePath — intent is locked from your current
-request. Replace the TODO placeholders with real files[] and acceptance before
-editing source. The contract is on disk and will be re-injected every turn.
+The hook wrote a fresh scaffold to $scopePath from your current request. intent
+is locked from what you just asked. Fill the TODO placeholders with the real
+files you will touch and the deterministic acceptance check, THEN proceed. This
+contract will be re-injected every turn until your request changes again.
 "@
 } elseif (-not $scopeExists) {
     $msg = @"
-INTENT ANCHOR (pre-compile) - no .scope.json found in $root.
+INTENT ANCHOR (pre-compile) - no .scope.json found in $root, and the current
+request was unavailable to scaffold from.
 
 Current request:
   $queryLine
 
-You have NOT compiled your Anchor Set. Before editing files, write .scope.json
-in the repo root:
+Write .scope.json in the repo root yourself:
   intent:     one operational sentence (what is strictly necessary)
   files:      the exact files you will touch
   acceptance: the one deterministic check that decides done
-
-Compile it now, then proceed. The scope tracks the request - it is how you stay
-on the rails when the conversation gets long.
-"@
-} elseif ($promptChanged) {
-    $msg = @"
-INTENT ANCHOR (pre-compile) - your request changed; .scope.json may be stale.
-
-Current request:
-  $queryLine
-
-Your existing contract (.scope.json):
-  intent:     $scopeIntent
-  files:      $scopeFiles
-  acceptance: $scopeAcceptance
-
-If the current request differs from the intent above, UPDATE .scope.json now
-to match what was just asked. When the request moves, the scope moves with it -
-do not edit against a contract written for a different request.
 "@
 } else {
-    # Same prompt continuing (or query unavailable) -> re-inject the contract.
+    # Contract exists and matches the current prompt -> re-inject it.
     $driftNote = if ($hasQuery) {
         "Every edit this turn must advance intent and stay inside files. acceptance is the bar for done."
     } else {
