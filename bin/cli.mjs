@@ -284,43 +284,6 @@ function verify() {
     return true;
   });
 
-  check('anchor-set nudge fires once per turn, stop re-arms it', () => {
-    // anchor-set-nudge appends to feedback-<cid>.txt (the shared bus) rather
-    // than emitting JSON directly; drain it the same way post-tool-use does.
-    const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
-
-    // --- Turn 1 -------------------------------------------------------------
-    // First edit -> nudge stashes into the feedback bus and arms the latch.
-    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'x.py') });
-    if (!drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
-      return { ok: false, detail: 'nudge did not reach the feedback bus on first edit' };
-    }
-    // Second edit same turn -> latch armed, nudge must stay silent.
-    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'y.py') });
-    if (drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
-      return { ok: false, detail: 'nudge re-fired on second edit (latch not gating)' };
-    }
-    // End of turn: final-review clears the latch unconditionally. Drive a
-    // review-less stop (no session-edits marker) so it hits the clear path and
-    // exits {}, same as a turn that produced no reviewable edits.
-    const stopOut = runHook(hook('final-review'), { conversation_id: 'npxv3', status: 'completed' });
-    if (stopOut !== '{}' && stopOut.replace(/\s/g, '') !== '{}') {
-      // A review fired (fine - the earlier edit left a session-edits marker via
-      // self-review-trigger if one ran). What matters is the latch got cleared;
-      // we verify that with the next-turn re-fire below.
-    }
-    // --- Turn 2 -------------------------------------------------------------
-    // First edit of the NEXT turn -> latch was cleared at the stop boundary, so
-    // the nudge MUST re-fire. This is the regression that 0.4.0 shipped broken:
-    // the latch only cleared on the fragile second-stop path, so it stranded
-    // and the nudge went permanently silent mid-session.
-    runHook(hook('anchor-set-nudge'), { conversation_id: 'npxv3', file_path: join(HOME, 'z.py') });
-    if (!drainedOf('npxv3').includes('PRE-COMPILE NUDGE')) {
-      return { ok: false, detail: 'nudge did NOT re-fire on the next turn (latch stranded at the stop boundary)' };
-    }
-    return true;
-  });
-
   check('intent-anchor scaffolds .scope.json per-prompt, never to $HOME', () => {
     // The user-requested behavior: every NEW prompt -> a fresh .scope.json
     // in the repo root, intent locked from the query. Same prompt -> re-inject
@@ -513,9 +476,7 @@ Examples
 Kill switches (environment variables, all hooks fail open)
   HOOKS_ENFORCE=0              everything advisory off
   PERM_GATE_ENFORCE=0          permission gate off
-  ANCHOR_NUDGE_ENFORCE=0       pre-compile nudge off (first-edit Anchor Set reminder)
-  INTENT_ANCHOR_ENFORCE=0      thin-intent re-injection off (per-turn .scope.json echo)
-  MINIMAL_EDITING_ENFORCE=0    over-edit advisory off (deprecated in 0.3.0)
+  INTENT_ANCHOR_ENFORCE=0      thin-intent scaffold/re-injection off
   SEMANTIC_DENSITY_ENFORCE=0   semantic-opacity advisory off
   SCOPE_GATE_ENFORCE=0         declared-scope advisory off
   ANTI_SLOP_ENFORCE=0          slop advisory off

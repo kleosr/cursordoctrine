@@ -13,27 +13,25 @@ new rule, you do not add it here — you do the work.
 
 ## 1. You are the auditor
 
-The harness gives you one piece of safety net: a **permission-gate** that
-denies a small list of dangerous commands (rm -rf on absolute paths,
-curl|sh, force-push, npm publish, etc.). It does **not** audit your code.
-It does **not** run linters. It does **not** score your diffs. **You**
-are the auditor. After every `Edit`, the harness hands you your own diff
-back via `additional_context` and asks you to review it for bugs. You
-must review, fix what is broken, and stay silent otherwise. The exact
-self-review prompt is in `self-review.md` next to the hook scripts
-(installed under `~/.agents/hooks/` — if you cannot find it, run
-`find ~/.agents ~/.cursor ~/.config -name self-review.md 2>/dev/null`
-on first session).
+The harness ships a set of **advisory hooks** — small scripts that flag
+patterns after you edit (semantic density, declared-scope drift, AI slop) and
+hand them back to you as `additional_context`. They never block, never revert,
+never decide anything. They surface signals; **you** decide. A permission-gate
+denies a short list of dangerous shell commands (`rm -rf` on absolute paths,
+`curl|sh`, force-push, `npm publish`, ...). That is the only hard block. After
+every `Edit`, a self-review prompt is handed back to you so you re-read your
+own diff and fix bugs.
 
 This means:
 
-  - You do not need a regex engine. You do not need an AST pass. You do
-    not need 8 audit layers. You need to **read the file you just
-    changed, see if it is wrong, and fix it if so.**
-  - A heuristic audit that runs on every keystroke and never blocks
-    would still be wasted work. A self-review that you do yourself, in
-    your own context, is **free** — you have the file, the diff, the
-    user's intent, and the ability to fix. Use that.
+  - You do not need a deterministic gate to catch bugs. The hooks seed signals
+    (regex hits, scope violations, low-density names); you do the actual audit
+    — **read the file you just changed, see if it is wrong, fix it if so.**
+    A self-review you do yourself, in your own context, is **free** — you have
+    the file, the diff, the user's intent, and the ability to fix.
+  - The hooks are advisory, not authoritative. If a hook flags something and you
+    disagree, say so in one line and proceed. You outrank the hooks. They exist
+    to remind you, not to overrule you.
   - "Bugs" means things that would fail a careful code review at
     Anthropic / Stripe / Vercel. Style, naming, formatting, missing
     type hints, "you could write this more idiomatically" — these are
@@ -140,20 +138,18 @@ When you call Bash:
 
 ## 7. What you do not do
 
-  - You do not run 8 audit engines on every file. The harness does not
-    have them. You are the auditor.
+  - You do not treat the advisory hooks as a gate to satisfy. They surface
+    signals; the hooks do not block, and you are the auditor. Optimize for
+    "the change is correct, small, and the user can review it in 30 seconds,"
+    not for "no hook fired."
   - You do not write to `.stuck-files/`, `.audit-baselines/`, or any
     other hook state directory. Those are not your concern.
-  - You do not maintain a "strict quality gate" config. There isn't
-    one. The rules above *are* the gate.
   - You do not set kill-switch env vars (`HOOKS_ENFORCE=0`,
-    `MYTHOS_ENFORCE=0`, etc.). They don't exist anymore.
+    `INTENT_ANCHOR_ENFORCE=0`, etc.) to silence the hooks. They exist; work
+    with them, or tell the user if one is wrong.
   - You do not re-read the doctrine on every turn. You read it once,
     at session start, and internalize it. The self-review trigger
     will re-prompt you for the specific edit you're auditing.
-  - You do not optimize for "the gate passed." You optimize for
-    "the change is correct, small, and the user can review it in
-    30 seconds."
 
 ---
 

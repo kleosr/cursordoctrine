@@ -40,7 +40,6 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $marker = Join-Path $pendingDir "session-edits-$cid.txt"
 $flag   = Join-Path $pendingDir "reviewed-$cid.flag"
-$anchorFlag  = Join-Path $pendingDir "anchor-declared-$cid.flag"
 $intentLatch = Join-Path $pendingDir "intent-injected-$cid.flag"
 
 # Sweep state from sessions that died before their stop hook ran. Cheap (one
@@ -49,16 +48,13 @@ Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-# Unconditionally clear the per-turn latches so the next turn re-fires. Every
-# stop is a turn boundary; clearing here (not only inside the reviewed-flag
-# block below) guarantees these re-fire on the first edit/tool of the NEXT
-# turn and can never get stranded silenced mid-session:
-#   - anchor-declared-<cid>.flag  (anchor-set-nudge, first-edit reminder)
-#   - intent-injected-<cid>.flag  (intent-anchor, first-tool re-injection)
-# last-query-<cid>.hash is NOT cleared here - it must persist turn-to-turn so
-# intent-anchor can detect prompt changes; the 7-day sweep above reaps it when
-# a conversation truly dies.
-Remove-Item $anchorFlag, $intentLatch -Force -ErrorAction SilentlyContinue
+# Unconditionally clear the intent-anchor per-turn latch so the next turn
+# re-fires. Every stop is a turn boundary; clearing here (not only inside the
+# reviewed-flag block below) guarantees it re-fires on the first tool of the
+# NEXT turn and can never get stranded silenced mid-session.
+# last-query-<cid>.hash is NOT cleared here - it persists turn-to-turn so
+# intent-anchor can detect prompt changes; the 7-day sweep above reaps it.
+Remove-Item $intentLatch -Force -ErrorAction SilentlyContinue
 
 # One-shot brake: the previous stop for this conversation emitted the review.
 # Clear the flag (and whatever the review pass itself edited) and end the loop.
@@ -94,16 +90,17 @@ if (-not $body) {
     $body = @'
 FINAL REVIEW - audit everything you changed this session and FIX what fails
 (do NOT revert the behaviour the user asked for):
+  0. Intent trace - tie every diff hunk back to the ORIGINAL REQUEST above.
+     Anything untraceable is a hallucinated requirement: revert it. Runs FIRST.
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled (no empty catch), timeouts/retries, resources
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - read ~/.agents/hooks/anti-slop.md and apply all 13 items to
-     the session diff. If ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists,
-     run `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all` first.
-     Consolidate clones; drop premature abstraction, unneeded deps, operational
-     slop (retries, await-in-loop, log spam), unjustified files.
+  4. Anti-slop - if the anti-slop scanner exists, run `python <scanner> --all` first;
+     then read ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all
+     13 items to the session diff. Consolidate clones; drop premature abstraction,
+     unneeded deps, operational slop, unjustified files. Do NOT re-list the items here.
   5. Wiring completeness - for every user-visible behavior you added/changed
      (button, submit, API call, route, state transition), trace its execution
      path to a REAL EFFECT (persist, mutate, call, render). A dead end is slop:
@@ -113,6 +110,9 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
 Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.
 '@
 }
+# Expand ~ in the body AND in the fallback above, so the model gets literal
+# absolute paths it can paste into pwsh on Windows (where ~ does NOT expand).
+# Same treatment applied to the scanner path so the anti-slop Step A command runs.
 $body = Expand-AgentPaths $body
 
 # Regla R1 (re-entry): if this review pass is a re-audit after a failed gate or

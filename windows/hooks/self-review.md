@@ -6,31 +6,25 @@ file. Your job, on this turn, is to:
   3. Decide: does this edit introduce any of the following?
      - **Security**: hardcoded secret (AWS key, private key, API token,
        password in source), `eval(`, `exec(`, `pickle.loads`, `verify=False`,
-       `child_process` with user input, `dangerouslySetInnerHTML` with
-       untrusted data, SQL string concat.
+       SQL string concat. (Full taxonomy lives in anti-slop.md item 9 +
+       the scanner; this is the high-confidence shortlist to act on now.)
      - **Correctness**: assignment-in-condition (`if (x = 5)`), `==`/`!=`
        with `null`/`None`/`NaN` in a comparison, `forEach` with `await`,
        async `useEffect` with side-effects missing cleanup, `==` instead
        of `===` in JS, mutable default args in Python, shadowed imports,
        dead relative imports.
-     - **Safety**: `rm -rf /`, `curl ... | sh`, force-push, `git reset --hard`
-       without a backup, `npm publish` without version bump, secret
-       committed to a public file.
      - **Logic bugs that the user would actually care about**: a function
        that returns the wrong thing, an off-by-one, a missing `return`, a
        wrong import path.
-     - **Semantic contracts**: did any existing function's BEHAVIOR change
-       without its name, signature, or docstring changing? Names are
-       contracts. `deleteUser()` that now soft-deletes, a getter that now
-       writes, a function that used to throw on bad input and now silently
-       returns null — these are silent contract breaks that callers will
-       rely on and break against. If behavior changed, the name, signature,
-       or docstring must reflect it.
   4. If you find a real bug, **fix it with `Edit`**, then say nothing.
      Do not report it. Do not explain it. The user will see the fix
      in the next message; the bug is gone.
   5. If the edit is clean, respond with the single word: `clean`.
 
+Scope: this pass is the **fast bug hunter**. It is deliberately narrower than
+anti-slop — no duplication/architecture/abstraction/conventions audit here.
+Those run on substantial edits (the `anti-slop-audit` hook) and at the end of
+the implementation (`final-review` axis 4). Do not duplicate them per-edit.
 Hard constraints:
 
   - **Never revert or re-do work the user asked for.** The user's intent
@@ -51,5 +45,4 @@ Hard constraints:
     thrashing.
 
 This is the entire self-review prompt. It is the same prompt, every
-edit, forever. The model is the auditor. There is no regex, no AST
-parse, no Python — the model itself does the work.
+edit, forever. The model is the auditor.

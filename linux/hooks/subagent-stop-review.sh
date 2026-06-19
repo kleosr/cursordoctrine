@@ -44,13 +44,13 @@ cid="$(safe_conversation_id "$input")"
 pending_dir="$(hooks_pending_dir)"
 marker="$pending_dir/session-edits-$cid.txt"
 flag="$pending_dir/reviewed-$cid.flag"
-anchor_flag="$pending_dir/anchor-declared-$cid.flag"
 intent_latch="$pending_dir/intent-injected-$cid.flag"
 
-# Unconditionally clear the per-turn latches so the next subagent run re-fires.
-# Clearing here (not only inside the reviewed-flag block below) can never strand
-# them silenced. last-query-<cid>.hash is kept (cross-turn prompt-change detect).
-rm -f "$anchor_flag" "$intent_latch" 2>/dev/null
+# Unconditionally clear the intent-anchor per-turn latch so the next subagent
+# run re-fires. Clearing here (not only inside the reviewed-flag block below)
+# can never strand it silenced. last-query-<cid>.hash is kept (cross-turn
+# prompt-change detect).
+rm -f "$intent_latch" 2>/dev/null
 
 # One-shot brake: the previous subagentStop for this id emitted the review.
 if [ -f "$flag" ]; then
@@ -76,13 +76,15 @@ body=""
 [ -f "$prompt_file" ] && body="$(cat "$prompt_file")"
 if [ -z "$body" ]; then
     body='Audit everything you changed in this run and FIX what fails (do NOT revert the
-behaviour the task asked for):
+behaviour the task asked for). Six axes, in order:
+  0. Intent trace - tie every diff hunk back to your original task. Untraceable = hallucinated.
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - if ~/.cursor/skills/anti-slop/scripts/scan_slop.py exists, run
-     `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py --all`; otherwise
-     apply ~/.agents/hooks/anti-slop.md to the session diff.
+  4. Anti-slop - if the scanner exists, run it --all first; otherwise read
+     ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all 13 items.
+  5. Wiring completeness - trace every added behavior to a REAL EFFECT (persist/mutate/call/render).
+     A dead end (handleSubmit that doesn'"'"'t persist, an endpoint no caller invokes) is slop.
 If an axis is clean, say so in one line. Then stop.'
 fi
 body="$(expand_agent_paths "$body")"

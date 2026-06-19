@@ -1,8 +1,6 @@
 # anti-slop-audit.ps1 - afterFileEdit "AI slop" advisory (Cursor).
 #
-# Companion to minimal-edit-audit.ps1. That hook guards ONE slop axis -
-# over-editing (diff size / token-Levenshtein / added complexity). This hook
-# guards the rest of the taxonomy: the parts static analysis can cheaply and
+# Guards the parts of the slop taxonomy static analysis can cheaply and
 # precisely flag, plus a self-review checklist for the parts it cannot.
 #
 #   Statically flagged (high-precision, deliberately low false-positive):
@@ -209,9 +207,11 @@ Fix guilty items now. Never revert what the user asked for.
 $flagBlock = if ($flags.Count -gt 0) { "Static signals on this edit:`n" + ($flags -join "`n") + "`n`n" } else { '' }
 
 # Concatenate (do NOT interpolate $checklist - its content must stay literal).
+# Expand ~ on the final message so the model gets literal absolute paths
+# (Windows pwsh does NOT expand ~; the agent may paste paths into a shell).
 $header = "Anti-slop audit - $rel`n`n"
 $footer = "`n`n(Advisory; the bug pass is the self-review trigger. Disable: ANTI_SLOP_ENFORCE=0)"
-$msg = $header + $flagBlock + $checklist + $footer
+$msg = Expand-AgentPaths ($header + $flagBlock + $checklist + $footer)
 
 # --- append to the shared pending file ------------------------------------
 $cid = Get-SafeConversationId $obj

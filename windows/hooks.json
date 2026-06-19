@@ -16,12 +16,6 @@
         "_comment": "5s: record the edit in ~/.cursor/.hooks-pending/session-edits-<conversation_id>.txt and stash the self-review prompt in feedback-<conversation_id>.txt. The harness normalizes agent file edits (incl. StrReplace) to tool type 'Write' in this event - verified via payload capture - so ^Write$ matches them all; the alternation is defensive against future harness versions reporting raw tool names. Anchored so TabWrite (every user tab-completion) stays excluded. The model is the auditor. NOTE: fires inside subagent contexts too, keyed by the SUBAGENT's conversation_id - see subagentStop + the marker fold in post-tool-use.ps1/final-review.ps1."
       },
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/minimal-edit-audit.ps1",
-        "timeout": 15,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "15s (DEPRECATED in 0.3.0, superseded by semantic-density-audit + declared-editing; retained for compat, removal slated for 0.4.0): minimal-editing advisory on the edited file (git --numstat line-count). Size-based gate; the intent-declared gate supersedes it. Appends findings to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or MINIMAL_EDITING_ENFORCE=0."
-      },
-      {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/semantic-density-audit.ps1",
         "timeout": 15,
         "matcher": "^(Write|StrReplace|EditNotebook)$",
@@ -37,13 +31,7 @@
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anti-slop-audit.ps1",
         "timeout": 15,
         "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "15s: AI-slop advisory, companion to minimal-edit-audit. Native git diff flags new deps / premature abstractions (Factory/Repository/Mediator/CQRS/DDD) / redundant comments, and injects the anti-slop.md self-review checklist on substantial edits (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Appends to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or ANTI_SLOP_ENFORCE=0."
-      },
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anchor-set-nudge.ps1",
-        "timeout": 5,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "5s: PROACTIVE pre-compile nudge. On the FIRST edit of each agent turn (per conversation), remind the agent to compile its Anchor Set (pre-compile.md) into .scope.json BEFORE piling on more code. The reactive audits (self-review / anti-slop / final-review axis 0) only fire after code exists; this catches intent dilution at token ~50 instead of ~5000. One-shot per turn: gated by anchor-declared-<cid>.flag, armed here on first edit and cleared UNCONDITIONALLY by final-review.ps1 / subagent-stop-review.ps1 on every stop - so it re-fires on the first edit of the next turn and can never get stranded silenced. Advisory only; never blocks. Disable: HOOKS_ENFORCE=0 or ANCHOR_NUDGE_ENFORCE=0."
+        "_comment": "15s: AI-slop advisory. Native git diff flags new deps / premature abstractions (Factory/Repository/Mediator/CQRS/DDD) / redundant comments, and injects the anti-slop.md self-review checklist on substantial edits (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Appends to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or ANTI_SLOP_ENFORCE=0."
       }
     ],
     "postToolUse": [
@@ -78,7 +66,7 @@
     "stop": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/final-review.ps1",
-        "timeout": 5,
+        "timeout": 10,
         "loop_limit": 5,
         "_comment": "5s: ONE comprehensive end-of-implementation review across correctness + reliability + coverage + anti-slop. If the agent edited files this loop (session-edits-<conversation_id> marker), returns {followup_message} so Cursor auto-submits ONE review pass. Bounded by the script's per-conversation reviewed-flag (one review per implementation); loop_limit counts follow-ups per CONVERSATION (docs), so 5 = harness-side runaway cap, not the per-implementation bound (2 would silently kill reviews after the 2nd implementation in a long chat). Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0."
       }

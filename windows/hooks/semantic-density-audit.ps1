@@ -1,10 +1,9 @@
 # semantic-density-audit.ps1 - afterFileEdit "semantic opacity" advisory (Cursor).
 #
-# Guards the naming layer the other audit hooks do not see. minimal-edit-audit
-# watches diff SIZE; anti-slop-audit watches generated-code PATTERNS; this hook
-# watches whether the identifiers the agent JUST introduced actually communicate
-# intent. DataManager, process(), utils.ts, CoreEngine - names that exist but
-# say nothing.
+# Guards the naming layer the other audit hooks do not see. anti-slop-audit
+# watches generated-code PATTERNS; this hook watches whether the identifiers
+# the agent JUST introduced actually communicate intent. DataManager,
+# process(), utils.ts, CoreEngine - names that exist but say nothing.
 #
 # Mechanism: extract ADDED lines from `git diff HEAD -- <rel>` (with the
 # untracked-file fallback anti-slop-audit uses), pipe them to density_scan.py

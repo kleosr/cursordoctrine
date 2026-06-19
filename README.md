@@ -21,9 +21,9 @@
 
 Cursor hooks that make the agent review its own edits without bolting a static-analysis pipeline onto every keystroke. No regex army, no scoring engine. Four jobs:
 
-1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*, and write that contract to `.scope.json`. On the first edit of each agent turn a `anchor-set-nudge` advisory fires to catch intent dilution at token ~50 instead of waiting for the stop-hook review at token ~5000.
+1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*. `intent-anchor` materializes that as `.scope.json` on the first tool of each turn (auto-created, regenerated when the prompt changes) and re-injects it into context every turn, so the contract stays in focus against Salience Dilution.
 2. **Inject the doctrine** at session start — every chat starts with the same short governing text (`doctrine.md`, `USER-RULES.md`, `declared-editing.md` the YAGNI ultra ladder, and `pre-compile.md` the thin intent-compilation phase).
-3. **Hand the model its own edits back** (reactive) — after each agent edit, a self-review prompt goes into a pending file (plus semantic-density, scope-gate, anti-slop, and the pre-compile nudge advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
+3. **Hand the model its own edits back** (reactive) — after each agent edit, a self-review prompt goes into a pending file (plus semantic-density, scope-gate, and anti-slop advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
 4. **Gate blast radius** — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else passes.
 
 When an implementation finishes, the stop hook runs one final review over everything that changed, then stops. Six axes. The first is **intent trace**: the hook pulls your last user message from the transcript and prepends it to the review so the model has to tie every diff hunk to a concrete request. Anything it can't trace is a hallucinated requirement and gets reverted. That's the only check that catches "clean code, wrong feature" — linters and later axes miss it.
@@ -90,13 +90,13 @@ Two machine-checkable consequences:
 - **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) audits every edit against `files[]` and quotes `intent` + `acceptance` back on a violation. Editing outside the declared set is the textbook scope-creep signal.
 - **final-review axis 0** (intent trace) traces every diff hunk back to `intent`. Anything untraceable is a hallucinated requirement.
 
-On the **first edit of each agent turn**, `anchor-set-nudge` drops a reminder into the feedback bus: *did you write your Anchor Set to `.scope.json`?* One nudge per turn — the latch is armed on that first edit and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-earns its nudge. A long chat with N turns gets up to N nudges, and the latch can never get stranded silenced mid-session.
+On the **first tool of each agent turn**, `intent-anchor` materializes the Anchor Set: it writes `.scope.json` to the repo root (regenerating it when the prompt changed) and re-injects it into context. One scaffold per prompt, re-injection per turn. The latch is armed on first fire and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-fires and can never get stranded silenced mid-session.
 
 The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declared-editing.md` ladder's rung 1 governs when it's overkill.
 
 ### Keeping the contract alive: `intent-anchor` (anti-Salience-Dilution)
 
-Writing `.scope.json` once is not enough. As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against the recent history — *Salience Dilution* — and the agent stops checking the contract it wrote at prompt 1. It forgets symmetry, colors, the acceptance bar. This is the failure mode the nudge alone can't fix (a reminder that the contract exists ≠ the contract being in context).
+Writing `.scope.json` once is not enough. As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against the recent history — *Salience Dilution* — and the agent stops checking the contract it wrote at prompt 1. It forgets symmetry, colors, the acceptance bar. Re-injecting the contract every turn is what defeats this: the requirements are re-stated in front of the model before each edit, not just written once and hoped-for.
 
 `intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) does two things on the **first tool boundary of every turn** (per-turn latch, cleared unconditionally at each stop):
 
@@ -114,7 +114,7 @@ Crucially, `intent-anchor` carries the **semantic** contract (`intent`/`acceptan
 | Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing + **pre-compile** and emits them as `additional_context`. |
 | Every turn | `postToolUse` | **`intent-anchor`** (registered first) re-injects `.scope.json` into `additional_context` at the first tool boundary of each turn — the anti-Salience-Dilution move that keeps `intent` + `acceptance` in the model's attentional focus before edits pile up. If the prompt changed since last turn, it demands the contract be updated. Then `post-tool-use` folds subagent markers and drains the feedback file. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
-| Edit | `afterFileEdit` + `stop` | **Proactive:** `anchor-set-nudge` fires once per turn (on its first edit) to push the Anchor Set. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `minimal-edit-audit` (deprecated), `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation six-axis pass. |
+| Edit | `afterFileEdit` + `stop` | **Proactive:** `intent-anchor` (`postToolUse`) scaffolds `.scope.json` per prompt and re-injects it each turn. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation six-axis pass. |
 | Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
 
 ## Layout
@@ -149,9 +149,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 |---|---|---|
 | `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
-| `ANCHOR_NUDGE_ENFORCE=0` | on | disables the pre-compile nudge (first-edit Anchor Set reminder) |
-| `INTENT_ANCHOR_ENFORCE=0` | on | disables the thin-intent re-injection (per-turn `.scope.json` echo into `additional_context`) |
-| `MINIMAL_EDITING_ENFORCE=0` | on | disables the over-edit advisory (deprecated in 0.3.0) |
+| `INTENT_ANCHOR_ENFORCE=0` | on | disables the thin-intent `.scope.json` scaffold + re-injection |
 | `SCOPE_GATE_ENFORCE=0` | on | disables the declared-scope advisory (opt-in: only fires when `.scope.json` exists) |
 | `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |
 | `ANTI_SLOP_ENFORCE=0` | on | disables the slop advisory |
@@ -164,7 +162,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 
 - **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id. No repo litter. Concurrent sessions can't drain each other's prompts. Stale state older than 7 days gets swept on every stop.
 - **`afterFileEdit` output isn't consumed by Cursor**, so edit hooks write to a pending file and `post-tool-use` re-emits it at the next tool boundary. That's the whole message bus.
-- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation. The `anchor-set-nudge` latch is separate and simpler: it's cleared **unconditionally** on every stop, so the nudge re-fires on the first edit of each new turn and can never get stranded silenced mid-session.
+- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation. The `intent-anchor` per-turn latch is separate and simpler: it's cleared **unconditionally** on every stop, so the scaffold/re-inject re-fires on the first tool of each new turn and can never get stranded silenced mid-session.
 - **The `.scope.json` contract is opt-in.** No `.scope.json` in the repo root → `scope-gate-audit` stays silent and the system falls back to the `declared-editing` ladder plus the final-review footprint check. Writing the file is how the agent opts into a machine-checked scope.
 - **Subagents are first-class.** `afterFileEdit` fires inside subagents keyed by the subagent's conversation id. The harness normalizes agent edits (incl. `StrReplace`) to tool type `Write`, and `postToolUse` never fires for the `Task` tool — verified by payload capture. Matchers cover `Write|StrReplace|EditNotebook` defensively. `subagentStop` reviews the subagent in its own context. The parent folds orphaned subagent markers (from the `subagents/` transcript directory) into its own at every tool boundary and at stop.
 
