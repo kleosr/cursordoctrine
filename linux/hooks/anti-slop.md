@@ -50,5 +50,53 @@ Do not explain. If clean, say nothing.
  13. CHANGE SURFACE (Tier 5) — Did a simple request touch many files? Every
      file in the diff must trace to the task. Trim unrelated hunks.
 
+ 14. MIXED LEVELS OF ABSTRACTION (SLAP violation) — Does one function mix a DB
+     call, a string validation, and a date format? The model writes one blob
+     because it cannot see the layers. Stop: SLAP - one function, one level of
+     abstraction. Extract details to named helpers; the top function reads as a
+     recipe, the bottom functions do the work.
+
+ 15. PHANTOM STATE (temporal coupling) — Must callers invoke init() before
+     process()? Does the function break unless something else ran first? The
+     model never validates lifecycle. Stop: make state explicit - a state
+     machine, or a guard at the top of every public method that throws if the
+     object is not in the required state. No implicit call-order contracts.
+
+ 16. PRIMITIVE OBSESSION — Are you passing loose strings/numbers for things
+     that have rules (userId: string, email: string, amount: number)? The model
+     spreads primitives instead of value objects. Stop: if a primitive has
+     domain rules (validation, formatting, equality semantics), it is a named
+     type / value object, not a raw string. Stop at the boundary where it enters.
+
+ 17. LOOP-DRIVEN LOGIC (imperative where declarative fits) — Are you writing
+     for loops to transform arrays when the language has .map / .filter /
+     .reduce / list comprehensions? The model defaults to imperative mutation.
+     Stop: prefer pure higher-order functions for data transformation; reserve
+     for-loops for genuine early-exit, index-based, or perf-critical paths.
+
+ 18. ARROW CODE (deep nesting / código flecha) — Nesting more than two if/for
+     deep? The model nests because it cannot combine conditions, and the code
+     drifts off to the right into an arrow. Stop: GUARD CLAUSES (early returns).
+     If a condition fails, return immediately. The function reads top-to-bottom
+     with no deep indents. Flatten anything nested beyond two levels.
+
+ 19. SYMPTOM MASKING (parcheo de síntomas) — Papering over the cause:
+     `value ?? defaultValue` to hide a null that should never be null, or a
+     silent try/catch that swallows the error so the system "does not crash".
+     Stop: FAIL-FAST. A function that receives invalid state throws an explicit
+     Error - never catch just to hide. Fix WHY the value is null; do not paper
+     over it. A swallowed error is a deferred outage.
+
+ 20. BOOLEAN TRAP — A function takes a boolean to flip behavior
+     (`processData(data, true)`). The model does this instead of two named
+     functions. Stop: NO boolean behavior flags on public functions. If behavior
+     diverges it is a distinct function, or a Strategy / enum. Callers must read
+     what they get at the call site.
+
+ 21. SWITCH / IF-ELSE BLOAT — A giant switch or a long if/else-if chain of many
+     cases. The model maps states this way instead of dispatching. Stop:
+     DICTIONARY DISPATCH / MAP LOOKUP. A `Record<State, Handler>` (or Command
+     pattern) replaces the switch - a new case is one table row, not a new branch.
+
 Hard constraints: never revert what the USER asked for — slop is what got added
 on top. At most a few targeted edits, then stop.

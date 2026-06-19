@@ -74,5 +74,29 @@ Do not explain. If clean, say nothing.
      Stop: prefer pure higher-order functions for data transformation; reserve
      for-loops for genuine early-exit, index-based, or perf-critical paths.
 
+ 18. ARROW CODE (deep nesting / código flecha) — Nesting more than two if/for
+     deep? The model nests because it cannot combine conditions, and the code
+     drifts off to the right into an arrow. Stop: GUARD CLAUSES (early returns).
+     If a condition fails, return immediately. The function reads top-to-bottom
+     with no deep indents. Flatten anything nested beyond two levels.
+
+ 19. SYMPTOM MASKING (parcheo de síntomas) — Papering over the cause:
+     `value ?? defaultValue` to hide a null that should never be null, or a
+     silent try/catch that swallows the error so the system "does not crash".
+     Stop: FAIL-FAST. A function that receives invalid state throws an explicit
+     Error - never catch just to hide. Fix WHY the value is null; do not paper
+     over it. A swallowed error is a deferred outage.
+
+ 20. BOOLEAN TRAP — A function takes a boolean to flip behavior
+     (`processData(data, true)`). The model does this instead of two named
+     functions. Stop: NO boolean behavior flags on public functions. If behavior
+     diverges it is a distinct function, or a Strategy / enum. Callers must read
+     what they get at the call site.
+
+ 21. SWITCH / IF-ELSE BLOAT — A giant switch or a long if/else-if chain of many
+     cases. The model maps states this way instead of dispatching. Stop:
+     DICTIONARY DISPATCH / MAP LOOKUP. A `Record<State, Handler>` (or Command
+     pattern) replaces the switch - a new case is one table row, not a new branch.
+
 Hard constraints: never revert what the USER asked for — slop is what got added
 on top. At most a few targeted edits, then stop.

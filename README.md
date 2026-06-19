@@ -61,7 +61,7 @@ Restart Cursor after install — `hooks.json` is read at startup. `install` is i
 
 No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist. Copy commands are in the same file if you prefer doing it by hand.
 
-The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 13 items) is the canonical slop detector for per-edit advisories and final-review axis 4. Final review runs the scanner from the skill path first when it's there.
+The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector for per-edit advisories and final-review axis 4. Final review runs the scanner from the skill path first when it's there.
 
 ## The proactive phase: the Anchor Set
 

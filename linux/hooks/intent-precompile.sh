@@ -53,6 +53,16 @@ prompt="$(redact_secrets "$prompt")"
 cid="$(safe_conversation_id "$input")"
 pending_dir="$(hooks_pending_dir)"
 
+# --- stash the verbatim prompt FIRST (before root resolution) ----------------
+# beforeSubmitPrompt can ship a payload WITHOUT cwd/workspace_roots on some
+# Cursor builds. We must still capture the verbatim prompt so intent-anchor
+# (postToolUse, which DOES carry cwd) writes .scope.json with the RIGHT intent
+# on its first fire - instead of falling back to <user_query> parsing that can
+# be unreadable or contaminated by hook followups. The stash lives under
+# $HOME/.cursor/.hooks-pending (no repo root needed), so it is always safe.
+mkdir -p "$pending_dir" 2>/dev/null
+printf '%s' "$prompt" > "$(current_prompt_path "$cid")" 2>/dev/null
+
 # --- repo root (workspace_roots / cwd; NO $HOME fallback - no ghost files) ----
 root=""
 while IFS= read -r cand; do
@@ -65,10 +75,6 @@ if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" 
     root="${CURSOR_PROJECT_DIR%/}"
 fi
 [ -n "$root" ] || exit 0
-
-# --- stash the prompt so intent-anchor reads the same ground-truth text -------
-mkdir -p "$pending_dir" 2>/dev/null
-printf '%s' "$prompt" > "$(current_prompt_path "$cid")" 2>/dev/null
 
 # --- write / regenerate .scope.json (hash-gated) ------------------------------
 current_hash="$(sha256_hex "$prompt")"
