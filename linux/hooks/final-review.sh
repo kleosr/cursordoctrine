@@ -110,7 +110,7 @@ body="$(expand_agent_paths "$body")"
 # wrong diff. Reset its prior to the Anchor Set, not to its previous attempt.
 reentry_line="
 
-RE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, if you wrote one). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.
+RE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, maintained by the intent-anchor hook). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.
 "
 
 file_list=""

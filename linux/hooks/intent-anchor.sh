@@ -111,7 +111,9 @@ scope_exists=0
 scope_intent=""
 scope_acceptance=""
 scope_files=""
-scope_stale=0   # 1 if on-disk contract predates the current query
+scope_stale=0    # 1 when the on-disk contract belongs to a DIFFERENT prompt -> regenerate (resets files[])
+needs_heal=0     # 1 when a model-written contract matches THIS prompt but lacks _intent_hash -> backfill in place
+on_disk_hash=""
 scope_path="$root/.scope.json"
 if [ -f "$scope_path" ]; then
     # Prefer jq; fall back to python3 (mirrors hook-common.sh degrade policy).
@@ -137,21 +139,33 @@ except Exception:
 EOF
         [ $? -eq 0 ] && scope_exists=1 || scope_exists=0
     fi
-    # Stale if we have a query AND the on-disk _intent_hash differs from it.
-    if [ "$scope_exists" = "1" ] && [ "$has_query" = "1" ] && [ -n "$on_disk_hash" ]; then
-        [ "$on_disk_hash" != "$current_hash" ] && scope_stale=1
+    # Staleness, hash-agnostic so it survives MODEL-written contracts:
+    #   - hook-written (has _intent_hash): stale when that hash != current query hash.
+    #   - model-written (no _intent_hash - the legacy pre-compile.md schema): fall back to
+    #     $prompt_changed (current query hash != the per-conversation last-query hash). Prompt
+    #     changed (or a new session) => regenerate and RESET files[] (the "arrastre entre
+    #     features" fix). Same prompt this session => heal in place (backfill bookkeeping, keep
+    #     files[]/acceptance) so the NEXT prompt is detected by hash.
+    if [ "$scope_exists" = "1" ] && [ "$has_query" = "1" ]; then
+        if [ -n "$on_disk_hash" ]; then
+            [ "$on_disk_hash" != "$current_hash" ] && scope_stale=1
+        elif [ "$prompt_changed" = "1" ]; then
+            scope_stale=1
+        else
+            needs_heal=1
+        fi
     fi
 fi
 
-# --- auto-create / regenerate .scope.json -----------------------------------
+# --- auto-create / regenerate / heal .scope.json ----------------------------
 # CREATION does NOT require the query: if there's a root and no scope yet,
 # scaffold it NOW with intent=<TODO> (the agent fills it from the chat it's
 # already responding to). This was the 0.5.3 bug - creation was gated on
 # $hasQuery, so when Cursor didn't surface transcript_path in the first
 # postToolUse fire, the scope never got created.
-# REGENERATION does require the query: we can only detect a prompt change if
-# we can hash the current request. Without a query we leave an existing scope
-# alone (re-inject it) rather than blank it.
+# REGENERATION requires the query: a prompt change is only detectable when we
+# can read the request. A fresh scaffold resets files[] -> ".scope fresco por
+# prompt, sin arrastre entre features."
 regenerated=0
 should_create=0
 should_regen=0
@@ -159,28 +173,34 @@ should_regen=0
 if [ "$has_query" = "1" ] && [ "$scope_exists" = "1" ] && [ "$scope_stale" = "1" ]; then
     should_regen=1
 fi
+now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
 
 if [ "$should_create" = "1" ] || [ "$should_regen" = "1" ]; then
     # intent from the query when available, else a TODO for the agent to fill.
+    # trace.query records the verbatim originating request (provenance); empty
+    # when there is no transcript to read it from.
     if [ "$has_query" = "1" ]; then
         intent_val="$current_query"
+        trace_query="$current_query"
     else
         intent_val="<TODO: state the operational objective - what is strictly necessary>"
+        trace_query=""
     fi
-    # jq preferred; python3 fallback. Write intent, empty files[], TODO
-    # acceptance, and record _intent_hash so staleness is self-contained.
+    # jq preferred; python3 fallback. Write intent, empty files[], TODO acceptance,
+    # trace provenance, and _intent_hash so staleness is self-contained.
     if have_jq; then
-        jq -n --arg intent "$intent_val" --arg hash "$current_hash" \
-            '{intent:$intent, files:[], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
+        jq -n --arg intent "$intent_val" --arg hash "$current_hash" --arg tq "$trace_query" --arg ts "$now_ts" \
+            '{intent:$intent, files:[], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, trace:{query:$tq, ts:$ts}, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
             > "$scope_path" 2>/dev/null && regenerated=1
     elif have_py; then
-        if I_FILE="$scope_path" I_INTENT="$intent_val" I_HASH="$current_hash" python3 -c '
+        if I_FILE="$scope_path" I_INTENT="$intent_val" I_HASH="$current_hash" I_TQ="$trace_query" I_TS="$now_ts" python3 -c '
 import json, os
 obj = {
     "intent": os.environ["I_INTENT"],
     "files": [],
     "acceptance": "<TODO: the one deterministic check that decides done>",
     "allow_growth": False,
+    "trace": {"query": os.environ["I_TQ"], "ts": os.environ["I_TS"]},
     "_intent_hash": os.environ["I_HASH"],
     "_generated_by": "intent-anchor hook",
 }
@@ -196,6 +216,35 @@ with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
         scope_files="(auto-tracked - the scope hook records every file you edit)"
         scope_exists=1
         scope_stale=0
+    fi
+fi
+
+# HEAL a model-written contract that matches the current prompt but lacks the
+# hook's bookkeeping: backfill _intent_hash + trace + _generated_by IN PLACE,
+# preserving the model's files[] and acceptance. Without this a contract written
+# per the legacy pre-compile.md schema (no _intent_hash) can never go stale, so
+# the next prompt never regenerates - the carryover bug. Healing installs the
+# hash so the next prompt change is detected by hash like any hook contract.
+if [ "$needs_heal" = "1" ] && [ "$regenerated" != "1" ]; then
+    if have_jq; then
+        healed="$(jq --arg hash "$current_hash" --arg tq "$current_query" --arg ts "$now_ts" \
+            '._intent_hash = $hash | .trace //= {query:$tq, ts:$ts} | ._generated_by //= "intent-anchor hook (healed)"' \
+            "$scope_path" 2>/dev/null)"
+        [ -n "$healed" ] && printf '%s\n' "$healed" > "$scope_path"
+    elif have_py; then
+        I_FILE="$scope_path" I_HASH="$current_hash" I_TQ="$current_query" I_TS="$now_ts" python3 -c '
+import json, os, sys
+path = os.environ["I_FILE"]
+try:
+    d = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+d["_intent_hash"] = os.environ["I_HASH"]
+d.setdefault("trace", {"query": os.environ["I_TQ"], "ts": os.environ["I_TS"]})
+d.setdefault("_generated_by", "intent-anchor hook (healed)")
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+' 2>/dev/null
     fi
 fi
 

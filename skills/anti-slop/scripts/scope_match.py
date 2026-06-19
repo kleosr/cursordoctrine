@@ -8,12 +8,16 @@ declared-scope check (Step C), so the two never disagree on what counts as
 "in scope". It also surfaces the contract's `intent` and `acceptance` fields
 so the calling hook can quote them back to the agent.
 
-.scope.json schema (intent + files[] + acceptance + allow_growth):
+.scope.json schema (the intent-anchor hook owns this file; this matcher reads
+only intent/files/acceptance/allow_growth and ignores the hook bookkeeping):
   {
     "intent":       "one operational sentence of objective",
     "files":        [ "repo-relative globs", ... ],
     "acceptance":   "the deterministic check that decides success",
-    "allow_growth": false
+    "allow_growth": false,
+    "trace":        { "query": "originating request", "ts": "ISO-8601" },
+    "_intent_hash": "hook bookkeeping: sha256 of the request, drives per-prompt regen",
+    "_generated_by":"intent-anchor hook"
   }
 
 Pattern support:
