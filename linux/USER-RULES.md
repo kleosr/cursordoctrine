@@ -6,13 +6,15 @@ the task itself is a behavior change. Refactors, renames, cleanup only when
 asked. Leave generated files alone unless explicitly required.
 
 ## Intent contract (.scope.json)
-The harness auto-creates `.scope.json` in the repo root on your first tool of
-each turn, and re-injects it into your context every turn. Treat it as your
-operating contract, not optional:
-- On a fresh scaffold, FILL the `intent` and `acceptance` TODOs from the user's
-  request before editing source. `files[]` is auto-tracked - do not maintain it.
-- When the user's request changes, the scaffold regenerates with a new intent -
-  refill it for the new ask.
+The harness writes `.scope.json` to the repo root the moment you hit send -
+BEFORE your first token - with `intent` locked from the request, and re-injects
+it every turn. Treat it as your operating contract, not optional:
+- It is the FIRST thing that exists each turn; govern by it from your first action.
+  As your first edits, refine `intent` to your normalized restatement and SHARPEN
+  the seeded `acceptance` to the one deterministic check (it is a draft, not a
+  blank `<TODO>`). `files[]` is auto-tracked - do not maintain it.
+- When the user's request changes, the contract regenerates with the new intent -
+  refine it again for the new ask.
 - If a hook surfaces the contract, defer to it: it outranks momentum. Edit
   inside the declared scope; if you must grow it, justify it, don't sneak past.
 

@@ -10,7 +10,7 @@
 <div align="center">
   <h1>cursordoctrine</h1>
   <p><strong>Self-review hooks for Cursor — proactive and reactive.</strong></p>
-  <p>Five hook events, one message bus.<br />The model compiles its intent, audits its own work, and stays on the rails. Cursor carries context and gates blast radius.</p>
+  <p>Six hook events, one message bus.<br />The model compiles its intent, audits its own work, and stays on the rails. Cursor carries context and gates blast radius.</p>
 </div>
 
 <br />
@@ -21,7 +21,7 @@
 
 Cursor hooks that make the agent review its own edits without bolting a static-analysis pipeline onto every keystroke. No regex army, no scoring engine. Four jobs:
 
-1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*. `intent-anchor` materializes that as `.scope.json` on the first tool of each turn (auto-created, regenerated when the prompt changes) and re-injects it into context every turn, so the contract stays in focus against Salience Dilution.
+1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*. `intent-precompile` (`beforeSubmitPrompt`) materializes that as `.scope.json` the moment you hit send — **before the agent's first token** — with `intent` locked from the request and `acceptance` seeded (never a bare `<TODO>`), so the contract is the first artifact of the turn. `intent-anchor` then re-injects it into context every turn (regenerated when the prompt changes), so it stays in focus against Salience Dilution.
 2. **Inject the doctrine** at session start — every chat starts with the same short governing text (`doctrine.md`, `USER-RULES.md`, `declared-editing.md` the YAGNI ultra ladder, and `pre-compile.md` the thin intent-compilation phase).
 3. **Hand the model its own edits back** (reactive) — after each agent edit, a self-review prompt goes into a pending file (plus semantic-density, scope-gate, and anti-slop advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
 4. **Gate blast radius** — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else passes.
@@ -90,31 +90,31 @@ Two machine-checkable consequences:
 - **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) audits every edit against `files[]` and quotes `intent` + `acceptance` back on a violation. Editing outside the declared set is the textbook scope-creep signal.
 - **final-review axis 0** (intent trace) traces every diff hunk back to `intent`. Anything untraceable is a hallucinated requirement.
 
-On the **first tool of each agent turn**, `intent-anchor` materializes the Anchor Set: it writes `.scope.json` to the repo root (regenerating it when the prompt changed) and re-injects it into context. One scaffold per prompt, re-injection per turn. The latch is armed on first fire and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-fires and can never get stranded silenced mid-session.
+**Before the agent's first token**, `intent-precompile` (`beforeSubmitPrompt`) materializes the Anchor Set: the moment you hit send it writes `.scope.json` to the repo root with `intent` locked from the prompt (which is in the event payload directly) and `acceptance` seeded with a real default — so the contract is the first artifact of the turn. `intent-anchor` (`postToolUse`) then re-injects it into context on the first tool boundary. One contract per prompt, re-injection per turn. The intent-anchor latch is armed on first fire and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-fires and can never get stranded silenced mid-session.
 
 The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declared-editing.md` ladder's rung 1 governs when it's overkill.
 
-### Keeping the contract alive: `intent-anchor` (anti-Salience-Dilution)
+### Contract first, then kept alive: `intent-precompile` + `intent-anchor`
 
-Writing `.scope.json` once is not enough. As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against the recent history — *Salience Dilution* — and the agent stops checking the contract it wrote at prompt 1. It forgets symmetry, colors, the acceptance bar. Re-injecting the contract every turn is what defeats this: the requirements are re-stated in front of the model before each edit, not just written once and hoped-for.
+The contract has to exist *before* the agent edits and stay in focus *as* it edits. Two hooks, two jobs:
 
-`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) does two things on the **first tool boundary of every turn** (per-turn latch, cleared unconditionally at each stop):
+**`intent-precompile` (`beforeSubmitPrompt`) — write it first.** This event fires right after the user hits send, before the backend request, with the user's `prompt` in the payload directly — no `<user_query>` extraction, no transcript dependency, no contamination from auto-submitted review followups. When the prompt is new (its `_intent_hash` differs from the contract on disk) it writes a fresh `.scope.json`: `intent` locked from the prompt, `files: []`, `acceptance` seeded with a real default (never a bare `<TODO>` — a placeholder that looks owned and never gets filled was the old failure mode), `_intent_hash` for change detection. It also stashes the verbatim prompt so `intent-anchor` reads the *same* ground-truth text. Same prompt on disk → left intact, preserving the agent's refined `intent`/`acceptance`/`files`. Hook-generated submits are skipped.
 
-1. **Materialize the contract per prompt.** When the current `<user_query>` differs from the contract on disk (no contract yet, or its recorded `_intent_hash` doesn't match), the hook **writes a fresh `.scope.json` to the repo root**: `intent` locked from the prompt, `files`/`acceptance` as `<TODO>` placeholders the agent fills in. Every new prompt → a fresh contract the agent works from. Same prompt → no rewrite.
-2. **Re-inject the contract every turn.** Reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context`. The contract is back in the model's attentional focus at the start of each turn, before edits pile up and dilute it.
+**`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) — keep it alive.** As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against recent history — *Salience Dilution* — and the agent stops checking the contract. So on the first tool boundary of every turn (per-turn latch, cleared unconditionally at each stop) it reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context` — the contract back in attentional focus before edits pile up. It also **falls back to creating the contract** if `beforeSubmitPrompt` didn't run (older Cursor), and re-injects a loud demand each turn until the agent sharpens the seeded `acceptance` to the one deterministic check.
 
-> **The hook writes `.scope.json` deliberately.** This is the intended behavior: the contract must exist *before* the agent edits, and it must track the request. The agent fills the `<TODO>` placeholders (`files`, `acceptance`) on the first turn; the hook regenerates the scaffold when the prompt changes. Two real bugs in the earlier 0.4.4 build are fixed here: (a) **never writes to `$HOME`** — if the repo `cwd` can't be resolved the hook stays silent rather than drop a ghost file (bail instead of fallback); (b) **regenerates on prompt CHANGE, not on every turn** — staleness is tracked via `_intent_hash` stored in the file itself, so a same-prompt turn re-injects without rewriting.
+> **The hooks write `.scope.json` deliberately.** The contract must exist before the agent edits and track the request. Safeguards: (a) **never writes to `$HOME`** — if the repo root can't be resolved the hook stays silent rather than drop a ghost file; (b) **regenerates on prompt CHANGE, not every turn** — staleness is tracked via `_intent_hash` in the file, and `intent-precompile`/`intent-anchor` share one hashing helper so a same-prompt turn re-injects without rewriting; (c) **`trace.query` stays verbatim** as the audit anchor even when the agent normalizes `intent`.
 
 Crucially, `intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn — something the path-only `scope-gate-audit` can never do. That is what makes "the agent forgot about grid symmetry while editing the right file" catchable: the symmetry requirement is re-stated in front of the model before each edit, not just checked against a file list after.
 
-## The five flows
+## The flows
 
 | Flow | Event | What happens |
 |---|---|---|
+| Submit | `beforeSubmitPrompt` | **`intent-precompile`** writes `.scope.json` to the repo root from the prompt in the payload — **before the agent's first token** — with `intent` locked and `acceptance` seeded, and stashes the verbatim prompt for `intent-anchor`. Skips hook-generated auto-submits; hash-gated so the agent's refinements survive. |
 | Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing + **pre-compile** and emits them as `additional_context`. |
-| Every turn | `postToolUse` | **`intent-anchor`** (registered first) re-injects `.scope.json` into `additional_context` at the first tool boundary of each turn — the anti-Salience-Dilution move that keeps `intent` + `acceptance` in the model's attentional focus before edits pile up. If the prompt changed since last turn, it demands the contract be updated. Then `post-tool-use` folds subagent markers and drains the feedback file. |
+| Every turn | `postToolUse` | **`intent-anchor`** (registered first) re-injects `.scope.json` into `additional_context` at the first tool boundary of each turn — the anti-Salience-Dilution move that keeps `intent` + `acceptance` in the model's attentional focus before edits pile up, and demands the seeded `acceptance` be sharpened. Then `post-tool-use` folds subagent markers and drains the feedback file. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
-| Edit | `afterFileEdit` + `stop` | **Proactive:** `intent-anchor` (`postToolUse`) scaffolds `.scope.json` per prompt and re-injects it each turn. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation seven-axis pass. |
+| Edit | `afterFileEdit` + `stop` | **Proactive:** `intent-precompile` writes the contract per prompt; `intent-anchor` re-injects it each turn. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation seven-axis pass. |
 | Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
 
 ## Layout

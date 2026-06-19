@@ -39,6 +39,45 @@ function Get-HooksPendingDir {
     return Join-Path $HOME '.cursor\.hooks-pending'
 }
 
+# SHA-256 hex of a string. SHARED so intent-precompile (beforeSubmitPrompt) and
+# intent-anchor (postToolUse) hash the SAME text the SAME way - otherwise the two
+# disagree on the contract's _intent_hash and the postToolUse hook needlessly
+# regenerates the scope the prompt hook just wrote.
+function Get-Sha256Hex([string]$text) {
+    if ($null -eq $text) { $text = '' }
+    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    return (-join ($hasher.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }))
+}
+
+# Path where the beforeSubmitPrompt hook stashes the verbatim user prompt for the
+# turn, keyed by conversation. intent-anchor PREFERS this over transcript parsing:
+# it is the ground-truth request captured directly from the payload (no <user_query>
+# extraction, no hook-followup contamination, available on the FIRST postToolUse
+# of the turn instead of whenever the transcript happens to become readable).
+function Get-CurrentPromptPath([string]$cid) {
+    return Join-Path (Get-HooksPendingDir) "current-prompt-$cid.txt"
+}
+
+# Read the stashed prompt for this conversation ('' if none). The stash only ever
+# holds real human prompts - intent-precompile filters hook-generated submits.
+function Get-StashedPrompt([string]$cid) {
+    $p = Get-CurrentPromptPath $cid
+    if (Test-Path -LiteralPath $p) {
+        $t = Get-Content -LiteralPath $p -Raw -ErrorAction SilentlyContinue
+        if ($t) { return $t.TrimEnd("`r", "`n") }
+    }
+    return ''
+}
+
+# Default acceptance the hook seeds so .scope.json NEVER ships a bare "<TODO>"
+# placeholder (the thing that looks broken and never gets filled). It is a real,
+# verifiable bar derived from intent; the agent sharpens it to the single
+# deterministic check. Kept in ONE place so both hooks emit the identical string.
+function Get-DefaultAcceptance {
+    return 'Every change traces to intent; the project typecheck/build and any *.selfcheck pass, and the described problem no longer reproduces. (Sharpen to the one deterministic check.)'
+}
+
 function Test-IsCursorConfigPath([string]$path) {
     if (-not $path) { return $false }
     return ($path -match '(^|[\\/])\.cursor([\\/]|$)')
