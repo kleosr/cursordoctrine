@@ -119,7 +119,7 @@ $body = Expand-AgentPaths $body
 # Regla R1 (re-entry): if this review pass is a re-audit after a failed gate or
 # axis, suppress History Propagation - the model must NOT build on its own prior
 # wrong diff. Reset its prior to the Anchor Set, not to its previous attempt.
-$reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, if you wrote one). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.`n"
+$reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, maintained by the intent-anchor hook). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.`n"
 
 $resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
 $fileList = ($resolved | Select-Object -First 30) -join "`n  "

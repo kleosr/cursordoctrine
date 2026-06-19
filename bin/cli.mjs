@@ -408,6 +408,56 @@ function verify() {
     if (!scope._generated_by || !scope._intent_hash) {
       cleanup(); return { ok: false, detail: 'scaffold missing _generated_by / _intent_hash fields' };
     }
+
+    // --- Case C: MODEL-written scope (no _intent_hash) + a NEW prompt --------
+    // Reproduces the shipped bug (chiquipuesto/WAVE): the model wrote .scope.json
+    // per the legacy 4-field schema, so the hook could never detect staleness and
+    // scope-gate kept appending files across features. A new prompt (fresh cid =>
+    // promptChanged) must now REGENERATE and RESET files[].
+    const mkT = (p, q) => writeFileSync(p,
+      JSON.stringify({ role: 'user', message: { content: `<user_query>${q}</user_query>` } }) + '\n', 'utf8');
+    const cidC = 'npxv5';
+    const transcriptC = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv5.jsonl');
+    const failC = (detail) => { try { rmSync(transcriptC, { force: true }); } catch {} cleanup(); return { ok: false, detail }; };
+    try { rmSync(scopePath, { force: true }); } catch {}
+    writeFileSync(scopePath, JSON.stringify({ intent: q1, files: ['a.ts', 'b.ts'], acceptance: 'keep', allow_growth: false }, null, 2), 'utf8');
+    mkT(transcriptC, q2);
+    runHook(hook('intent-anchor'), { conversation_id: cidC, cwd: repoDir, transcript_path: transcriptC });
+    drainedOf(cidC);
+    let sc;
+    try { sc = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return failC('model-written scope corrupted after new prompt'); }
+    if (sc.intent !== q2) return failC(`carryover not regenerated (want "${q2}"): ${sc.intent}`);
+    if (!Array.isArray(sc.files) || sc.files.length !== 0) return failC(`files[] not reset on regen: ${JSON.stringify(sc.files)}`);
+    if (!sc._intent_hash) return failC('regen did not install _intent_hash');
+    if (!sc.trace || sc.trace.query !== q2) return failC('regen did not record trace.query');
+    runHook(hook('final-review'), { conversation_id: cidC, status: 'completed' });
+    rmSync(transcriptC, { force: true });
+
+    // --- Case D: MODEL-written scope (no _intent_hash) + the SAME prompt ------
+    // The model wrote the contract for THIS request this session. The hook must
+    // HEAL in place (backfill _intent_hash + trace) WITHOUT resetting files[] or
+    // acceptance, so the NEXT prompt change is detectable by hash.
+    const cidD = 'npxv6';
+    const transcriptD = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv6.jsonl');
+    const failD = (detail) => { try { rmSync(transcriptD, { force: true }); } catch {} cleanup(); return { ok: false, detail }; };
+    try { rmSync(scopePath, { force: true }); } catch {}
+    mkT(transcriptD, q1);
+    // prime last-query-<cidD>.hash with q1 (a hook-written scaffold), clear the
+    // latch, then overwrite with a model-style scope for the SAME prompt.
+    runHook(hook('intent-anchor'), { conversation_id: cidD, cwd: repoDir, transcript_path: transcriptD });
+    runHook(hook('final-review'), { conversation_id: cidD, status: 'completed' });
+    writeFileSync(scopePath, JSON.stringify({ intent: q1, files: ['a.ts', 'b.ts'], acceptance: 'keep me', allow_growth: false }, null, 2), 'utf8');
+    runHook(hook('intent-anchor'), { conversation_id: cidD, cwd: repoDir, transcript_path: transcriptD });
+    drainedOf(cidD);
+    let sd;
+    try { sd = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return failD('healed scope corrupted'); }
+    if (!sd._intent_hash) return failD('heal did not backfill _intent_hash');
+    if (!sd.trace) return failD('heal did not add trace');
+    if (!Array.isArray(sd.files) || sd.files.join(',') !== 'a.ts,b.ts') return failD(`heal reset files[] (should preserve): ${JSON.stringify(sd.files)}`);
+    if (sd.acceptance !== 'keep me') return failD(`heal clobbered acceptance: ${sd.acceptance}`);
+    runHook(hook('final-review'), { conversation_id: cidD, status: 'completed' });
+    rmSync(transcriptD, { force: true });
+
     cleanup();
     return true;
   });

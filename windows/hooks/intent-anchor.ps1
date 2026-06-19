@@ -109,7 +109,9 @@ $scopeExists = $false
 $scopeIntent = ''
 $scopeAcceptance = ''
 $scopeFiles = ''
-$scopeStale = $false   # true if the on-disk contract predates the current query
+$scopeStale = $false    # true when the on-disk contract belongs to a DIFFERENT prompt -> regenerate (resets files[])
+$needsHeal = $false     # true when a model-written contract matches THIS prompt but lacks _intent_hash -> backfill in place
+$scopeHasHash = $false
 $scopePath = Join-Path $root '.scope.json'
 if (Test-Path -LiteralPath $scopePath) {
     try {
@@ -119,40 +121,56 @@ if (Test-Path -LiteralPath $scopePath) {
         if ($sj.files)      { $scopeFiles = (@($sj.files) -join ', ') }
         if ([string]::IsNullOrWhiteSpace($scopeFiles)) { $scopeFiles = '(none yet - auto-tracked as you edit)' }
         $scopeExists = $true
-        # The contract is "stale" if its recorded intent hash != current query
-        # hash. We persist the query hash inside .scope.json under _intent_hash
-        # so staleness survives even if last-query-<cid>.hash was swept.
-        if ($hasQuery -and $sj.PSObject.Properties['_intent_hash']) {
-            $scopeStale = ([string]$sj._intent_hash -ne $currentHash)
+        $scopeHasHash = ($sj.PSObject.Properties['_intent_hash'] -and -not [string]::IsNullOrWhiteSpace([string]$sj._intent_hash))
+        # Staleness, hash-agnostic so it survives MODEL-written contracts:
+        #   - hook-written (has _intent_hash): stale when that hash != current query hash.
+        #   - model-written (no _intent_hash - the legacy pre-compile.md schema): we cannot
+        #     hash-compare, so fall back to $promptChanged (current query hash != the per-
+        #     conversation last-query hash). Prompt changed (or a new session) => stale ->
+        #     regenerate and RESET files[]; this is the "arrastre entre features" fix (a model-
+        #     written scope could never go stale, so it never refreshed and scope-gate kept
+        #     appending files across unrelated features). Same prompt this session => the model
+        #     wrote it for THIS request; heal in place (backfill the bookkeeping, keep its
+        #     files[]/acceptance) so the NEXT prompt is detected by hash like any hook contract.
+        if ($hasQuery) {
+            if ($scopeHasHash) {
+                $scopeStale = ([string]$sj._intent_hash -ne $currentHash)
+            } elseif ($promptChanged) {
+                $scopeStale = $true
+            } else {
+                $needsHeal = $true
+            }
         }
     } catch { $scopeExists = $false }   # malformed JSON -> treat as missing
 }
 
-# --- auto-create / regenerate .scope.json -----------------------------------
+# --- auto-create / regenerate / heal .scope.json ----------------------------
 # CREATION does NOT require the query: if there's a root and no scope yet,
 # scaffold it NOW with intent=<TODO> (the agent fills it from the chat it's
 # already responding to). This was the 0.5.3 bug - creation was gated on
 # $hasQuery, so when Cursor didn't surface transcript_path in the first
 # postToolUse fire, the scope never got created. The agent never had a
 # contract to work from.
-# REGENERATION does require the query: we can only detect a prompt change if
-# we can hash the current request. Without a query we leave an existing scope
-# alone (re-inject it) rather than blank it.
+# REGENERATION requires the query: a prompt change is only detectable when we
+# can read the request. A fresh scaffold resets files[] -> ".scope fresco por
+# prompt, sin arrastre entre features."
 $regenerated = $false
 $shouldCreate = -not $scopeExists
 $shouldRegen  = $hasQuery -and $scopeExists -and $scopeStale
 if ($shouldCreate -or $shouldRegen) {
     try {
-        $intentVal = if ($hasQuery) { $currentQuery } else { '<TODO: state the operational objective - what is strictly necessary>' }
+        $intentVal  = if ($hasQuery) { $currentQuery } else { '<TODO: state the operational objective - what is strictly necessary>' }
+        $traceQuery = if ($hasQuery) { $currentQuery } else { '' }
         $scaffold = [ordered]@{
             intent        = $intentVal
             files         = @()
             acceptance    = '<TODO: the one deterministic check that decides done>'
             allow_growth  = $false
+            trace         = [ordered]@{ query = $traceQuery; ts = (Get-Date).ToString('o') }
             _intent_hash  = $currentHash
             _generated_by = 'intent-anchor hook'
         }
-        $json = $scaffold | ConvertTo-Json -Depth 5
+        $json = $scaffold | ConvertTo-Json -Depth 8
         [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
         $scopeIntent     = $intentVal
         $scopeAcceptance = '<TODO: the one deterministic check that decides done>'
@@ -161,6 +179,26 @@ if ($shouldCreate -or $shouldRegen) {
         $scopeStale      = $false
         $regenerated     = $true
     } catch { }   # write failed (perms / locked) -> fall through to demand msg
+}
+
+# HEAL a model-written contract that matches the current prompt but lacks the
+# hook's bookkeeping: backfill _intent_hash + trace + _generated_by IN PLACE,
+# preserving the model's files[] and acceptance. Without this, a contract written
+# per pre-compile.md (no _intent_hash) can never go stale, so the next prompt
+# never regenerates - the carryover bug. Healing installs the hash so the next
+# prompt change is detected by hash like any hook-written contract.
+if ($needsHeal -and -not $regenerated) {
+    try {
+        $ordered = [ordered]@{}
+        foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
+        if (-not $ordered.Contains('trace')) {
+            $ordered['trace'] = [ordered]@{ query = $currentQuery; ts = (Get-Date).ToString('o') }
+        }
+        $ordered['_intent_hash'] = $currentHash
+        if (-not $ordered.Contains('_generated_by')) { $ordered['_generated_by'] = 'intent-anchor hook (healed)' }
+        $json = $ordered | ConvertTo-Json -Depth 8
+        [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+    } catch { }
 }
 
 # --- compose the anchor message ---------------------------------------------
