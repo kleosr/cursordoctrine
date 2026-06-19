@@ -9,12 +9,34 @@ This is the proactive phase. The anti-slop checklist, the self-review trigger
 and the final review are reactive — they audit after the fact. You compile the
 intent BEFORE the first token of code so they have the right thing to audit.
 
+## Step 0 — Restate the request (the user writes fast; you normalize)
+
+Before the Anchor Set, in ONE line, play the request back as you understood it:
+
+> **Understood as:** _one clean sentence — grammar fixed, pronouns resolved,
+> implicit constraints made explicit, in the language of the request._
+
+Mandatory every implementation turn. This line is the user's catch-point: a
+misread surfaces HERE, before you write a line of code, instead of in review.
+The restatement is **meaning-preserving** — you normalize phrasing, you do NOT
+add scope, drop a constraint, or invent a requirement. If normalizing would
+force a guess that changes what "correct" means, you do not bury the guess in
+the restatement — you ask one sharp question (§5) and wait.
+
+The user's verbatim words stay the ground truth: `.scope.json`'s `trace.query`
+keeps them exactly as typed, and final-review traces every diff hunk back to
+THAT, not to your paraphrase. Your normalized sentence becomes `intent` (and the
+Anchor Set's OBJECTIVE below). The two must say the same thing in different
+words — if you cannot make `intent` and `trace.query` agree, you have misread
+the request, and that is the bug to fix first.
+
 ## The Anchor Set
 
 Answer these four, terse, in your first response. One phrase each, not prose:
 
-1. OBJECTIVE — one operational sentence. What is *strictly* necessary. Not
-   "improve X" — "make X return Y when Z".
+1. OBJECTIVE — your Step 0 restatement, tightened to the operational verb. One
+   sentence, what is *strictly* necessary. Not "improve X" — "make X return Y
+   when Z".
 2. CONSTRAINTS (local negations) — what you will NOT do. "NO schema migration.
    NO new dependency. NO refactor of the surrounding function." Negations bind
    harder than the objective: a constraint that the task contradicts is a bug
@@ -33,28 +55,36 @@ Answer these four, terse, in your first response. One phrase each, not prose:
 
 The `intent-anchor` hook creates and maintains `.scope.json` in the repo root for
 you, automatically, on the first tool of every turn:
-  - `intent` is locked from your current request and REFRESHED when the request
+  - `intent` is seeded from your verbatim request and REFRESHED when the request
     changes — a new prompt regenerates the contract and resets `files[]`, so it
     never carries over between features;
   - `files[]` is auto-recorded — the scope hook appends every file you edit, so
     you never maintain it by hand;
-  - `trace`, `_intent_hash`, `_generated_by` are hook bookkeeping (provenance and
-    change detection). Leave them alone.
+  - `trace.query` is the VERBATIM request (the audit anchor), `_intent_hash` and
+    `_generated_by` are hook bookkeeping. Leave all three alone.
 
-Your one job on the contract: set **`acceptance`** — the single deterministic check
-that decides done — which the hook cannot derive. Edit ONLY that field (a targeted
-string replace). Do **NOT** rewrite the whole file: overwriting it drops the hook's
-`_intent_hash`/`trace`, which disables per-prompt regeneration and brings back the
-cross-feature carryover. The scope-gate hook audits every edit against `files[]`,
-and final-review axis 0 traces every diff hunk back to `intent`.
+Your two targeted edits on the contract (each a string replace on ONE field, never
+a whole-file rewrite):
+  - **`intent`** → replace the verbatim seed with your Step 0 restatement: the
+    normalized, meaning-preserving sentence. This is what final-review axis 0
+    traces each diff hunk against, so a clean `intent` makes the audit sharp.
+  - **`acceptance`** → set the single deterministic check that decides done, which
+    the hook cannot derive.
+
+Do **NOT** touch `trace.query`, `_intent_hash`, or `_generated_by`, and do **NOT**
+rewrite the whole file: `_intent_hash` is computed from the verbatim `trace.query`,
+not from `intent`, so refining `intent` is safe — but dropping the hash/trace
+disables per-prompt regeneration and brings back cross-feature carryover. Keeping
+`trace.query` verbatim is what lets the audit catch a paraphrase that quietly
+changed the meaning: `intent` and `trace.query` must agree.
 
 ```json
 {
-  "intent":       "<locked from your request by the hook>",
+  "intent":       "<YOU refine this: your normalized Step 0 restatement>",
   "files":        ["<auto-recorded by the hook as you edit>"],
   "acceptance":   "<YOU set this: the deterministic check that decides done>",
   "allow_growth": false,
-  "trace":        { "query": "<originating request>", "ts": "<when>" },
+  "trace":        { "query": "<VERBATIM request - the hook owns this, leave it>", "ts": "<when>" },
   "_intent_hash": "<hook bookkeeping>",
   "_generated_by":"intent-anchor hook"
 }
