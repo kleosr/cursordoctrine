@@ -74,19 +74,20 @@ fi
 # Already injected this turn -> quiet. Latch cleared at every stop.
 [ -f "$latch" ] && exit 0
 
-# --- current request (best-effort; absent in sandboxed runs) -----------------
-current_query="$(extract_last_user_query "$input")"
+# --- current request ---------------------------------------------------------
+# PREFER the prompt stashed by intent-precompile (beforeSubmitPrompt): ground-truth
+# request from the payload, present on the FIRST postToolUse, immune to <user_query>
+# contamination. Fall back to transcript parsing only when the prompt hook did not
+# run. Both share sha256_hex so _intent_hash is consistent across the two hooks.
+current_query="$(stashed_prompt "$cid")"
+[ -n "$current_query" ] || current_query="$(extract_last_user_query "$input")"
 has_query=0
 [ -n "$current_query" ] && has_query=1
 
 current_hash=""
 prompt_changed=0
 if [ "$has_query" = "1" ]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-        current_hash="$(printf '%s' "$current_query" | sha256sum | awk '{print $1}')"
-    elif command -v shasum >/dev/null 2>&1; then
-        current_hash="$(printf '%s' "$current_query" | shasum -a 256 | awk '{print $1}')"
-    fi
+    current_hash="$(sha256_hex "$current_query")"
     prev_hash=""
     [ -f "$hash_file" ] && prev_hash="$(cat "$hash_file" 2>/dev/null)"
     [ "$current_hash" != "$prev_hash" ] && prompt_changed=1
@@ -196,19 +197,21 @@ if [ "$should_create" = "1" ] || [ "$should_regen" = "1" ]; then
     # Both paths require $has_query, so intent is always locked from the request.
     intent_val="$current_query"
     trace_query="$current_query"
-    # jq preferred; python3 fallback. Write intent, empty files[], TODO acceptance,
-    # trace provenance, and _intent_hash so staleness is self-contained.
+    default_acc="$(default_acceptance)"
+    # jq preferred; python3 fallback. Write intent, empty files[], a real seeded
+    # acceptance (never a bare <TODO>), trace provenance, and _intent_hash so
+    # staleness is self-contained.
     if have_jq; then
-        jq -n --arg intent "$intent_val" --arg hash "$current_hash" --arg tq "$trace_query" --arg ts "$now_ts" \
-            '{intent:$intent, files:[], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, trace:{query:$tq, ts:$ts}, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
+        jq -n --arg intent "$intent_val" --arg hash "$current_hash" --arg tq "$trace_query" --arg ts "$now_ts" --arg acc "$default_acc" \
+            '{intent:$intent, files:[], acceptance:$acc, allow_growth:false, trace:{query:$tq, ts:$ts}, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
             > "$scope_path" 2>/dev/null && regenerated=1
     elif have_py; then
-        if I_FILE="$scope_path" I_INTENT="$intent_val" I_HASH="$current_hash" I_TQ="$trace_query" I_TS="$now_ts" python3 -c '
+        if I_FILE="$scope_path" I_INTENT="$intent_val" I_HASH="$current_hash" I_TQ="$trace_query" I_TS="$now_ts" I_ACC="$default_acc" python3 -c '
 import json, os
 obj = {
     "intent": os.environ["I_INTENT"],
     "files": [],
-    "acceptance": "<TODO: the one deterministic check that decides done>",
+    "acceptance": os.environ["I_ACC"],
     "allow_growth": False,
     "trace": {"query": os.environ["I_TQ"], "ts": os.environ["I_TS"]},
     "_intent_hash": os.environ["I_HASH"],
@@ -222,7 +225,7 @@ with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
     fi
     if [ "$regenerated" = "1" ]; then
         scope_intent="$intent_val"
-        scope_acceptance="<TODO: the one deterministic check that decides done>"
+        scope_acceptance="$default_acc"
         scope_files="(auto-tracked - the scope hook records every file you edit)"
         scope_exists=1
         scope_stale=0
@@ -271,6 +274,17 @@ else
     query_line="(current request unavailable - no transcript in this event)"
 fi
 
+# acceptance is seeded with a real default (never a bare <TODO>), but the default
+# is generic - the contract is not fully set until the agent sharpens it to the
+# ONE deterministic check. Detect the unsharpened state -> loud demand each turn.
+acceptance_demand=""
+case "$scope_acceptance" in
+    "<TODO"*|*"Sharpen to the one deterministic check"*)
+        acceptance_demand="
+
+>> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work." ;;
+esac
+
 if [ "$regenerated" = "1" ]; then
     msg="INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
 
@@ -280,9 +294,9 @@ if [ "$regenerated" = "1" ]; then
 
 The hook wrote a fresh scaffold to $scope_path from your current request. intent
 is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
-records every file you edit, so do not maintain it by hand. Set acceptance to
-the one deterministic check that decides done, THEN proceed. This contract will
-be re-injected every turn until your request changes again."
+records every file you edit, so do not maintain it by hand. acceptance is seeded
+with a sensible default; sharpen it to the one deterministic check, THEN proceed.
+This contract will be re-injected every turn until your request changes again.$acceptance_demand"
 elif [ "$scope_exists" != "1" ] || [ "$scope_hollow" = "1" ]; then
     if [ "$scope_hollow" = "1" ]; then
         state="the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)"
@@ -316,7 +330,7 @@ else
   acceptance: $scope_acceptance
 
 $drift_note If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum."
+and reconcile - the contract outranks momentum.$acceptance_demand"
 fi
 
 # --- stash to the feedback bus (drained by post-tool-use.sh) -----------------

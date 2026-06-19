@@ -76,11 +76,13 @@ echo '{"conversation_id":"t1","status":"completed"}' | bash ~/.agents/hooks/fina
 echo '{"conversation_id":"t2","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
 echo '{"conversation_id":"t2","status":"completed"}' | bash ~/.agents/hooks/subagent-stop-review.sh  # expect {"followup_message": "SUBAGENT FINAL REVIEW ..."} once, then {}
 echo '{"conversation_id":"t2"}'       | bash ~/.agents/hooks/post-tool-use.sh     # drain t2's leftover feedback file
-# intent-anchor: writes .scope.json from the current prompt and re-injects it.
-# Needs a repo root in cwd (it will NOT write to $HOME - that's the guard).
+# intent-precompile: writes .scope.json from the prompt BEFORE the first token.
+# Needs a repo root (workspace_roots/cwd; it will NOT write to $HOME - that's the guard).
+echo '{"conversation_id":"t3","cwd":"/tmp","prompt":"fix the dashboard bug"}' | bash ~/.agents/hooks/intent-precompile.sh
+cat /tmp/.scope.json                                                         # expect intent="fix the dashboard bug", a seeded acceptance (no <TODO>)
+# intent-anchor: re-injects the contract (and is the fallback creator).
 echo '{"conversation_id":"t3","cwd":"/tmp","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/intent-anchor.sh
-cat /tmp/.scope.json                                                         # expect a JSON scaffold with intent placeholder
-echo '{"conversation_id":"t3"}'       | bash ~/.agents/hooks/post-tool-use.sh # expect additional_context with the scaffold
+echo '{"conversation_id":"t3"}'       | bash ~/.agents/hooks/post-tool-use.sh # expect additional_context with the contract
 echo '{}' | bash ~/.cursor/inject-doctrine.sh                                # expect {"additional_context": ...}
 python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help               # expect usage text (final review's scanner)
 rm -f /tmp/.scope.json                                                        # cleanup the test scaffold
@@ -97,11 +99,13 @@ Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME
 echo '{"command":"git push --force"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\permission-gate.ps1
 echo '{"conversation_id":"t2","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\self-review-trigger.ps1
 echo '{"conversation_id":"t2","status":"completed"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\subagent-stop-review.ps1  # SUBAGENT FINAL REVIEW once, then {}
-# intent-anchor: writes .scope.json from the current prompt and re-injects it.
-# Needs a repo root in cwd (it will NOT write to $HOME - that's the guard).
+# intent-precompile: writes .scope.json from the prompt BEFORE the first token.
+# Needs a repo root (workspace_roots/cwd; it will NOT write to $HOME - that's the guard).
+echo '{"conversation_id":"t3","cwd":"C:\tmp","prompt":"fix the dashboard bug"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\intent-precompile.ps1
+Get-Content C:\tmp\.scope.json                                            # expect intent="fix the dashboard bug", a seeded acceptance (no <TODO>)
+# intent-anchor: re-injects the contract (and is the fallback creator).
 echo '{"conversation_id":"t3","cwd":"C:\tmp","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\intent-anchor.ps1
-Get-Content C:\tmp\.scope.json                                            # expect a JSON scaffold with intent placeholder
-echo '{"conversation_id":"t3"}'  | pwsh.exe -NoProfile -File $HOME\.agents\hooks\post-tool-use.ps1  # additional_context with the scaffold
+echo '{"conversation_id":"t3"}'  | pwsh.exe -NoProfile -File $HOME\.agents\hooks\post-tool-use.ps1  # additional_context with the contract
 python $HOME\.cursor\skills\anti-slop\scripts\scan_slop.py --help
 Remove-Item C:\tmp\.scope.json -Force                                     # cleanup the test scaffold
 ```
@@ -112,7 +116,7 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 
 1. Restart Cursor (hooks.json is read at startup).
 2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §2; ask "what is the Anchor Set?" and it should answer from `pre-compile.md` (Objective / Constraints / Scope / Deterministic success).
-3. Have the agent make a small edit to a tracked file. On the next turn it should receive a `SELF-REVIEW TRIGGER` message, and `intent-anchor` should have written `.scope.json` to the repo root (intent from your prompt, `<TODO>` placeholders for files/acceptance). The scaffold regenerates when your prompt changes and is re-injected every turn.
+3. Send a prompt. `.scope.json` should appear in the repo root **immediately** (before the agent's first edit), written by `intent-precompile` with `intent` from your prompt and a seeded `acceptance` (not a bare `<TODO>`). Have the agent make a small edit: on the next turn it should receive a `SELF-REVIEW TRIGGER` message, and `intent-anchor` re-injects the contract. The contract regenerates when your prompt changes.
 4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
 6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)

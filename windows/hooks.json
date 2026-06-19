@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-precompile.ps1",
+        "timeout": 5,
+        "_comment": "5s: CONTRACT FIRST. Fires right after the user hits send, BEFORE the agent's first token, with the user's `prompt` in the payload directly. Writes/regenerates .scope.json (intent locked from the prompt, acceptance seeded with a real default - never a bare <TODO>) so the contract is the FIRST artifact of the turn instead of appearing late once postToolUse can read the transcript. Also stashes the verbatim prompt to current-prompt-<cid>.txt so intent-anchor (postToolUse) re-injects from the SAME ground-truth text - no <user_query> contamination, no _intent_hash fights. Skips hook-generated auto-submits (FINAL REVIEW / SUBAGENT / SELF-REVIEW). Hash-gated: same prompt on disk -> left intact (preserves the agent's refined intent/acceptance/files). Never blocks submission, always exits 0. Disable: HOOKS_ENFORCE=0 or INTENT_ANCHOR_ENFORCE=0."
+      }
+    ],
     "sessionStart": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.cursor/inject-doctrine.ps1",

@@ -76,16 +76,21 @@ if (Test-Path $latch) {
 # Already injected this turn -> quiet. Latch cleared at every stop.
 if (Test-Path $latch) { exit 0 }
 
-# --- current request (best-effort; absent in sandboxed runs) -----------------
-$currentQuery = Get-LastUserQuery $obj
+# --- current request ---------------------------------------------------------
+# PREFER the prompt stashed by intent-precompile (beforeSubmitPrompt): it is the
+# verbatim request captured straight from the payload, available on the FIRST
+# postToolUse of the turn and immune to <user_query> contamination. Fall back to
+# transcript parsing only when the prompt hook did not run (older Cursor without
+# beforeSubmitPrompt, or a sandboxed run). Both sources share Get-Sha256Hex so
+# the contract's _intent_hash is consistent across the two hooks.
+$currentQuery = Get-StashedPrompt $cid
+if ([string]::IsNullOrWhiteSpace($currentQuery)) { $currentQuery = Get-LastUserQuery $obj }
 $hasQuery = -not [string]::IsNullOrWhiteSpace($currentQuery)
 
 $currentHash = ''
 $promptChanged = $false
 if ($hasQuery) {
-    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($currentQuery)
-    $hasher = [System.Security.Cryptography.SHA256]::Create()
-    $currentHash = -join ($hasher.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+    $currentHash = Get-Sha256Hex $currentQuery
     $prevHash = ''
     if (Test-Path $hashFile) { $prevHash = (Get-Content $hashFile -Raw -ErrorAction SilentlyContinue).Trim() }
     $promptChanged = ($currentHash -ne $prevHash)
@@ -180,10 +185,11 @@ if ($shouldCreate -or $shouldRegen) {
     try {
         $intentVal  = $currentQuery
         $traceQuery = $currentQuery
+        $defaultAcceptance = Get-DefaultAcceptance
         $scaffold = [ordered]@{
             intent        = $intentVal
             files         = @()
-            acceptance    = '<TODO: the one deterministic check that decides done>'
+            acceptance    = $defaultAcceptance
             allow_growth  = $false
             trace         = [ordered]@{ query = $traceQuery; ts = (Get-Date).ToString('o') }
             _intent_hash  = $currentHash
@@ -192,7 +198,7 @@ if ($shouldCreate -or $shouldRegen) {
         $json = $scaffold | ConvertTo-Json -Depth 8
         [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
         $scopeIntent     = $intentVal
-        $scopeAcceptance = '<TODO: the one deterministic check that decides done>'
+        $scopeAcceptance = $defaultAcceptance
         $scopeFiles      = '(auto-tracked - the scope hook records every file you edit)'
         $scopeExists     = $true
         $scopeStale      = $false
@@ -225,6 +231,15 @@ if ($needsHeal -and -not $regenerated) {
 # to scaffold from), or re-injecting an existing current contract.
 $queryLine = if ($hasQuery) { $currentQuery } else { '(current request unavailable - no transcript in this event)' }
 
+# acceptance is seeded with a real default (never a bare <TODO>), but the default
+# is generic - the contract is not "done being set up" until the agent sharpens it
+# to the ONE deterministic check. Detect the unsharpened state and make it a loud,
+# repeated demand each turn until the agent replaces it.
+$acceptanceUnsharpened = ($scopeAcceptance -match '^\s*<TODO' -or $scopeAcceptance -eq (Get-DefaultAcceptance) -or $scopeAcceptance -match 'Sharpen to the one deterministic check')
+$acceptanceDemand = if ($acceptanceUnsharpened) {
+    "`n`n>> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work."
+} else { '' }
+
 if ($regenerated) {
     $msg = @"
 INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
@@ -235,9 +250,9 @@ INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
 
 The hook wrote a fresh scaffold to $scopePath from your current request. intent
 is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
-records every file you edit, so do not maintain it by hand. Set acceptance to
-the one deterministic check that decides done, THEN proceed. This contract will
-be re-injected every turn until your request changes again.
+records every file you edit, so do not maintain it by hand. acceptance is seeded
+with a sensible default; sharpen it to the one deterministic check, THEN proceed.
+This contract will be re-injected every turn until your request changes again.$acceptanceDemand
 "@
 } elseif (-not $scopeExists -or $scopeHollow) {
     $state = if ($scopeHollow) { "the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)" } else { "no .scope.json found in $root, and the current request was unavailable to scaffold from" }
@@ -271,7 +286,7 @@ INTENT ANCHOR (re-injected this turn from .scope.json) - your contract. Do not d
   acceptance: $scopeAcceptance
 
 $driftNote If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum.
+and reconcile - the contract outranks momentum.$acceptanceDemand
 "@
 }
 

@@ -53,23 +53,30 @@ Answer these four, terse, in your first response. One phrase each, not prose:
 
 ## Materialize it: .scope.json (the hook owns this file)
 
-The `intent-anchor` hook creates and maintains `.scope.json` in the repo root for
-you, automatically, on the first tool of every turn:
-  - `intent` is seeded from your verbatim request and REFRESHED when the request
-    changes — a new prompt regenerates the contract and resets `files[]`, so it
-    never carries over between features;
+The contract is written for you **before your first token**: the `intent-precompile`
+hook fires on `beforeSubmitPrompt` (right after the user hits send) and writes
+`.scope.json` to the repo root with the real `intent` already locked from the
+request — so the contract is the FIRST artifact of the turn, and you govern by it
+from the very first action. `intent-anchor` then re-injects it on every tool
+boundary to keep it in focus.
+  - `intent` is locked from the request and REFRESHED when the request changes — a
+    new prompt regenerates the contract and resets `files[]`, so it never carries
+    over between features;
   - `files[]` is auto-recorded — the scope hook appends every file you edit, so
     you never maintain it by hand;
+  - `acceptance` is SEEDED with a real default (never a bare `<TODO>`); it is not a
+    blank you must fill, it is a draft you SHARPEN;
   - `trace.query` is the VERBATIM request (the audit anchor), `_intent_hash` and
     `_generated_by` are hook bookkeeping. Leave all three alone.
 
 Your two targeted edits on the contract (each a string replace on ONE field, never
-a whole-file rewrite):
-  - **`intent`** → replace the verbatim seed with your Step 0 restatement: the
-    normalized, meaning-preserving sentence. This is what final-review axis 0
-    traces each diff hunk against, so a clean `intent` makes the audit sharp.
-  - **`acceptance`** → set the single deterministic check that decides done, which
-    the hook cannot derive.
+a whole-file rewrite), done as your FIRST actions this turn before editing source:
+  - **`intent`** → replace the seed with your Step 0 restatement: the normalized,
+    meaning-preserving sentence. This is what final-review axis 0 traces each diff
+    hunk against, so a clean `intent` makes the audit sharp.
+  - **`acceptance`** → sharpen the seeded default to the single deterministic check
+    that decides done, which the hook cannot derive. The hook re-injects a loud
+    demand every turn until you do.
 
 Do **NOT** touch `trace.query`, `_intent_hash`, or `_generated_by`, and do **NOT**
 rewrite the whole file: `_intent_hash` is computed from the verbatim `trace.query`,
@@ -82,11 +89,11 @@ changed the meaning: `intent` and `trace.query` must agree.
 {
   "intent":       "<YOU refine this: your normalized Step 0 restatement>",
   "files":        ["<auto-recorded by the hook as you edit>"],
-  "acceptance":   "<YOU set this: the deterministic check that decides done>",
+  "acceptance":   "<seeded with a default; YOU sharpen to the deterministic check>",
   "allow_growth": false,
   "trace":        { "query": "<VERBATIM request - the hook owns this, leave it>", "ts": "<when>" },
   "_intent_hash": "<hook bookkeeping>",
-  "_generated_by":"intent-anchor hook"
+  "_generated_by":"intent-precompile / intent-anchor hook"
 }
 ```
 

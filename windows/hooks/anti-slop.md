@@ -50,5 +50,29 @@ Do not explain. If clean, say nothing.
  13. CHANGE SURFACE (Tier 5) — Did a simple request touch many files? Every
      file in the diff must trace to the task. Trim unrelated hunks.
 
+ 14. MIXED LEVELS OF ABSTRACTION (SLAP violation) — Does one function mix a DB
+     call, a string validation, and a date format? The model writes one blob
+     because it cannot see the layers. Stop: SLAP - one function, one level of
+     abstraction. Extract details to named helpers; the top function reads as a
+     recipe, the bottom functions do the work.
+
+ 15. PHANTOM STATE (temporal coupling) — Must callers invoke init() before
+     process()? Does the function break unless something else ran first? The
+     model never validates lifecycle. Stop: make state explicit - a state
+     machine, or a guard at the top of every public method that throws if the
+     object is not in the required state. No implicit call-order contracts.
+
+ 16. PRIMITIVE OBSESSION — Are you passing loose strings/numbers for things
+     that have rules (userId: string, email: string, amount: number)? The model
+     spreads primitives instead of value objects. Stop: if a primitive has
+     domain rules (validation, formatting, equality semantics), it is a named
+     type / value object, not a raw string. Stop at the boundary where it enters.
+
+ 17. LOOP-DRIVEN LOGIC (imperative where declarative fits) — Are you writing
+     for loops to transform arrays when the language has .map / .filter /
+     .reduce / list comprehensions? The model defaults to imperative mutation.
+     Stop: prefer pure higher-order functions for data transformation; reserve
+     for-loops for genuine early-exit, index-based, or perf-critical paths.
+
 Hard constraints: never revert what the USER asked for — slop is what got added
 on top. At most a few targeted edits, then stop.

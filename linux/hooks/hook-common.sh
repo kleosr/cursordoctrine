@@ -79,6 +79,50 @@ safe_conversation_id() {
 
 hooks_pending_dir() { printf '%s' "$HOME/.cursor/.hooks-pending"; }
 
+# sha256_hex <text> -> SHA-256 hex. SHARED so intent-precompile (beforeSubmitPrompt)
+# and intent-anchor (postToolUse) hash the SAME text the SAME way; otherwise they
+# disagree on _intent_hash and postToolUse needlessly rewrites the prompt hook's
+# scope. Mirrors the hashing intent-anchor.sh already does (sha256sum|shasum).
+sha256_hex() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    fi
+}
+
+# Path where beforeSubmitPrompt stashes the verbatim user prompt for the turn.
+# intent-anchor PREFERS this over transcript parsing: ground-truth request from
+# the payload, present on the FIRST postToolUse, immune to <user_query>
+# contamination.
+current_prompt_path() { printf '%s' "$(hooks_pending_dir)/current-prompt-$1.txt"; }
+
+# stashed_prompt <cid> -> the stashed prompt ('' if none). Only ever holds real
+# human prompts - intent-precompile filters hook-generated submits. (The caller's
+# command substitution strips the trailing newline.)
+stashed_prompt() {
+    local p; p="$(current_prompt_path "$1")"
+    [ -f "$p" ] && cat "$p" 2>/dev/null
+}
+
+# default_acceptance -> the real default the hook seeds so .scope.json NEVER ships
+# a bare "<TODO>" (the thing that looks broken and never gets filled). A verifiable
+# bar the agent then sharpens to the single deterministic check. ONE place so both
+# hooks emit the identical string.
+default_acceptance() {
+    printf '%s' 'Every change traces to intent; the project typecheck/build and any *.selfcheck pass, and the described problem no longer reproduces. (Sharpen to the one deterministic check.)'
+}
+
+# redact_secrets <text> -> portable (sed) secret scrub for text we persist to
+# .scope.json / the prompt stash. Mirrors the python redaction in
+# extract_last_user_query so the beforeSubmitPrompt path is no leakier.
+redact_secrets() {
+    printf '%s' "$1" | sed -E \
+        -e 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' \
+        -e 's/\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b/[REDACTED_TOKEN]/g' \
+        -e 's/([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/g'
+}
+
 # is_cursor_config_path <path> -> 0 if the path lives under a .cursor directory
 is_cursor_config_path() {
     case "$1" in
