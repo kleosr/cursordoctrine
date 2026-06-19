@@ -58,6 +58,16 @@ pending_dir="$(hooks_pending_dir)"
 latch="$pending_dir/intent-injected-$cid.flag"
 hash_file="$pending_dir/last-query-$cid.hash"
 
+# Stale-latch defense: if a previous session died mid-turn without hitting
+# stop (Cursor crash, force-quit), the latch can persist and silence this hook
+# for the whole next session -> scope never gets created. If the latch is older
+# than 2 hours, treat it as orphaned and clear it. Normal clears happen at
+# every stop (final-review.sh); this is the backstop for abnormal terminations.
+if [ -f "$latch" ]; then
+    age_hours=$(( ($(date +%s) - $(stat -c %Y "$latch" 2>/dev/null || stat -f %m "$latch" 2>/dev/null || echo 0)) / 3600 ))
+    [ "$age_hours" -ge 2 ] && rm -f "$latch" 2>/dev/null
+fi
+
 # Already injected this turn -> quiet. Latch cleared at every stop.
 [ -f "$latch" ] && exit 0
 
@@ -133,30 +143,38 @@ EOF
     fi
 fi
 
-# --- auto-create / regenerate .scope.json (the 0.4.4 behavior, fixed) --------
-# The user wants: every NEW prompt -> a fresh .scope.json the agent works from.
-# So we WRITE the scaffold when (a) there is no valid contract, OR (b) the
-# contract on disk is stale (its _intent_hash != current query hash). Fixed vs
-# 0.4.4: never writes to $HOME (bail above if no real root) -> no ghost files;
-# regenerates on prompt CHANGE not just absence -> "each prompt, new file".
+# --- auto-create / regenerate .scope.json -----------------------------------
+# CREATION does NOT require the query: if there's a root and no scope yet,
+# scaffold it NOW with intent=<TODO> (the agent fills it from the chat it's
+# already responding to). This was the 0.5.3 bug - creation was gated on
+# $hasQuery, so when Cursor didn't surface transcript_path in the first
+# postToolUse fire, the scope never got created.
+# REGENERATION does require the query: we can only detect a prompt change if
+# we can hash the current request. Without a query we leave an existing scope
+# alone (re-inject it) rather than blank it.
 regenerated=0
-should_write=0
-if [ "$has_query" = "1" ]; then
-    if [ "$scope_exists" != "1" ] || [ "$scope_stale" = "1" ]; then
-        should_write=1
-    fi
+should_create=0
+should_regen=0
+[ "$scope_exists" != "1" ] && should_create=1
+if [ "$has_query" = "1" ] && [ "$scope_exists" = "1" ] && [ "$scope_stale" = "1" ]; then
+    should_regen=1
 fi
 
-if [ "$should_write" = "1" ]; then
-    # jq preferred; python3 fallback. Write intent from the query, TODO
-    # placeholders for files/acceptance, and record _intent_hash so staleness
-    # is self-contained in the file (survives cross-session hash sweeps).
+if [ "$should_create" = "1" ] || [ "$should_regen" = "1" ]; then
+    # intent from the query when available, else a TODO for the agent to fill.
+    if [ "$has_query" = "1" ]; then
+        intent_val="$current_query"
+    else
+        intent_val="<TODO: state the operational objective - what is strictly necessary>"
+    fi
+    # jq preferred; python3 fallback. Write intent, empty files[], TODO
+    # acceptance, and record _intent_hash so staleness is self-contained.
     if have_jq; then
-        jq -n --arg intent "$current_query" --arg hash "$current_hash" \
+        jq -n --arg intent "$intent_val" --arg hash "$current_hash" \
             '{intent:$intent, files:[], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
             > "$scope_path" 2>/dev/null && regenerated=1
     elif have_py; then
-        if I_FILE="$scope_path" I_INTENT="$current_query" I_HASH="$current_hash" python3 -c '
+        if I_FILE="$scope_path" I_INTENT="$intent_val" I_HASH="$current_hash" python3 -c '
 import json, os
 obj = {
     "intent": os.environ["I_INTENT"],
@@ -173,7 +191,7 @@ with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
         fi
     fi
     if [ "$regenerated" = "1" ]; then
-        scope_intent="$current_query"
+        scope_intent="$intent_val"
         scope_acceptance="<TODO: the one deterministic check that decides done>"
         scope_files="(auto-tracked - the scope hook records every file you edit)"
         scope_exists=1

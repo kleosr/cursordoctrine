@@ -14,17 +14,20 @@
 #      at the START of each turn's work, before edits pile up and dilute the
 #      original intent. Works UNCONDITIONALLY - no transcript needed.
 #
-#   2. AUTO-CREATE / REGENERATE .scope.json: when the current <user_query>
-#      differs from the contract on disk (no contract yet, OR _intent_hash
-#      mismatch), the hook WRITES a scaffold to the REPO ROOT: intent locked
-#      from the prompt, files as an EMPTY array (scope-gate-audit.ps1 fills it
-#      mechanically as the agent edits - the agent never maintains files[] by
-#      hand), acceptance as a TODO the agent sets. This is the user-requested
-#      behavior: every new prompt -> a fresh .scope.json the agent works from.
-#      Fixed vs the broken 0.4.4 build: never writes to $HOME (bails if no real
-#      root resolves -> no ghost files), regenerates on prompt CHANGE not just
-#      on absence.
-#   3. RE-INJECT on same-prompt turns: when the query is unchanged (contract
+#   2. AUTO-CREATE .scope.json (UNCONDITIONAL on a real root): if no valid
+#      contract exists in the repo root, WRITE one now - intent locked from the
+#      query when available, otherwise `intent: <TODO>` for the agent to fill.
+#      Creation does NOT require transcript_path; only regeneration does. This
+#      was the 0.5.3 bug: creation was gated on $hasQuery, so when Cursor didn't
+#      surface the transcript on the first postToolUse fire, the scope never
+#      appeared and the agent had no contract to work from.
+#   3. REGENERATE on prompt CHANGE: when the current <user_query> hash differs
+#      from the contract's _intent_hash, overwrite the scaffold with the new
+#      intent + empty files + TODO acceptance. Requires $hasQuery (you can only
+#      detect a change if you can read the request). Fixed vs the broken 0.4.4
+#      build: never writes to $HOME (bails if no real root resolves -> no
+#      ghost files).
+#   4. RE-INJECT on same-prompt turns: when the query is unchanged (contract
 #      already current), the hook re-injects the existing contract into the
 #      feedback bus so it stays in the model's attentional focus each turn.
 #
@@ -55,6 +58,16 @@ $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 $latch    = Join-Path $pendingDir "intent-injected-$cid.flag"
 $hashFile = Join-Path $pendingDir "last-query-$cid.hash"
+
+# Stale-latch defense: if a previous session died mid-turn without hitting
+# stop (Cursor crash, force-quit), the latch can persist and silence this hook
+# for the whole next session -> scope never gets created. If the latch is older
+# than 2 hours, treat it as orphaned and clear it. Normal clears happen at
+# every stop (final-review.ps1); this is the backstop for abnormal terminations.
+if (Test-Path $latch) {
+    $age = (Get-Date) - (Get-Item $latch).LastWriteTime
+    if ($age.TotalHours -ge 2) { Remove-Item $latch -Force -ErrorAction SilentlyContinue }
+}
 
 # Already injected this turn -> quiet. Latch cleared at every stop.
 if (Test-Path $latch) { exit 0 }
@@ -115,21 +128,24 @@ if (Test-Path -LiteralPath $scopePath) {
     } catch { $scopeExists = $false }   # malformed JSON -> treat as missing
 }
 
-# --- auto-create / regenerate .scope.json (the 0.4.4 behavior, fixed) --------
-# The user wants: every NEW prompt -> a fresh .scope.json the agent works from.
-# So we WRITE the scaffold when (a) there is no valid contract, OR (b) the
-# contract on disk is stale (its _intent_hash != current query hash). Intent is
-# locked from the current <user_query>; files starts EMPTY (scope-gate-audit
-# auto-records edits into it); acceptance is a TODO the agent sets. Fixed vs 0.4.4:
-#   - NEVER writes to $HOME (bail above if no real root) -> no ghost files.
-#   - Regenerates on prompt CHANGE, not just on absence -> "each prompt, new file".
-#   - Records _intent_hash so staleness is self-contained in the file.
+# --- auto-create / regenerate .scope.json -----------------------------------
+# CREATION does NOT require the query: if there's a root and no scope yet,
+# scaffold it NOW with intent=<TODO> (the agent fills it from the chat it's
+# already responding to). This was the 0.5.3 bug - creation was gated on
+# $hasQuery, so when Cursor didn't surface transcript_path in the first
+# postToolUse fire, the scope never got created. The agent never had a
+# contract to work from.
+# REGENERATION does require the query: we can only detect a prompt change if
+# we can hash the current request. Without a query we leave an existing scope
+# alone (re-inject it) rather than blank it.
 $regenerated = $false
-$shouldWrite = $hasQuery -and (-not $scopeExists -or $scopeStale)
-if ($shouldWrite) {
+$shouldCreate = -not $scopeExists
+$shouldRegen  = $hasQuery -and $scopeExists -and $scopeStale
+if ($shouldCreate -or $shouldRegen) {
     try {
+        $intentVal = if ($hasQuery) { $currentQuery } else { '<TODO: state the operational objective - what is strictly necessary>' }
         $scaffold = [ordered]@{
-            intent        = $currentQuery
+            intent        = $intentVal
             files         = @()
             acceptance    = '<TODO: the one deterministic check that decides done>'
             allow_growth  = $false
@@ -138,7 +154,7 @@ if ($shouldWrite) {
         }
         $json = $scaffold | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
-        $scopeIntent     = $currentQuery
+        $scopeIntent     = $intentVal
         $scopeAcceptance = '<TODO: the one deterministic check that decides done>'
         $scopeFiles      = '(auto-tracked - the scope hook records every file you edit)'
         $scopeExists     = $true

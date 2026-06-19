@@ -334,6 +334,25 @@ function verify() {
         JSON.stringify({ role: 'user', message: { content: `<user_query>${q}</user_query>` } }) + '\n',
         'utf8');
 
+    // --- Case 0: no .scope.json + NO transcript -> WRITE scaffold anyway -------
+    // This is the 0.5.3 regression: creation was gated on $hasQuery, so when
+    // Cursor didn't surface transcript_path in the first postToolUse fire, the
+    // scope never appeared. Now creation is unconditional on a real root.
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir });
+    let d0 = drainedOf(anchorCid);
+    if (!existsSync(scopePath)) {
+      cleanup(); return { ok: false, detail: 'scaffold NOT created without transcript (0.5.3 regression)' };
+    }
+    let scope0;
+    try { scope0 = JSON.parse(readFileSync(scopePath, 'utf8')); }
+    catch { cleanup(); return { ok: false, detail: '.scope.json (no-transcript) is not valid JSON' }; }
+    if (!scope0.intent || !scope0.intent.includes('TODO')) {
+      cleanup(); return { ok: false, detail: `no-transcript scaffold should have intent <TODO>, got: ${scope0.intent}` };
+    }
+    // Clear the latch + scope so Case A starts fresh (with a real query this time).
+    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
+    cleanup();
+
     // --- Case A: no .scope.json + prompt q1 -> WRITE scaffold with q1 as intent -
     writeTranscript(q1);
     runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });

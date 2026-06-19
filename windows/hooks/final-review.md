@@ -122,5 +122,18 @@ Determinism / purity:
   - In-place mutation of shared state (arr.push, obj.prop =) when a caller holds
     a reference -> return new structures ([...arr, x], .map/.filter).
 
+Logic & structure:
+  - Arrow code: >2 levels of nested if/for -> flatten with guard clauses
+    (early returns). Code reads top-to-bottom, no deep indent.
+  - Switch/if-else bloat: a switch or 5+ if/else branches -> Map/dispatch
+    (Record<State, fn>) or the Command pattern.
+  - Mixed abstraction (SLAP): a function mixing DB calls + string validation +
+    date formatting -> one level of abstraction per function; extract helpers.
+  - Primitive obsession: a primitive with business rules (email, userId, chainId)
+    passed as a bare string/number across functions -> a named type/value object.
+  - Imperative transforms: a `for` loop building an array when the language has
+    .map/.filter/.reduce -> use the declarative form; reserve `for` for cases
+    map/reduce cannot express.
+
 You do NOT need to run a tool for these — read the diff and apply the named fix.
 If none apply, say so in one line.
