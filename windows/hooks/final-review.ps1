@@ -1,7 +1,8 @@
 # final-review.ps1 - stop hook (Cursor).
 #
-# ONE comprehensive end-of-implementation review across six axes:
-# intent, correctness, reliability, coverage, anti-slop, and wiring completeness. When the agent finishes an
+# ONE comprehensive end-of-implementation review across seven axes:
+# intent, correctness, reliability, coverage, anti-slop, wiring completeness,
+# and mechanics & stack integrity. When the agent finishes an
 # implementation that touched files, Cursor auto-submits this hook's
 # `followup_message` as the next user turn, so the model re-audits everything it
 # changed this session and FIXES what fails - the model-as-auditor pattern over

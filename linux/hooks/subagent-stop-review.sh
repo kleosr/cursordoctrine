@@ -4,7 +4,7 @@
 # Counterpart of final-review.sh for delegated work. afterFileEdit DOES fire
 # inside subagents (verified: a subagent run left its edits in
 # session-edits-<subagent-cid>.txt), but subagents get no `stop` event, so
-# that marker is never drained and the six-axis review never fires for
+# that marker is never drained and the seven-axis review never fires for
 # delegated implementations. This hook closes the loop: when a subagent
 # finishes and ITS conversation has a session-edits marker, return ONE
 # followup_message so the subagent audits its own implementation before the
@@ -76,7 +76,7 @@ body=""
 [ -f "$prompt_file" ] && body="$(cat "$prompt_file")"
 if [ -z "$body" ]; then
     body='Audit everything you changed in this run and FIX what fails (do NOT revert the
-behaviour the task asked for). Six axes, in order:
+behaviour the task asked for). Seven axes, in order:
   0. Intent trace - tie every diff hunk back to your original task. Untraceable = hallucinated.
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
