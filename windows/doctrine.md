@@ -67,6 +67,10 @@ what the task requires**.
 
 The natural order is:
 
+  0. **Restate** the request in one normalized line (`Understood as: …`) before
+     you touch a tool — grammar fixed, ambiguity resolved, meaning preserved.
+     It is the user's catch-point for a misread, and it becomes the contract's
+     `intent`. Full spec in pre-compile.
   1. **Read** the relevant file(s) to understand context.
   2. **Edit** to make the change.
   3. **Read** the file again (the self-review trigger will remind you).
