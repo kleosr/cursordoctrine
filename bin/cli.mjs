@@ -62,6 +62,29 @@ function keyOf(command, keys) {
   return keys.find((k) => command.includes(k));
 }
 
+// Detect a STALE entry from a prior install: its command names a hook script
+// (ps1/sh, not an .md prompt) under .agents/hooks OR names inject-doctrine,
+// but that filename is NOT in the current payload. These are NOT foreign
+// entries the user added — they are leftovers from an older version of THIS
+// pack (e.g. anchor-set-nudge / minimal-edit-audit, deleted in 0.5.0). The
+// old merge preserved them as "foreign", so deleted hooks kept running on
+// every edit silently. Returning true here makes install reap them.
+const HOOK_FILENAME_RE = /([\w.\-]+)\.(ps1|sh)\b/;
+const INJECT_RE = /\binject-doctrine\.(ps1|sh)\b/;
+function isStaleOurs(command) {
+  if (typeof command !== 'string') return false;
+  const hookMatch = command.match(HOOK_FILENAME_RE);
+  if (hookMatch) {
+    const fname = `${hookMatch[1]}.${hookMatch[2]}`;
+    // If the script still ships, it's current ours (handled elsewhere).
+    return !payloadHookFiles().includes(fname);
+  }
+  if (INJECT_RE.test(command)) {
+    return !doctrineFiles.includes(injectName) ? true : false;
+  }
+  return false;
+}
+
 function mergeHooks(existing, incoming, keys) {
   const out = structuredClone(existing);
   if (out.version === undefined) out.version = incoming.version;
@@ -75,22 +98,25 @@ function mergeHooks(existing, incoming, keys) {
       if (i >= 0) cur[i] = entry;
       else cur.push(entry);
     }
-    // Re-order our entries to match the shipped hooks.json (merge used to leave
-    // stale order — e.g. post-tool-use before intent-anchor — breaking same-tool
-    // delivery of the anchor message).
-    const foreign = cur.filter((x) => x && !isOurs(x.command, keys));
+    // Reap stale ours entries from prior installs BEFORE treating anything as
+    // foreign. isStaleOurs catches commands referencing scripts this pack no
+    // longer ships (e.g. anchor-set-nudge / minimal-edit-audit, deleted in
+    // 0.5.0). Without this, deleted hooks kept running silently on every edit
+    // because the merge mistook them for user-added foreign entries.
+    const live = cur.filter((x) => x && !isStaleOurs(x.command));
+    const foreign = live.filter((x) => x && !isOurs(x.command, keys));
     const reordered = [];
     const used = new Set();
     for (const entry of entries) {
       const k = keyOf(entry.command, keys);
       if (!k || !isOurs(entry.command, keys)) continue;
-      const found = cur.find((x) => x && keyOf(x.command, keys) === k);
+      const found = live.find((x) => x && keyOf(x.command, keys) === k);
       if (found) {
         reordered.push(found);
         used.add(k);
       }
     }
-    for (const x of cur) {
+    for (const x of live) {
       const k = keyOf(x?.command, keys);
       if (isOurs(x?.command, keys) && k && !used.has(k)) reordered.push(x);
     }
@@ -429,7 +455,12 @@ function uninstall() {
       let foreign = 0;
       for (const [event, entries] of Object.entries(existing.hooks || {})) {
         if (!Array.isArray(entries)) continue;
-        existing.hooks[event] = entries.filter((x) => !isOurs(x?.command, keys));
+        // Remove both current ours AND stale ours (commands referencing scripts
+        // this pack no longer ships - leftovers from prior versions). Pure
+        // foreign entries are kept, same as before.
+        existing.hooks[event] = entries.filter(
+          (x) => !x || (!isOurs(x.command, keys) && !isStaleOurs(x.command))
+        );
         foreign += existing.hooks[event].length;
         if (existing.hooks[event].length === 0) delete existing.hooks[event];
       }
