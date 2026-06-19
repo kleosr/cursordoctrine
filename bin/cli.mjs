@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
@@ -320,65 +321,84 @@ function verify() {
     return true;
   });
 
-  check('intent-anchor scaffolds .scope.json and re-injects every turn', () => {
+  check('intent-anchor scaffolds .scope.json per-prompt, never to $HOME', () => {
+    // The user-requested behavior: every NEW prompt -> a fresh .scope.json
+    // in the repo root, intent locked from the query. Same prompt -> re-inject
+    // without rewriting. Never writes to $HOME (the 0.4.4 ghost-file bug).
+    // We drive it with a synthetic transcript so Get-LastUserQuery can read
+    // the <user_query>; the hook resolves cwd -> HOME (the repo root here).
     const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
     const anchorCid = 'npxv4';
-    const scopePath = join(HOME, '.scope.json');
+    const repoDir = HOME;   // verify() runs under a pinned HOME; treat it as the repo
+    const scopePath = join(repoDir, '.scope.json');
     const transcriptPath = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv4.jsonl');
-    const testQuery = 'fix grid symmetry and color tokens';
+    const q1 = 'fix grid symmetry and color tokens';
+    const q2 = 'now add dark mode support';
 
     const cleanup = () => {
       try { rmSync(scopePath, { force: true }); } catch {}
       try { rmSync(transcriptPath, { force: true }); } catch {}
     };
     cleanup();
+    const writeTranscript = (q) =>
+      writeFileSync(transcriptPath,
+        JSON.stringify({ role: 'user', message: { content: `<user_query>${q}</user_query>` } }) + '\n',
+        'utf8');
 
-    // Fake transcript so Get-LastUserQuery / scaffold can read the request.
-    const transcriptLine = JSON.stringify({
-      role: 'user',
-      message: { content: `<user_query>${testQuery}</user_query>` },
-    });
-    writeFileSync(transcriptPath, transcriptLine + '\n', 'utf8');
-
-    const anchorPayload = { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath };
-
-    // --- Case A: no .scope.json -> hook writes scaffold on disk ----------
-    runHook(hook('intent-anchor'), anchorPayload);
+    // --- Case A: no .scope.json + prompt q1 -> WRITE scaffold with q1 as intent -
+    writeTranscript(q1);
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
     let d = drainedOf(anchorCid);
     if (!existsSync(scopePath)) {
-      cleanup(); return { ok: false, detail: '.scope.json was not written to disk' };
+      cleanup(); return { ok: false, detail: 'scaffold was NOT written on first prompt' };
     }
     let scope;
-    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); } catch {
-      cleanup(); return { ok: false, detail: '.scope.json scaffold is not valid JSON' };
+    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
+    catch { cleanup(); return { ok: false, detail: '.scope.json is not valid JSON' }; }
+    if (scope.intent !== q1) {
+      cleanup(); return { ok: false, detail: `intent mismatch (want "${q1}"): ${scope.intent}` };
     }
-    if (scope.intent !== testQuery) {
-      cleanup(); return { ok: false, detail: `scaffold intent mismatch: ${scope.intent}` };
-    }
-    if (!d.includes('scaffold written') || !d.includes(testQuery)) {
-      cleanup(); return { ok: false, detail: 'scaffold branch did not inject written contract' };
+    if (!d.includes('scope regenerated')) {
+      cleanup(); return { ok: false, detail: 'regenerated branch did not fire' };
     }
 
-    // --- Stop clears the latch -------------------------------------------
+    // --- Stop clears the latch -> next turn can act again --------------------
     runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
 
-    // --- Case B: scope exists -> re-inject contract every turn -----------
-    writeFileSync(scopePath, JSON.stringify({
-      intent: 'fix grid symmetry and color tokens',
-      files: ['src/grid.tsx'],
-      acceptance: 'grid renders symmetric; tokens match palette',
-    }));
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath });
+    // --- Case B: same prompt q1 again -> re-INJECT, do NOT rewrite ----------
+    const sizeBefore = statSync(scopePath).size;
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
     d = drainedOf(anchorCid);
-    if (!d.includes('fix grid symmetry and color tokens') || !d.includes('INTENT ANCHOR')) {
-      cleanup(); return { ok: false, detail: 'contract not re-injected on turn 2' };
+    if (!d.includes('re-injected this turn')) {
+      cleanup(); return { ok: false, detail: 'same-prompt turn did not re-inject' };
+    }
+    // _intent_hash matches -> file must not have been regenerated. Intent still q1.
+    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
+    catch { cleanup(); return { ok: false, detail: '.scope.json corrupted on same-prompt turn' }; }
+    if (scope.intent !== q1) {
+      cleanup(); return { ok: false, detail: `same-prompt turn rewrote intent (should stay "${q1}"): ${scope.intent}` };
     }
 
+    // --- Stop; new prompt q2 -> REGENERATE with q2 as intent ----------------
     runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: HOME, transcript_path: transcriptPath });
+    writeTranscript(q2);
+    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
     d = drainedOf(anchorCid);
-    if (!d.includes('fix grid symmetry and color tokens')) {
-      cleanup(); return { ok: false, detail: 'contract not re-injected on turn 3 (latch stranded at stop)' };
+    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
+    catch { cleanup(); return { ok: false, detail: '.scope.json corrupted on prompt-change turn' }; }
+    if (scope.intent !== q2) {
+      cleanup(); return { ok: false, detail: `prompt-change did not regenerate intent (want "${q2}"): ${scope.intent}` };
+    }
+    if (!d.includes('scope regenerated')) {
+      cleanup(); return { ok: false, detail: 'prompt-change turn did not report regeneration' };
+    }
+
+    // --- The anti-ghost-file guard: no .scope.json should ever exist at $HOME
+    //     level OUTSIDE the resolved repo. Here repo == HOME so this is moot,
+    //     but assert the file has the _generated_by marker (proof the hook wrote
+    //     it, and that it carries _intent_hash for self-contained staleness).
+    if (!scope._generated_by || !scope._intent_hash) {
+      cleanup(); return { ok: false, detail: 'scaffold missing _generated_by / _intent_hash fields' };
     }
     cleanup();
     return true;

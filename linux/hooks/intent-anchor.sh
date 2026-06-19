@@ -15,14 +15,17 @@
 #      at the START of each turn's work, before edits pile up and dilute the
 #      original intent. Works UNCONDITIONALLY - no transcript needed.
 #
-#   2. RE-COMPILE ON PROMPT CHANGE: hash the current <user_query> (via
-#      extract_last_user_query, which reads the transcript) and compare to
-#      last-query-<cid>.hash. If they differ and a valid .scope.json exists,
-#      demand the agent UPDATE it. If no valid .scope.json exists and the query
-#      is available, WRITE a deterministic scaffold to disk (intent = query,
-#      files/acceptance = TODO placeholders) so re-injection always has real
-#      content from the first tool boundary — contract creation is not left to
-#      the LLM alone.
+#   2. AUTO-CREATE / REGENERATE .scope.json: when the current <user_query>
+#      differs from the contract on disk (no contract yet, OR _intent_hash
+#      mismatch), the hook WRITES a scaffold to the REPO ROOT: intent locked
+#      from the prompt, files/acceptance as TODO placeholders the agent
+#      refines. This is the user-requested behavior: every new prompt ->
+#      a fresh .scope.json the agent works from. Fixed vs the broken 0.4.4
+#      build: never writes to $HOME (bails if no real root resolves -> no
+#      ghost files), and regenerates on prompt CHANGE not just on absence.
+#   3. RE-INJECT on same-prompt turns: when the query is unchanged (contract
+#      already current), the hook re-injects the existing contract into the
+#      feedback bus so it stays in the model's attentional focus each turn.
 #
 # Why postToolUse, not afterFileEdit: afterFileEdit only fires AFTER an edit
 # exists, and Cursor has no preToolUse for file edits. postToolUse fires after
@@ -74,7 +77,10 @@ if [ "$has_query" = "1" ]; then
     [ "$current_hash" != "$prev_hash" ] && prompt_changed=1
 fi
 
-# --- repo root (same resolution as scope-gate-audit.sh) ----------------------
+# --- repo root (same resolution as scope-gate-audit.sh, but NO $HOME fallback) -
+# We do NOT fall back to $HOME: writing .scope.json into $HOME was the 0.4.4
+# "ghost file" bug. If we cannot resolve a real project root, the hook stays
+# silent (no scaffold, no demand) rather than litter the user's home dir.
 root=""
 while IFS= read -r cand; do
     [ -n "$cand" ] && [ -d "$cand" ] && { root="${cand%/}"; break; }
@@ -82,14 +88,18 @@ done <<EOF
 $(json_get "$input" cwd)
 $(json_get_array "$input" workspace_roots)
 EOF
-[ -n "$root" ] || root="${CURSOR_PROJECT_DIR:-$HOME}"
-root="${root%/}"
+if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
+    root="${CURSOR_PROJECT_DIR%/}"
+fi
+# No $HOME fallback. If we still have no root, bail (cannot know where to write).
+[ -n "$root" ] || exit 0
 
 # --- read the existing contract (if any) -------------------------------------
 scope_exists=0
 scope_intent=""
 scope_acceptance=""
 scope_files=""
+scope_stale=0   # 1 if on-disk contract predates the current query
 scope_path="$root/.scope.json"
 if [ -f "$scope_path" ]; then
     # Prefer jq; fall back to python3 (mirrors hook-common.sh degrade policy).
@@ -97,9 +107,10 @@ if [ -f "$scope_path" ]; then
         scope_intent="$(jq -r '.intent // empty' "$scope_path" 2>/dev/null)"
         scope_acceptance="$(jq -r '.acceptance // empty' "$scope_path" 2>/dev/null)"
         scope_files="$(jq -r '(.files // []) | join(", ")' "$scope_path" 2>/dev/null)"
+        on_disk_hash="$(jq -r '._intent_hash // empty' "$scope_path" 2>/dev/null)"
         scope_exists=1
     elif have_py; then
-        read -r scope_intent scope_acceptance scope_files <<EOF
+        read -r scope_intent scope_acceptance scope_files on_disk_hash <<EOF
 $(python3 -c '
 import json, sys
 try:
@@ -107,91 +118,100 @@ try:
     print(d.get("intent","") or "")
     print(d.get("acceptance","") or "")
     print(", ".join(d.get("files",[]) or []))
+    print(d.get("_intent_hash","") or "")
 except Exception:
     sys.exit(1)
 ' "$scope_path" 2>/dev/null)
 EOF
         [ $? -eq 0 ] && scope_exists=1 || scope_exists=0
     fi
+    # Stale if we have a query AND the on-disk _intent_hash differs from it.
+    if [ "$scope_exists" = "1" ] && [ "$has_query" = "1" ] && [ -n "$on_disk_hash" ]; then
+        [ "$on_disk_hash" != "$current_hash" ] && scope_stale=1
+    fi
 fi
 
-# --- deterministic scaffold (0.4.4) -------------------------------------------
-# When the query is available and there is no valid contract, write .scope.json
-# on disk — intent from <user_query>, TODO placeholders for files/acceptance.
-scaffold_written=0
-should_scaffold=0
-[ "$has_query" = "1" ] && [ "$scope_exists" != "1" ] && should_scaffold=1
+# --- auto-create / regenerate .scope.json (the 0.4.4 behavior, fixed) --------
+# The user wants: every NEW prompt -> a fresh .scope.json the agent works from.
+# So we WRITE the scaffold when (a) there is no valid contract, OR (b) the
+# contract on disk is stale (its _intent_hash != current query hash). Fixed vs
+# 0.4.4: never writes to $HOME (bail above if no real root) -> no ghost files;
+# regenerates on prompt CHANGE not just absence -> "each prompt, new file".
+regenerated=0
+should_write=0
+if [ "$has_query" = "1" ]; then
+    if [ "$scope_exists" != "1" ] || [ "$scope_stale" = "1" ]; then
+        should_write=1
+    fi
+fi
 
-if [ "$should_scaffold" = "1" ]; then
-    if have_py; then
-        if python3 -c '
-import json, sys
-path, intent = sys.argv[1], sys.argv[2]
+if [ "$should_write" = "1" ]; then
+    # jq preferred; python3 fallback. Write intent from the query, TODO
+    # placeholders for files/acceptance, and record _intent_hash so staleness
+    # is self-contained in the file (survives cross-session hash sweeps).
+    if have_jq; then
+        jq -n --arg intent "$current_query" --arg hash "$current_hash" \
+            '{intent:$intent, files:["<TODO: list files you will touch>"], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
+            > "$scope_path" 2>/dev/null && regenerated=1
+    elif have_py; then
+        if I_FILE="$scope_path" I_INTENT="$current_query" I_HASH="$current_hash" python3 -c '
+import json, os
 obj = {
-    "intent": intent,
-    "files": ["<TODO: list files>"],
-    "acceptance": "<TODO: deterministic success check>",
+    "intent": os.environ["I_INTENT"],
+    "files": ["<TODO: list files you will touch>"],
+    "acceptance": "<TODO: the one deterministic check that decides done>",
     "allow_growth": False,
+    "_intent_hash": os.environ["I_HASH"],
+    "_generated_by": "intent-anchor hook",
 }
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(obj, f, ensure_ascii=False)
-' "$scope_path" "$current_query" 2>/dev/null; then
-            scaffold_written=1
-            scope_exists=1
-            scope_intent="$current_query"
-            scope_acceptance="<TODO: deterministic success check>"
-            scope_files="<TODO: list files>"
+with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
+    json.dump(obj, f, ensure_ascii=False, indent=2)
+' 2>/dev/null; then
+            regenerated=1
         fi
+    fi
+    if [ "$regenerated" = "1" ]; then
+        scope_intent="$current_query"
+        scope_acceptance="<TODO: the one deterministic check that decides done>"
+        scope_files="<TODO: list files you will touch>"
+        scope_exists=1
+        scope_stale=0
     fi
 fi
 
 # --- compose the anchor message ---------------------------------------------
+# Three states: regenerated this turn (new prompt), no contract (and no query
+# to scaffold from), or re-injecting an existing current contract.
 if [ "$has_query" = "1" ]; then
     query_line="$current_query"
 else
     query_line="(current request unavailable - no transcript in this event)"
 fi
 
-if [ "$scaffold_written" = "1" ]; then
-    msg="INTENT ANCHOR (scaffold written to .scope.json) - contract materialized from your request.
+if [ "$regenerated" = "1" ]; then
+    msg="INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
 
   intent:     $scope_intent
   files:      $scope_files
   acceptance: $scope_acceptance
 
-The hook wrote this scaffold to $scope_path — intent is locked from your current
-request. Replace the TODO placeholders with real files[] and acceptance before
-editing source. The contract is on disk and will be re-injected every turn."
+The hook wrote a fresh scaffold to $scope_path from your current request. intent
+is locked from what you just asked. Fill the TODO placeholders with the real
+files you will touch and the deterministic acceptance check, THEN proceed. This
+contract will be re-injected every turn until your request changes again."
 elif [ "$scope_exists" != "1" ]; then
-    msg="INTENT ANCHOR (pre-compile) - no .scope.json found in $root.
+    msg="INTENT ANCHOR (pre-compile) - no .scope.json found in $root, and the current
+request was unavailable to scaffold from.
 
 Current request:
   $query_line
 
-You have NOT compiled your Anchor Set. Before editing files, write .scope.json
-in the repo root:
+Write .scope.json in the repo root yourself:
   intent:     one operational sentence (what is strictly necessary)
   files:      the exact files you will touch
-  acceptance: the one deterministic check that decides done
-
-Compile it now, then proceed. The scope tracks the request - it is how you stay
-on the rails when the conversation gets long."
-elif [ "$prompt_changed" = "1" ]; then
-    msg="INTENT ANCHOR (pre-compile) - your request changed; .scope.json may be stale.
-
-Current request:
-  $query_line
-
-Your existing contract (.scope.json):
-  intent:     $scope_intent
-  files:      $scope_files
-  acceptance: $scope_acceptance
-
-If the current request differs from the intent above, UPDATE .scope.json now
-to match what was just asked. When the request moves, the scope moves with it -
-do not edit against a contract written for a different request."
+  acceptance: the one deterministic check that decides done"
 else
-    # Same prompt continuing (or query unavailable) -> re-inject the contract.
+    # Contract exists and matches the current prompt -> re-inject it.
     if [ "$has_query" = "1" ]; then
         drift_note="Every edit this turn must advance intent and stay inside files. acceptance is the bar for done."
     else
