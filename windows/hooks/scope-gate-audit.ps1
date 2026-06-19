@@ -1,22 +1,22 @@
-# scope-gate-audit.ps1 - afterFileEdit "declared scope" advisory (Cursor).
+# scope-gate-audit.ps1 - afterFileEdit "scope auto-record" (Cursor).
 #
-# Compuerta 1 of the anti-slop system: the declared-scope gate. When the agent
-# writes a .scope.json contract (intent + files[] + acceptance), this hook
-# checks every edited file against it. Editing OUTSIDE the declared set is the
-# textbook scope-creep / gold-plating signal - the agent is doing work it did
-# not declare. Advisory only on Cursor (no preToolUse for file edits), but the
-# violation is flagged on the next turn and the model must justify or revert.
+# Compuerta 1, mechanical edition: keep .scope.json's files[] in sync with what
+# the agent ACTUALLY edits, with ZERO reliance on the model remembering to fill
+# it. intent-anchor.ps1 writes the scaffold (intent locked from the prompt,
+# files: [], acceptance: TODO); THIS hook appends every edited file to files[]
+# as the edit happens. Net effect: the contract's files[] is always an accurate
+# ledger of the session footprint, which final-review audits against intent
+# (the "you touched 8 files for a 1-line request - justify" axis).
 #
-# Opt-in: if .scope.json does not exist in the repo root, this hook is silent.
-# Declared-editing discipline is something the agent opts into by writing the
-# contract. No contract = no gate (fallback to declared-editing ladder + the
-# footprint check in final-review).
+# This REPLACES the old declared-scope VIOLATION advisory. When every edit is
+# auto-recorded, an edit can never be "out of declared scope" - there is nothing
+# to violate. The gate became a recorder. acceptance stays the model's to fill:
+# a deterministic success check cannot be derived mechanically.
 #
-# Mechanism: resolve edited file -> repo-relative, run scope_match.py against
-# .scope.json's files[], append advisory to feedback-<cid>.txt on violation.
-# Identical pattern to semantic-density-audit and anti-slop-audit.
-#
-# Advisory only: never blocks, never persists state, ALWAYS exits 0.
+# Opt-in: silent if .scope.json does not exist in the repo root (no scaffold yet
+# = nothing to maintain). Rewrites ONLY files[]; every other field (intent,
+# acceptance, allow_growth, _intent_hash, _generated_by, ...) is preserved.
+# Never blocks, never needs Python, ALWAYS exits 0.
 # Disable: HOOKS_ENFORCE=0  or  SCOPE_GATE_ENFORCE=0
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -43,94 +43,55 @@ foreach ($k in 'file_path', 'path', 'filename', 'absolute_path', 'abs_path') {
 if (-not $fp) { exit 0 }
 $rel = ConvertTo-FwdPath $fp
 if ($rel.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) { $rel = $rel.Substring($root.Length + 1) }
+$rel = $rel.TrimStart('/')
 if (Test-IsCursorConfigPath $fp) { exit 0 }
 if (Test-IsCursorConfigPath $rel) { exit 0 }
+# Never record the contract file into itself.
+if ($rel -ieq '.scope.json') { exit 0 }
 
-# --- opt-in gate: no .scope.json = no gate ---------------------------------
+# --- opt-in gate: no .scope.json = nothing to maintain ---------------------
 $scopeFile = "$root/.scope.json"
 if (-not (Test-Path -LiteralPath $scopeFile)) { exit 0 }
 
-# --- resolve Python + run scope_match.py -----------------------------------
-$py = Get-Command python, python3, py -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $py) { exit 0 }   # no Python -> fail open
+# --- load the contract; bail quietly on malformed JSON ---------------------
+$sj = $null
+try { $sj = Get-Content -LiteralPath $scopeFile -Raw | ConvertFrom-Json } catch { exit 0 }
+if (-not $sj) { exit 0 }
 
-$matcher = Join-Path $HOME '.cursor\skills\anti-slop\scripts\scope_match.py'
-if (-not (Test-Path $matcher)) { exit 0 }   # skill not installed -> silent
+# --- compute the new files[] -----------------------------------------------
+# Start from existing files, drop the scaffold placeholder and blanks, then add
+# this edit if it is not already recorded (case-insensitive, slash-normalized).
+$existing = @()
+if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
 
-$mout = & $py.Source $matcher --path $rel --patterns-file $scopeFile 2>$null
-if (-not $mout) { exit 0 }
-
-$payload = $null
-try { $payload = ($mout -join "`n") | ConvertFrom-Json } catch { }
-if (-not $payload) { exit 0 }
-
-# fail-open: if scope_match reported skipped (no valid contract), stay silent
-$hasSkipped = $false
-try { if ($payload.PSObject.Properties['skipped']) { $hasSkipped = $true } } catch { }
-if ($hasSkipped) { exit 0 }
-
-$inScope = $false
-try { $inScope = [bool]$payload.in_scope } catch { }
-if ($inScope) { exit 0 }
-
-# --- violation: compose advisory -------------------------------------------
-$allowGrowth = $false
-if ($payload.PSObject.Properties['allow_growth'] -and $payload.allow_growth) { $allowGrowth = $true }
-$intent = ''
-if ($payload.PSObject.Properties['intent']) { $intent = [string]$payload.intent }
-$acceptance = ''
-if ($payload.PSObject.Properties['acceptance']) { $acceptance = [string]$payload.acceptance }
-
-# Read the declared files list for the message (best-effort; skip on failure)
-$declaredFiles = ''
-try {
-    $scopeJson = Get-Content -LiteralPath $scopeFile -Raw | ConvertFrom-Json
-    if ($scopeJson.files) { $declaredFiles = ($scopeJson.files -join ', ') }
-} catch { }
-
-# acceptance line: only quote it when the agent bothered to declare one. A blank
-# acceptance means the Anchor Set was incomplete - surface that gap, since the
-# whole point of the pre-compile phase is to name the deterministic success check.
-$acceptanceLine = if ($acceptance) { $acceptance } else { '(not declared — your Anchor Set is missing the ÉXITO/acceptance field)' }
-
-if ($allowGrowth) {
-    # Growth is allowed: informational, not a violation
-    $summary = "Scope note - $rel is new vs your declared scope (growth allowed)"
-    $body = @"
-  You touched a file outside your initial declared set. Since allow_growth is
-  true, this is not a violation, but justify it: add $rel to .scope.json or
-  explain why the scope grew.
-
-  Your success contract (acceptance): $acceptanceLine
-  Does growing into $rel still serve that?
-"@
-} else {
-    # Hard violation: edited outside the declared contract
-    $summary = "[SCOPE VIOLATION] $rel is NOT in your declared scope"
-    $body = @"
-  Your contract (.scope.json):
-    intent: $intent
-    files: $declaredFiles
-    acceptance: $acceptanceLine
-
-  You declared these files and touched one outside the set. Either:
-    1. Add $rel to .scope.json with a one-line justification, OR
-    2. Revert the change - it is out of scope for the declared intent.
-
-  Declared-editing: declare BEFORE you expand. Don't sneak edits past the gate.
-"@
+$kept = @()
+foreach ($e in $existing) {
+    if (-not $e) { continue }
+    $s = [string]$e
+    if ($s -match '^\s*<TODO') { continue }       # drop the scaffold placeholder
+    if ([string]::IsNullOrWhiteSpace($s)) { continue }
+    $kept += $s
 }
 
-$msg = "$summary`n`n$body`n`n(Advisory; disable: SCOPE_GATE_ENFORCE=0)"
+$already = $false
+foreach ($f in $kept) {
+    if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }
+}
+if (-not $already) { $kept += $rel }
 
-# --- append to the shared pending file --------------------------------------
-$cid = Get-SafeConversationId $obj
-$pending = Join-Path (Get-HooksPendingDir) "feedback-$cid.txt"
+# Only rewrite when files[] actually changed (avoid churning the file on every
+# repeat edit of the same path).
+$before = ($existing | ForEach-Object { [string]$_ }) -join '|'
+$after  = ($kept     | ForEach-Object { [string]$_ }) -join '|'
+if ($before -eq $after) { exit 0 }
+
+# --- write back, preserving every other field and its order ----------------
 try {
-    New-Item -ItemType Directory -Path (Split-Path $pending) -Force | Out-Null
-    $prefix = ''
-    if ((Test-Path $pending) -and ((Get-Item $pending).Length -gt 0)) { $prefix = "`n`n---`n`n" }
-    Add-Content -Path $pending -Value ($prefix + $msg) -NoNewline
+    $ordered = [ordered]@{}
+    foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
+    $ordered['files'] = @($kept)                  # force array form under pwsh 7
+    $json = $ordered | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText($scopeFile, $json, [System.Text.UTF8Encoding]::new($false))
 } catch { }
 
 exit 0

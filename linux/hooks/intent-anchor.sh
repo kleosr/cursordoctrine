@@ -18,11 +18,13 @@
 #   2. AUTO-CREATE / REGENERATE .scope.json: when the current <user_query>
 #      differs from the contract on disk (no contract yet, OR _intent_hash
 #      mismatch), the hook WRITES a scaffold to the REPO ROOT: intent locked
-#      from the prompt, files/acceptance as TODO placeholders the agent
-#      refines. This is the user-requested behavior: every new prompt ->
-#      a fresh .scope.json the agent works from. Fixed vs the broken 0.4.4
-#      build: never writes to $HOME (bails if no real root resolves -> no
-#      ghost files), and regenerates on prompt CHANGE not just on absence.
+#      from the prompt, files as an EMPTY array (scope-gate-audit.sh fills it
+#      mechanically as the agent edits - the agent never maintains files[] by
+#      hand), acceptance as a TODO the agent sets. This is the user-requested
+#      behavior: every new prompt -> a fresh .scope.json the agent works from.
+#      Fixed vs the broken 0.4.4 build: never writes to $HOME (bails if no real
+#      root resolves -> no ghost files), regenerates on prompt CHANGE not just
+#      on absence.
 #   3. RE-INJECT on same-prompt turns: when the query is unchanged (contract
 #      already current), the hook re-injects the existing contract into the
 #      feedback bus so it stays in the model's attentional focus each turn.
@@ -151,14 +153,14 @@ if [ "$should_write" = "1" ]; then
     # is self-contained in the file (survives cross-session hash sweeps).
     if have_jq; then
         jq -n --arg intent "$current_query" --arg hash "$current_hash" \
-            '{intent:$intent, files:["<TODO: list files you will touch>"], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
+            '{intent:$intent, files:[], acceptance:"<TODO: the one deterministic check that decides done>", allow_growth:false, _intent_hash:$hash, _generated_by:"intent-anchor hook"}' \
             > "$scope_path" 2>/dev/null && regenerated=1
     elif have_py; then
         if I_FILE="$scope_path" I_INTENT="$current_query" I_HASH="$current_hash" python3 -c '
 import json, os
 obj = {
     "intent": os.environ["I_INTENT"],
-    "files": ["<TODO: list files you will touch>"],
+    "files": [],
     "acceptance": "<TODO: the one deterministic check that decides done>",
     "allow_growth": False,
     "_intent_hash": os.environ["I_HASH"],
@@ -173,11 +175,15 @@ with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
     if [ "$regenerated" = "1" ]; then
         scope_intent="$current_query"
         scope_acceptance="<TODO: the one deterministic check that decides done>"
-        scope_files="<TODO: list files you will touch>"
+        scope_files="(auto-tracked - the scope hook records every file you edit)"
         scope_exists=1
         scope_stale=0
     fi
 fi
+
+# files[] is auto-tracked and starts empty; show something readable until the
+# scope hook has recorded the first edit.
+[ -n "$scope_files" ] || scope_files="(none yet - auto-tracked as you edit)"
 
 # --- compose the anchor message ---------------------------------------------
 # Three states: regenerated this turn (new prompt), no contract (and no query
@@ -196,9 +202,10 @@ if [ "$regenerated" = "1" ]; then
   acceptance: $scope_acceptance
 
 The hook wrote a fresh scaffold to $scope_path from your current request. intent
-is locked from what you just asked. Fill the TODO placeholders with the real
-files you will touch and the deterministic acceptance check, THEN proceed. This
-contract will be re-injected every turn until your request changes again."
+is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
+records every file you edit, so do not maintain it by hand. Set acceptance to
+the one deterministic check that decides done, THEN proceed. This contract will
+be re-injected every turn until your request changes again."
 elif [ "$scope_exists" != "1" ]; then
     msg="INTENT ANCHOR (pre-compile) - no .scope.json found in $root, and the current
 request was unavailable to scaffold from.

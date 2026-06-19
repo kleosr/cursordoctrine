@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# scope-gate-audit.sh - afterFileEdit "declared scope" advisory (Cursor, Linux).
+# scope-gate-audit.sh - afterFileEdit "scope auto-record" (Cursor, Linux).
 #
-# Compuerta 1 of the anti-slop system: the declared-scope gate. When the agent
-# writes a .scope.json contract (intent + files[] + acceptance), this hook
-# checks every edited file against it. Editing OUTSIDE the declared set is the
-# textbook scope-creep / gold-plating signal. Advisory only (no preToolUse for
-# file edits on Cursor); the violation is flagged on the next turn.
+# Compuerta 1, mechanical edition: keep .scope.json's files[] in sync with what
+# the agent ACTUALLY edits, with ZERO reliance on the model remembering to fill
+# it. intent-anchor.sh writes the scaffold (intent locked from the prompt,
+# files: [], acceptance: TODO); THIS hook appends every edited file to files[]
+# as the edit happens. Net effect: the contract's files[] is always an accurate
+# ledger of the session footprint, which final-review audits against intent.
 #
-# Opt-in: if .scope.json does not exist in the repo root, this hook is silent.
-# No contract = no gate (fallback to declared-editing ladder + final-review).
+# This REPLACES the old declared-scope VIOLATION advisory. When every edit is
+# auto-recorded, an edit can never be "out of declared scope" - there is nothing
+# to violate. The gate became a recorder. acceptance stays the model's to fill.
 #
-# Mechanism: resolve edited file -> repo-relative, run scope_match.py against
-# .scope.json's files[], append advisory to feedback-<cid>.txt on violation.
-#
-# Advisory only: never blocks, never persists state, ALWAYS exits 0.
+# Opt-in: silent if .scope.json does not exist in the repo root. Rewrites ONLY
+# files[]; every other field is preserved. jq preferred, python3 fallback; if
+# neither is present we fail open (no JSON tool = no record). ALWAYS exits 0.
 # Disable: HOOKS_ENFORCE=0  or  SCOPE_GATE_ENFORCE=0
 
 set +e
@@ -45,111 +46,45 @@ done
 [ -n "$fp" ] || exit 0
 rel="$fp"
 case "$rel" in "$root"/*) rel="${rel#"$root"/}" ;; esac
+rel="${rel#/}"
 if is_cursor_config_path "$fp" || is_cursor_config_path "$rel"; then exit 0; fi
+# Never record the contract file into itself.
+[ "$rel" = ".scope.json" ] && exit 0
 
-# --- opt-in gate: no .scope.json = no gate ---------------------------------
+# --- opt-in gate: no .scope.json = nothing to maintain ---------------------
 scope_file="$root/.scope.json"
 [ -f "$scope_file" ] || exit 0
 
-# --- resolve Python + run scope_match.py ---------------------------------
-py=""
-for c in python3 python; do
-    if command -v "$c" >/dev/null 2>&1; then py="$c"; break; fi
-done
-[ -n "$py" ] || exit 0   # no Python -> fail open
+# --- auto-record $rel into files[] (jq preferred, python3 fallback) --------
+# Clean the existing list (drop the scaffold placeholder + blanks), then add
+# this edit if absent. Write only when the resulting files[] actually changed,
+# so repeat edits of the same file do not churn the contract.
+jq_prog='((.files // []) | map(select(type=="string" and . != "" and (startswith("<TODO")|not)))) as $c'
 
-matcher="$HOME/.cursor/skills/anti-slop/scripts/scope_match.py"
-[ -f "$matcher" ] || exit 0   # skill not installed -> silent
-
-mout="$("$py" "$matcher" --path "$rel" --patterns-file "$scope_file" 2>/dev/null)"
-[ -n "$mout" ] || exit 0
-
-# --- parse the JSON result (reuse the Python we already resolved) ----------
-parse_result() {
-    "$py" - "$@" <<'PYEOF' 2>/dev/null
-import json, sys
+if have_jq; then
+    old_files="$(jq -c '.files // []' "$scope_file" 2>/dev/null)"
+    new_files="$(jq -c --arg rel "$rel" "$jq_prog | (if (\$c | index(\$rel)) then \$c else \$c + [\$rel] end)" "$scope_file" 2>/dev/null)"
+    [ -n "$new_files" ] || exit 0
+    [ "$new_files" = "$old_files" ] && exit 0
+    updated="$(jq --arg rel "$rel" "$jq_prog | .files = (if (\$c | index(\$rel)) then \$c else \$c + [\$rel] end)" "$scope_file" 2>/dev/null)"
+    [ -n "$updated" ] && printf '%s\n' "$updated" > "$scope_file"
+elif have_py; then
+    I_FILE="$scope_file" I_REL="$rel" python3 -c '
+import json, os, sys
+path = os.environ["I_FILE"]; rel = os.environ["I_REL"]
 try:
-    p = json.loads(sys.stdin.read())
+    d = json.load(open(path, encoding="utf-8"))
 except Exception:
-    sys.exit(1)
-if p.get("skipped"):
-    sys.exit(2)   # no valid contract -> fail-open
-if p.get("in_scope"):
-    sys.exit(3)   # in scope -> clean
-allow_growth = "1" if p.get("allow_growth") else "0"
-intent = p.get("intent", "")
-acceptance = p.get("acceptance", "")
-print(f"__AG__{allow_growth}")
-print(f"__INTENT__{intent}")
-print(f"__ACCEPT__{acceptance}")
-sys.exit(0)
-PYEOF
-}
-
-parsed="$(printf '%s' "$mout" | parse_result)"
-rc=$?
-[ "$rc" -eq 0 ] || exit 0   # 2=skipped, 3=in-scope, 1=parse-fail -> all silent
-
-allow_growth="$(printf '%s\n' "$parsed" | grep '__AG__' | sed 's/__AG__//')"
-intent="$(printf '%s\n' "$parsed" | grep '__INTENT__' | sed 's/__INTENT__//')"
-acceptance="$(printf '%s\n' "$parsed" | grep '__ACCEPT__' | sed 's/__ACCEPT__//')"
-
-# Read declared files for the message (best-effort)
-declared_files="$(printf '%s' "$scope_file" | "$py" -c "
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-    print(', '.join(d.get('files', [])))
-except Exception:
-    pass
-" "$scope_file" 2>/dev/null)"
-
-# --- compose advisory ------------------------------------------------------
-# acceptance line: only quote it when the agent declared one. A blank acceptance
-# means the Anchor Set was incomplete - surface that gap, since the whole point
-# of the pre-compile phase is to name the deterministic success check.
-if [ -n "$acceptance" ]; then
-    acceptance_line="$acceptance"
-else
-    acceptance_line="(not declared - your Anchor Set is missing the EXITO/acceptance field)"
-fi
-
-if [ "$allow_growth" = "1" ]; then
-    summary="Scope note - $rel is new vs your declared scope (growth allowed)"
-    body="  You touched a file outside your initial declared set. Since allow_growth is
-  true, this is not a violation, but justify it: add $rel to .scope.json or
-  explain why the scope grew.
-
-  Your success contract (acceptance): $acceptance_line
-  Does growing into $rel still serve that?"
-else
-    summary="[SCOPE VIOLATION] $rel is NOT in your declared scope"
-    body="  Your contract (.scope.json):
-    intent: $intent
-    files: $declared_files
-    acceptance: $acceptance_line
-
-  You declared these files and touched one outside the set. Either:
-    1. Add $rel to .scope.json with a one-line justification, OR
-    2. Revert the change - it is out of scope for the declared intent.
-
-  Declared-editing: declare BEFORE you expand. Don't sneak edits past the gate."
-fi
-
-msg="${summary}
-
-${body}
-
-(Advisory; disable: SCOPE_GATE_ENFORCE=0)"
-
-# --- append to the shared pending file --------------------------------------
-cid="$(safe_conversation_id "$input")"
-pending="$(hooks_pending_dir)/feedback-${cid}.txt"
-mkdir -p "$(dirname "$pending")" 2>/dev/null
-if [ -s "$pending" ]; then
-    printf '\n\n---\n\n%s' "$msg" >> "$pending" 2>/dev/null
-else
-    printf '%s' "$msg" >> "$pending" 2>/dev/null
+    sys.exit(0)
+files = d.get("files", []) or []
+clean = [f for f in files if isinstance(f, str) and f and not f.startswith("<TODO")]
+new = clean if rel in clean else clean + [rel]
+if new == files:
+    sys.exit(0)
+d["files"] = new
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+' 2>/dev/null
 fi
 
 exit 0
