@@ -53,29 +53,15 @@ $prompt = Redact-SecretsFromIntent $prompt
 $cid = Get-SafeConversationId $obj
 $pendingDir = Get-HooksPendingDir
 
-# --- stash the verbatim prompt FIRST (before root resolution) ----------------
-# beforeSubmitPrompt can ship a payload WITHOUT cwd/workspace_roots on some
-# Cursor builds. We must still capture the verbatim prompt so intent-anchor
-# (postToolUse, which DOES carry cwd) writes .scope.json with the RIGHT intent
-# on its first fire - instead of falling back to <user_query> parsing that can
-# be unreadable or contaminated by hook followups. The stash lives under
-# $HOME/.cursor/.hooks-pending (no repo root needed), so it is always safe.
+# --- repo root (shared resolver; NO $HOME fallback - no ghost files) -----------
+$root = Resolve-ProjectRoot $obj
+if (-not $root) { exit 0 }
+
+# --- stash the prompt so intent-anchor reads the same ground-truth text -------
 try {
     New-Item -ItemType Directory -Path $pendingDir -Force | Out-Null
     [System.IO.File]::WriteAllText((Get-CurrentPromptPath $cid), $prompt, [System.Text.UTF8Encoding]::new($false))
 } catch { }
-
-# --- repo root (workspace_roots / cwd; NO $HOME fallback - no ghost files) ----
-$root = ''
-$cands = @()
-if ($obj.PSObject.Properties['cwd'] -and $obj.cwd) { $cands += [string]$obj.cwd }
-if ($obj.PSObject.Properties['workspace_roots']) { foreach ($w in $obj.workspace_roots) { $cands += [string]$w } }
-foreach ($c in $cands) { $f = ConvertTo-FwdPath $c; if ($f -and (Test-Path -LiteralPath $f)) { $root = $f.TrimEnd('/'); break } }
-if (-not $root -and $env:CURSOR_PROJECT_DIR) {
-    $cpd = $env:CURSOR_PROJECT_DIR.Replace('\', '/').TrimEnd('/')
-    if (Test-Path -LiteralPath $cpd) { $root = $cpd }
-}
-if (-not $root) { exit 0 }
 
 # --- write / regenerate .scope.json (hash-gated) ------------------------------
 $currentHash = Get-Sha256Hex $prompt

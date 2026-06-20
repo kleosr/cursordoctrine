@@ -7,12 +7,16 @@ asked. Leave generated files alone unless explicitly required.
 
 ## Intent contract (.scope.json)
 The harness writes `.scope.json` to the repo root the moment you hit send -
-BEFORE your first token - with `intent` locked from the request, and re-injects
-it every turn. Treat it as your operating contract, not optional:
+BEFORE your first token - with `intent` SEEDED from the verbatim request (NOT
+finished - you refine it), and re-injects it every turn. Treat it as your
+operating contract, not optional:
 - It is the FIRST thing that exists each turn; govern by it from your first action.
-  As your first edits, refine `intent` to your normalized restatement and SHARPEN
-  the seeded `acceptance` to the one deterministic check (it is a draft, not a
-  blank `<TODO>`). `files[]` is auto-tracked - do not maintain it.
+  As your first edits, refine `intent` to your normalized Step 0 restatement
+  (one operational sentence in your own words; leave `trace.query` verbatim) and
+  SHARPEN the seeded `acceptance` to the one deterministic check (it is a draft,
+  not a blank `<TODO>`). `files[]` is auto-tracked - do not maintain it. The hook
+  re-demands both every turn until `intent` differs from `trace.query` AND
+  `acceptance` is no longer the default.
 - When the user's request changes, the contract regenerates with the new intent -
   refine it again for the new ask.
 - If a hook surfaces the contract, defer to it: it outranks momentum. Edit

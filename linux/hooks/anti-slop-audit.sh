@@ -29,16 +29,10 @@ set +e
 input="$(read_hook_stdin)"
 [ -n "$input" ] || exit 0
 
-# audit root: project from JSON (cwd, then workspace_roots), else CURSOR_PROJECT_DIR / HOME
-root=""
-while IFS= read -r cand; do
-    [ -n "$cand" ] && [ -d "$cand" ] && { root="${cand%/}"; break; }
-done <<EOF
-$(json_get "$input" cwd)
-$(json_get_array "$input" workspace_roots)
-EOF
-[ -n "$root" ] || root="${CURSOR_PROJECT_DIR:-$HOME}"
-root="${root%/}"
+# audit root: shared resolver (cwd -> workspace_roots -> CURSOR_PROJECT_DIR; NO
+# $HOME fallback - no ghost files, no auditing the wrong root).
+root="$(resolve_project_root "$input")"
+[ -n "$root" ] || exit 0
 
 # edited file -> repo-relative path
 fp=""

@@ -27,6 +27,29 @@ function Write-HookJson($payload) {
     $stdout.Flush()
 }
 
+# Resolve the project root for an afterFileEdit / postToolUse event: cwd ->
+# workspace_roots -> CURSOR_PROJECT_DIR, with NO $HOME fallback. intent-precompile,
+# intent-anchor and scope-gate all WRITE into $root/.scope.json; a $HOME fallback
+# there was the 0.4.4 "ghost file" bug (a contract persisted in the user's
+# profile). Shared here so the five hooks that resolve a root can NEVER drift
+# apart again (the drift that left three of them still falling back to $HOME).
+# Callers stay silent when this returns '' - they cannot know where to act.
+function Resolve-ProjectRoot($obj) {
+    $root = ''
+    $cands = @()
+    if ($obj -and $obj.PSObject.Properties['cwd'] -and $obj.cwd) { $cands += [string]$obj.cwd }
+    if ($obj -and $obj.PSObject.Properties['workspace_roots']) { foreach ($w in $obj.workspace_roots) { $cands += [string]$w } }
+    foreach ($c in $cands) {
+        $f = ConvertTo-FwdPath $c
+        if ($f -and (Test-Path -LiteralPath $f)) { $root = $f.TrimEnd('/'); break }
+    }
+    if (-not $root -and $env:CURSOR_PROJECT_DIR) {
+        $cpd = $env:CURSOR_PROJECT_DIR.Replace('\', '/').TrimEnd('/')
+        if (Test-Path -LiteralPath $cpd) { $root = $cpd }
+    }
+    return $root
+}
+
 function Get-SafeConversationId($obj) {
     $cid = ''
     if ($obj -and $obj.PSObject.Properties['conversation_id']) { $cid = [string]$obj.conversation_id }

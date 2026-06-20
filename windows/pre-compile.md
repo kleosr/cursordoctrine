@@ -24,11 +24,12 @@ force a guess that changes what "correct" means, you do not bury the guess in
 the restatement — you ask one sharp question (§5) and wait.
 
 The user's verbatim words stay the ground truth: `.scope.json`'s `trace.query`
-keeps them exactly as typed, and final-review traces every diff hunk back to
-THAT, not to your paraphrase. Your normalized sentence becomes `intent` (and the
-Anchor Set's OBJECTIVE below). The two must say the same thing in different
-words — if you cannot make `intent` and `trace.query` agree, you have misread
-the request, and that is the bug to fix first.
+keeps them exactly as typed, and the final-review hook pulls the same verbatim
+request from the transcript to trace every diff hunk back to. Your normalized
+sentence becomes `intent` (and the Anchor Set's OBJECTIVE below). The two must
+say the same thing in different words — if you cannot make `intent` and
+`trace.query` agree, you have misread the request, and that is the bug to fix
+first.
 
 ## The Anchor Set
 
@@ -59,9 +60,12 @@ hook fires on `beforeSubmitPrompt` (right after the user hits send) and writes
 request — so the contract is the FIRST artifact of the turn, and you govern by it
 from the very first action. `intent-anchor` then re-injects it on every tool
 boundary to keep it in focus.
-  - `intent` is locked from the request and REFRESHED when the request changes — a
-    new prompt regenerates the contract and resets `files[]`, so it never carries
-    over between features;
+  - `intent` is SEEDED with the verbatim request and REFRESHED when the request
+    changes — a new prompt regenerates the contract and resets `files[]`, so it
+    never carries between features. The seed is NOT finished intent: you rewrite it
+    as your Step 0 restatement, and `trace.query` (verbatim, never touched) is the
+    audit anchor. The hook treats `intent == trace.query` as “unrefined” and
+    re-demands the rewrite every turn until they diverge;
   - `files[]` is auto-recorded — the scope hook appends every file you edit, so
     you never maintain it by hand;
   - `acceptance` is SEEDED with a real default (never a bare `<TODO>`); it is not a

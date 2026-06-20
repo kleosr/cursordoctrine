@@ -63,17 +63,8 @@ pending_dir="$(hooks_pending_dir)"
 mkdir -p "$pending_dir" 2>/dev/null
 printf '%s' "$prompt" > "$(current_prompt_path "$cid")" 2>/dev/null
 
-# --- repo root (workspace_roots / cwd; NO $HOME fallback - no ghost files) ----
-root=""
-while IFS= read -r cand; do
-    [ -n "$cand" ] && [ -d "$cand" ] && { root="${cand%/}"; break; }
-done <<EOF
-$(json_get "$input" cwd)
-$(json_get_array "$input" workspace_roots)
-EOF
-if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
-    root="${CURSOR_PROJECT_DIR%/}"
-fi
+# --- repo root (shared resolver; NO $HOME fallback - no ghost files) -----------
+root="$(resolve_project_root "$input")"
 [ -n "$root" ] || exit 0
 
 # --- write / regenerate .scope.json (hash-gated) ------------------------------

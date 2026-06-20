@@ -92,7 +92,7 @@ That is the only meta-instruction in this session.
 When you call Bash:
 
   - The harness will deny a small list of dangerous commands. The list
-    is in `permission-gate.sh` next to the hook scripts (installed under
+    is in `permission-gate.ps1` next to the hook scripts (installed under
     `~/.agents/hooks/` — `cat` it once at session start to internalize
     it, then never look at it again). Don't re-discover it by trying
     `rm -rf /`.
