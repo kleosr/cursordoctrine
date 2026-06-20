@@ -57,6 +57,68 @@ Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
 # intent-anchor can detect prompt changes; the 7-day sweep above reaps it.
 Remove-Item $intentLatch -Force -ErrorAction SilentlyContinue
 
+# --- INTENT ENFORCEMENT GATE (Tier -1, the fix for "intent stays verbatim") ---
+# intent-anchor.ps1 already DEMANDS the Step 0 restatement via additional_context,
+# but additional_context is advisory noise the agent routinely buries -> intent
+# stays byte-identical to trace.query for the whole turn. The ONLY non-advisory
+# lever in this harness is a stop followup_message: Cursor resubmits it as a REAL
+# user turn (max salience), not ignorable context. So if the agent stops with
+# intent still verbatim, force ONE sharp followup whose sole instruction is the
+# string-replace on .scope.json. Bounded: intent-gate-fired-<cid>.hash records the
+# _intent_hash it fired on -> fires AT MOST ONCE per prompt (if ignored, give up
+# gracefully instead of starving the real review of loop_limit turns). Resets
+# automatically when the prompt changes (hash differs). Precondition-first: a
+# final review against a verbatim intent is auditing the wrong contract.
+$gateRoot = Resolve-ProjectRoot $obj
+if ($gateRoot) {
+    $gateScope = Join-Path $gateRoot '.scope.json'
+    if (Test-Path -LiteralPath $gateScope) {
+        $gateSj = $null
+        try { $gateSj = Get-Content -LiteralPath $gateScope -Raw | ConvertFrom-Json } catch { $gateSj = $null }
+        if ($gateSj -and $gateSj.PSObject.Properties['intent'] -and $gateSj.trace) {
+            $gIntent = [string]$gateSj.intent
+            $gTrace  = ''
+            if ($gateSj.trace.PSObject.Properties['query']) { $gTrace = [string]$gateSj.trace.query }
+            $gHash = ''
+            if ($gateSj.PSObject.Properties['_intent_hash']) { $gHash = [string]$gateSj._intent_hash }
+            $gVerbatim = (-not [string]::IsNullOrWhiteSpace($gIntent)) `
+                -and (-not [string]::IsNullOrWhiteSpace($gTrace)) `
+                -and ($gIntent.Trim() -ieq $gTrace.Trim())
+            if ($gVerbatim -and $gHash) {
+                $gateFiredFile = Join-Path $pendingDir "intent-gate-fired-$cid.hash"
+                $gFiredHash = ''
+                if (Test-Path $gateFiredFile) { $gFiredHash = (Get-Content $gateFiredFile -Raw -ErrorAction SilentlyContinue).Trim() }
+                if ($gFiredHash -ne $gHash) {
+                    try { Set-Content -Path $gateFiredFile -Value $gHash -NoNewline -ErrorAction SilentlyContinue } catch { }
+                    $scopeFwd = ConvertTo-FwdPath $gateScope
+                    $gateMsg = @"
+INTENT REFINEMENT REQUIRED (precondition before any review or further work).
+
+You stopped, but .scope.json's 'intent' field is still your VERBATIM request
+(byte-identical to 'trace.query') - you never did your Step 0 restatement, so
+you have not confirmed you understood the request. Do EXACTLY this one edit and
+nothing else:
+
+  1. Open $scopeFwd
+  2. Replace ONLY the value of the 'intent' field with ONE operational sentence
+     in YOUR OWN words: the request restated - grammar fixed, pronouns resolved,
+     implicit constraints made explicit, meaning preserved. Not 'improve X' -
+     the concrete verb (what to make return / change / happen).
+  3. Do NOT touch 'trace.query', '_intent_hash', '_generated_by', 'files', or
+     'acceptance'. Do NOT rewrite the whole file - one targeted string-replace
+     on the 'intent' value only.
+
+'intent' and 'trace.query' must say the SAME thing in DIFFERENT words. Make this
+single edit, then stop.
+"@
+                    Write-HookJson @{ followup_message = $gateMsg }
+                    exit 0
+                }
+            }
+        }
+    }
+}
+
 # One-shot brake: the previous stop for this conversation emitted the review.
 # Clear the flag (and whatever the review pass itself edited) and end the loop.
 if (Test-Path $flag) {

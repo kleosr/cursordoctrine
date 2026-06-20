@@ -50,6 +50,73 @@ find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 # intent-anchor can detect prompt changes; the 7-day sweep above reaps it.
 rm -f "$intent_latch" 2>/dev/null
 
+# --- INTENT ENFORCEMENT GATE (Tier -1, the fix for "intent stays verbatim") ---
+# [mirrors final-review.ps1] intent-anchor.sh already DEMANDS the Step 0
+# restatement via additional_context, but that is advisory noise the agent
+# buries -> intent stays byte-identical to trace.query for the whole turn. The
+# ONLY non-advisory lever in this harness is a stop followup_message: Cursor
+# resubmits it as a REAL user turn (max salience). So if the agent stops with
+# intent still verbatim, force ONE sharp followup whose sole instruction is the
+# string-replace on .scope.json. Bounded: intent-gate-fired-<cid>.hash records
+# the _intent_hash it fired on -> fires AT MOST ONCE per prompt (if ignored,
+# give up gracefully instead of starving the real review). Resets automatically
+# when the prompt changes. Precondition-first: a final review against a verbatim
+# intent is auditing the wrong contract.
+gate_root="$(resolve_project_root "$input")"
+if [ -n "$gate_root" ] && [ -f "$gate_root/.scope.json" ]; then
+    scope_raw="$(cat "$gate_root/.scope.json" 2>/dev/null)"
+    if [ -n "$scope_raw" ]; then
+        if have_jq; then
+            g_intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
+            g_trace="$(printf '%s' "$scope_raw" | jq -r '.trace.query // empty' 2>/dev/null)"
+            g_hash="$(printf '%s' "$scope_raw" | jq -r '._intent_hash // empty' 2>/dev/null)"
+        elif have_py; then
+            g_intent="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("intent") or "")
+except Exception: pass' 2>/dev/null)"
+            g_trace="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try:
+ o=json.load(sys.stdin); print((o.get("trace") or {}).get("query") or "")
+except Exception: pass' 2>/dev/null)"
+            g_hash="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("_intent_hash") or "")
+except Exception: pass' 2>/dev/null)"
+        fi
+        # trim + case-insensitive compare
+        gi="$(printf '%s' "$g_intent" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        gt="$(printf '%s' "$g_trace" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [ -n "$gi" ] && [ -n "$gt" ] && [ "$gi" = "$gt" ] && [ -n "$g_hash" ]; then
+            gate_fired="$pending_dir/intent-gate-fired-$cid.hash"
+            g_fired=""
+            [ -f "$gate_fired" ] && g_fired="$(cat "$gate_fired" 2>/dev/null)"
+            if [ "$g_fired" != "$g_hash" ]; then
+                printf '%s' "$g_hash" > "$gate_fired" 2>/dev/null
+                scope_fwd="$(printf '%s' "$gate_root/.scope.json" | sed 's|\\\\|/|g')"
+                gate_msg="INTENT REFINEMENT REQUIRED (precondition before any review or further work).
+
+You stopped, but .scope.json's 'intent' field is still your VERBATIM request
+(byte-identical to 'trace.query') - you never did your Step 0 restatement, so
+you have not confirmed you understood the request. Do EXACTLY this one edit and
+nothing else:
+
+  1. Open $scope_fwd
+  2. Replace ONLY the value of the 'intent' field with ONE operational sentence
+     in YOUR OWN words: the request restated - grammar fixed, pronouns resolved,
+     implicit constraints made explicit, meaning preserved. Not 'improve X' -
+     the concrete verb (what to make return / change / happen).
+  3. Do NOT touch 'trace.query', '_intent_hash', '_generated_by', 'files', or
+     'acceptance'. Do NOT rewrite the whole file - one targeted string-replace
+     on the 'intent' value only.
+
+'intent' and 'trace.query' must say the SAME thing in DIFFERENT words. Make this
+single edit, then stop."
+                emit_json followup_message "$gate_msg"
+                exit 0
+            fi
+        fi
+    fi
+fi
+
 # One-shot brake: the previous stop for this conversation emitted the review.
 if [ -f "$flag" ]; then
     rm -f "$flag" "$marker" 2>/dev/null
