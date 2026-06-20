@@ -112,6 +112,22 @@ sha256_hex() {
     fi
 }
 
+# is_hook_generated <text> -> 0 (true) if text opens with a hook-generated
+# followup header (FINAL REVIEW / SUBAGENT FINAL REVIEW / SELF-REVIEW / INTENT
+# ANCHOR / INTENT REFINEMENT REQUIRED), 1 otherwise. Mirrors Test-IsHookGeneratedQuery
+# in the windows/.ps1 edition. SHARED so intent-precompile (beforeSubmitPrompt)
+# and intent-anchor (postToolUse) agree on what counts as a hook turn: the gate
+# followup Cursor resubmits as a user turn must be recognized by BOTH, or the
+# one that misses it clobbers .scope.json with review/gate boilerplate (the
+# contamination loop). KEEP IN SYNC with HOOK_HDR + the grep filter inside
+# extract_last_user_query below (same header list, three representations).
+is_hook_generated() {
+    case "$1" in
+        "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*|"INTENT REFINEMENT REQUIRED"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Path where beforeSubmitPrompt stashes the verbatim user prompt for the turn.
 # intent-anchor PREFERS this over transcript parsing: ground-truth request from
 # the payload, present on the FIRST postToolUse, immune to <user_query>
@@ -206,7 +222,7 @@ extract_last_user_query() {
     if have_py; then
         printf '%s' "$reversed" | python3 -c '
 import json, re, sys
-HOOK_HDR = re.compile(r"^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)", re.M)
+HOOK_HDR = re.compile(r"^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)", re.M)
 EMBEDDED = re.compile(r"ORIGINAL REQUEST[^\r\n]*\r?\n-{3,}\r?\n(.+?)\r?\n-{3,}", re.S)
 def redact(q):
     q = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", q)
@@ -269,7 +285,7 @@ except Exception:
     printf '%s' "$reversed" |
         grep -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
         sed -E 's@</?user_query>@@g' |
-        grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)' 2>/dev/null |
+        grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)' 2>/dev/null |
         head -n1 |
         sed -E 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' |
         head -c 2000

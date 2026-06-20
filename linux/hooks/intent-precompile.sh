@@ -44,9 +44,7 @@ prompt="$(printf '%s' "$prompt" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$
 [ -n "$prompt" ] || exit 0
 
 # Auto-submitted hook followups are not the user's request -> leave the contract.
-case "$prompt" in
-    "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*) exit 0 ;;
-esac
+is_hook_generated "$prompt" && exit 0
 
 prompt="$(redact_secrets "$prompt")"
 

@@ -157,7 +157,7 @@ if [ -z "$body" ]; then
      no tautological tests.
   4. Anti-slop - if the anti-slop scanner exists, run `python <scanner> --all` first;
      then read ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all
-     13 items to the session diff. Consolidate clones; drop premature abstraction,
+     items to the session diff. Consolidate clones; drop premature abstraction,
      unneeded deps, operational slop, unjustified files. Do NOT re-list the items here.
   5. Wiring completeness - for every user-visible behavior you added/changed
      (button, submit, API call, route, state transition), trace its execution

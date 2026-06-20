@@ -373,7 +373,7 @@ function verify() {
     const sizeBefore = statSync(scopePath).size;
     runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
     d = drainedOf(anchorCid);
-    if (!d.includes('re-injected this turn')) {
+    if (!d.includes('re-injected')) {
       cleanup(); return { ok: false, detail: 'same-prompt turn did not re-inject' };
     }
     // _intent_hash matches -> file must not have been regenerated. Intent still q1.

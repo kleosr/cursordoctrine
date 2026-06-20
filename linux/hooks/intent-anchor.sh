@@ -150,7 +150,8 @@ except Exception: pass' "$scope_path" 2>/dev/null)"
     # it). Treat it as unusable: regenerate when the request is readable, else hand
     # the agent the pre-compile demand to author a real one.
     case "$scope_intent" in
-        ""|"<TODO"*|"FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*) scope_hollow=1 ;;
+        ""|"<TODO"*) scope_hollow=1 ;;
+        *) is_hook_generated "$scope_intent" && scope_hollow=1 ;;
     esac
     if [ "$scope_exists" = "1" ] && [ "$has_query" = "1" ]; then
         if [ "$scope_hollow" = "1" ]; then
@@ -275,7 +276,7 @@ case "$scope_acceptance" in
     "<TODO"*|*"Sharpen to the one deterministic check"*)
         acceptance_demand="
 
->> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work." ;;
+>> acceptance is still the seed. Sharpen it to the one deterministic check that decides done." ;;
 esac
 
 # intent is SEEDED with the verbatim request (trace.query), never "locked" done. It
@@ -302,24 +303,18 @@ if [ "$scope_exists" = "1" ] && [ -n "$verbatim" ] && [ -n "$scope_intent" ]; th
     if [ "$ti_lc" = "$tv_lc" ]; then
         intent_demand="
 
->> intent is still the VERBATIM request (byte-identical to trace.query). Your FIRST action this turn is a targeted string-replace on .scope.json setting 'intent' to your Step 0 restatement - one operational sentence in your OWN words: grammar fixed, pronouns resolved, implicit constraints made explicit, meaning preserved. Do NOT touch 'trace.query' (it is the audit anchor). Until intent is in your words you have not confirmed you understood the request."
+>> intent is still the VERBATIM request. FIRST action: string-replace .scope.json 'intent' with your Step 0 restatement (one operational sentence in your own words). Don't touch 'trace.query'."
     fi
 fi
 
 if [ "$regenerated" = "1" ]; then
-    msg="INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
+    msg="INTENT ANCHOR (scope regenerated) - fresh .scope.json from your request.
 
   intent:     $scope_intent
   files:      $scope_files
   acceptance: $scope_acceptance
 
-The hook wrote a fresh scaffold to $scope_path from your current request. intent
-is SEEDED with your verbatim request - it is NOT done: rewrite it as your Step 0
-restatement (one operational sentence in your own words). files[] is AUTO-TRACKED -
-the scope hook records every file you edit, so do not maintain it by hand.
-acceptance is seeded with a sensible default; sharpen it to the one deterministic
-check, THEN proceed. This contract is re-injected every turn until your request
-changes again.$intent_demand$acceptance_demand"
+Re-injected every turn until the request changes.$intent_demand$acceptance_demand"
 elif [ "$scope_exists" != "1" ] || [ "$scope_hollow" = "1" ]; then
     if [ "$scope_hollow" = "1" ]; then
         state="the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)"
@@ -348,14 +343,13 @@ else
     else
         drift_note="(request unavailable to diff against - re-injecting the contract as-is.)"
     fi
-    msg="INTENT ANCHOR (re-injected this turn from .scope.json) - your contract. Do not drift from it.
+    msg="INTENT ANCHOR (re-injected) - your contract. Don't drift.
 
   intent:     $scope_intent
   files:      $scope_files
   acceptance: $scope_acceptance
 
-$drift_note If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum.$intent_demand$acceptance_demand"
+$drift_note If a constraint conflicts with what you're about to do, stop and reconcile - the contract outranks momentum.$intent_demand$acceptance_demand"
 fi
 
 # --- stash to the feedback bus (drained by post-tool-use.sh) -----------------
