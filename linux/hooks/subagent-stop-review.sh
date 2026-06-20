@@ -6,9 +6,22 @@
 # session-edits-<subagent-cid>.txt), but subagents get no `stop` event, so
 # that marker is never drained and the seven-axis review never fires for
 # delegated implementations. This hook closes the loop: when a subagent
-# finishes and ITS conversation has a session-edits marker, return ONE
-# followup_message so the subagent audits its own implementation before the
-# result goes back to the parent.
+# finishes and edited files, return ONE followup_message so the subagent
+# audits its own implementation before the result goes back to the parent.
+#
+# NO matcher on subagentStop: fires for every subagent type, but a read-only
+# subagent (explore/shell that never edits) has no marker and no
+# modified_files, so it emits {} and stays silent. Editing-capable types
+# (generalPurpose, Cursor's internal poteto/best-of-N/manual-edit, and any
+# future type) are all covered without depending on undocumented type names.
+#
+# Edit detection is BELT-AND-SUSPENDERS (see the inline block): the
+# per-cid marker (authoritative, drained on read) UNION the modified_files[]
+# field Cursor puts in the subagentStop payload (cid-independent). The
+# payload fallback covers the case where subagentStop surfaces the PARENT's
+# conversation_id instead of the subagent's - the marker lookup would miss,
+# but modified_files still names the files. If both are empty, nothing was
+# edited -> silent.
 #
 # Same bounding pattern as final-review.sh:
 #   - marker-gated: no edits in the subagent run -> no review, no noise,
@@ -19,9 +32,10 @@
 #   - only on status == 'completed' when a status field is present.
 #
 # If subagentStop's stdin carries a conversation_id that doesn't match the
-# id afterFileEdit used, the marker lookup misses and this emits {} - the
-# marker fold in post-tool-use.sh / final-review.sh still routes the
-# subagent's edits into the parent's stop review as the backstop.
+# id afterFileEdit used, the marker lookup misses - but the modified_files[]
+# payload fallback (below) + the marker fold in post-tool-use.sh /
+# final-review.sh (which scans the subagents/ dir, cid-independent) still
+# route the subagent's edits into review. Belt and suspenders.
 #
 # Always emits valid JSON ({} = no follow-up). Review body reuses
 # final-review.md (embedded fallback if missing).
@@ -64,10 +78,24 @@ if [ -n "$status" ] && [ "$status" != "completed" ]; then
     emit_none
 fi
 
-# No edits this run -> nothing to review.
-[ -f "$marker" ] || emit_none
-edited="$(grep -vE '^[[:space:]]*$' "$marker" 2>/dev/null | sort -u)"
-rm -f "$marker" 2>/dev/null
+# Edits this run: AUTHORITATIVE marker (drained) + modified_files payload fallback.
+# The marker is populated by self-review-trigger on each afterFileEdit inside the
+# subagent. If subagentStop's conversation_id matches the one afterFileEdit used,
+# the marker is here and is the most accurate ledger (the hook saw every edit).
+# If the cids DON'T match (Cursor may surface the parent's cid in subagentStop),
+# fall back to the modified_files[] array Cursor puts in the subagentStop payload
+# itself - that signal is cid-independent. Either source alone is enough; union
+# both so a delegated implementation is never silently skipped. No edits at all
+# (read-only explore/shell subagents) -> {}.
+edited=""
+if [ -f "$marker" ]; then
+    edited="$(grep -vE '^[[:space:]]*$' "$marker" 2>/dev/null | sort -u)"
+    rm -f "$marker" 2>/dev/null   # drain (self-reviewed)
+fi
+mf="$(json_get_array "$input" modified_files 2>/dev/null | grep -vE '^[[:space:]]*$' | sort -u)"
+if [ -n "$mf" ]; then
+    edited="$(printf '%s\n%s\n' "$edited" "$mf" | grep -vE '^[[:space:]]*$' | sort -u)"
+fi
 [ -n "$edited" ] || emit_none
 
 # Compose the follow-up review prompt (md preferred, embedded fallback).
