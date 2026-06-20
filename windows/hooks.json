@@ -3,79 +3,67 @@
   "hooks": {
     "beforeSubmitPrompt": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-precompile.ps1",
-        "timeout": 5,
-        "_comment": "5s: CONTRACT FIRST. Fires right after the user hits send, BEFORE the agent's first token, with the user's `prompt` in the payload directly. Writes/regenerates .scope.json (intent locked from the prompt, acceptance seeded with a real default - never a bare <TODO>) so the contract is the FIRST artifact of the turn instead of appearing late once postToolUse can read the transcript. Also stashes the verbatim prompt to current-prompt-<cid>.txt so intent-anchor (postToolUse) re-injects from the SAME ground-truth text - no <user_query> contamination, no _intent_hash fights. Skips hook-generated auto-submits (FINAL REVIEW / SUBAGENT / SELF-REVIEW). Hash-gated: same prompt on disk -> left intact (preserves the agent's refined intent/acceptance/files). Never blocks submission, always exits 0. Disable: HOOKS_ENFORCE=0 or INTENT_ANCHOR_ENFORCE=0."
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/intent-precompile.ps1",
+        "timeout": 5
       }
     ],
     "sessionStart": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.cursor/inject-doctrine.ps1",
-        "timeout": 5,
-        "_comment": "5s: inject the agent doctrine + user rules at session start. inject-doctrine.ps1 reads ~/.cursor/doctrine.md + USER-RULES.md and emits them as {\"additional_context\": ...} JSON (sessionStart does NOT consume raw stdout)."
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.cursor/inject-doctrine.ps1",
+        "timeout": 5
       }
     ],
     "afterFileEdit": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/self-review-trigger.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/self-review-trigger.ps1",
         "timeout": 5,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "5s: record the edit in ~/.cursor/.hooks-pending/session-edits-<conversation_id>.txt and stash the self-review prompt in feedback-<conversation_id>.txt. The harness normalizes agent file edits (incl. StrReplace) to tool type 'Write' in this event - verified via payload capture - so ^Write$ matches them all; the alternation is defensive against future harness versions reporting raw tool names. Anchored so TabWrite (every user tab-completion) stays excluded. The model is the auditor. NOTE: fires inside subagent contexts too, keyed by the SUBAGENT's conversation_id - see subagentStop + the marker fold in post-tool-use.ps1/final-review.ps1."
+        "matcher": "^Write$"
       },
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/semantic-density-audit.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/semantic-density-audit.ps1",
         "timeout": 15,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "15s: semantic-opacity advisory on the edited file. Extracts added lines from git diff, pipes to density_scan.py (shared low_density module), flags identifiers that communicate no intent (DataManager, process(), utils.ts, CoreEngine). FAIL = bare low-density token or generic-suffix class without domain noun; WARN = defensible DDD with domain noun (PostgresUserRepository) - only fires alongside a FAIL so clean code stays quiet. One denylist shared with scan_slop.py's semantic_density bucket. Appends to pending; never blocks. Disable: HOOKS_ENFORCE=0 or SEMANTIC_DENSITY_ENFORCE=0."
+        "matcher": "^Write$"
       },
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-gate-audit.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/scope-gate-audit.ps1",
         "timeout": 10,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "10s (Compuerta 1, mechanical): scope auto-record. OPT-IN: only active when .scope.json exists in the repo root. intent-anchor scaffolds files:[]; this hook APPENDS every edited file to files[] (drops the scaffold placeholder, dedups, preserves all other fields), so files[] is always an accurate ledger of the session footprint that final-review audits against intent. No model effort required - the agent never maintains files[] by hand. Replaces the old [SCOPE VIOLATION] advisory (with auto-record an edit can never be out-of-declared-scope). No JSON tool / no .scope.json = silent. Never blocks, always exits 0. Disable: HOOKS_ENFORCE=0 or SCOPE_GATE_ENFORCE=0."
+        "matcher": "^Write$"
       },
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anti-slop-audit.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/anti-slop-audit.ps1",
         "timeout": 15,
-        "matcher": "^(Write|StrReplace|EditNotebook)$",
-        "_comment": "15s: AI-slop advisory. Native git diff flags new deps / premature abstractions (Factory/Repository/Mediator/CQRS/DDD) / redundant comments, and injects the anti-slop.md self-review checklist on substantial edits (>= ANTI_SLOP_CHECKLIST_LINES, default 40). Appends to the conversation's pending file; never blocks. Disable: HOOKS_ENFORCE=0 or ANTI_SLOP_ENFORCE=0."
+        "matcher": "^Write$"
       }
     ],
     "postToolUse": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-anchor.ps1",
-        "timeout": 5,
-        "_comment": "5s: THIN INTENT COMPILATION (anti Salience Dilution). Registered FIRST so it appends to the feedback bus before post-tool-use.ps1 drains it (same-tool delivery). On the FIRST tool boundary of each turn (per-turn latch intent-injected-<cid>.flag, cleared unconditionally at every stop), (1) re-injects the existing .scope.json (intent/files/acceptance) into additional_context so the contract is back in the model's attentional focus before edits pile up - UNCONDITIONAL, no transcript needed; (2) if the current <user_query> hash differs from last-query-<cid>.hash, demands the agent UPDATE .scope.json to match the new request (scope tracks the request). No .scope.json -> demand one be written. Needs transcript_path for change-detection; degrades to silent there but re-injection still runs. Advisory only; never blocks. Disable: HOOKS_ENFORCE=0 or INTENT_ANCHOR_ENFORCE=0."
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/intent-anchor.ps1",
+        "timeout": 5
       },
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/post-tool-use.ps1",
-        "timeout": 5,
-        "_comment": "5s: (1) fold completed subagents' session-edits markers into this conversation's marker - subagent edits fire afterFileEdit under the SUBAGENT's conversation_id, and postToolUse does NOT fire for the Task tool (verified by payload logging), so per-tool-boundary folding is how delegated edits reach the parent's stop-hook review - and prime the parent to audit the subagent diff; (2) drain this conversation's pending-feedback file (self-review + advisories) into additional_context. One-shot. No matcher: fires after EVERY tool so pending is delivered promptly."
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/post-tool-use.ps1",
+        "timeout": 5
       }
     ],
     "subagentStop": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/subagent-stop-review.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/subagent-stop-review.ps1",
         "timeout": 5,
-        "matcher": "^(generalPurpose|poteto-agent|best-of-n-runner|impeccable-manual-edit-applier)$",
-        "loop_limit": 3,
-        "_comment": "5s: ONE in-subagent final review per implementation before the result returns to the parent. Matcher = editing-capable subagent types only. Marker-gated like final-review.ps1: afterFileEdit fires inside subagents keyed by the subagent's conversation_id, so session-edits-<subagent-cid>.txt exists exactly when the run edited files; reviewed-<cid>.flag is the per-implementation brake, loop_limit 3 is the harness-side runaway cap (1 would suppress the review after a resumed subagent's second implementation). Disable: HOOKS_ENFORCE=0 or SUBAGENT_REVIEW_ENFORCE=0."
+        "loop_limit": 3
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/permission-gate.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/permission-gate.ps1",
         "timeout": 5,
-        "failClosed": false,
-        "_comment": "5s: deny a small explicit list of dangerous commands. Default-allow, deny-by-list."
+        "failClosed": false
       }
     ],
     "stop": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/final-review.ps1",
+        "command": "pwsh.exe -NoProfile -File C:/Users/Administrator/.agents/hooks/final-review.ps1",
         "timeout": 10,
-        "loop_limit": 5,
-        "_comment": "5s: ONE comprehensive end-of-implementation review across correctness + reliability + coverage + anti-slop. If the agent edited files this loop (session-edits-<conversation_id> marker), returns {followup_message} so Cursor auto-submits ONE review pass. Bounded by the script's per-conversation reviewed-flag (one review per implementation); loop_limit counts follow-ups per CONVERSATION (docs), so 5 = harness-side runaway cap, not the per-implementation bound (2 would silently kill reviews after the 2nd implementation in a long chat). Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0."
+        "loop_limit": 5
       }
     ]
   }
