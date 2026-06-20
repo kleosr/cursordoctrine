@@ -155,7 +155,7 @@ function Redact-SecretsFromIntent([string]$text) {
 # fixed headers the hooks emit and skip past them to the real human turn.
 function Test-IsHookGeneratedQuery([string]$text) {
     if (-not $text) { return $false }
-    return ($text -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR)')
+    return ($text -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)')
 }
 
 # The final-review / subagent-review followups embed the real human request as:

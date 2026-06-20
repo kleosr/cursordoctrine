@@ -146,7 +146,7 @@ checklist_file="$HOME/.agents/hooks/anti-slop.md"
 checklist=""
 [ -f "$checklist_file" ] && checklist="$(cat "$checklist_file")"
 if [ -z "$checklist" ]; then
-    checklist='ANTI-SLOP — read ~/.agents/hooks/anti-slop.md (13 items). Fallback if missing:
+    checklist='ANTI-SLOP — read ~/.agents/hooks/anti-slop.md (all items). Fallback if missing:
   1–10: edge cases, duplication, conventions, deps, premature abstraction,
   accidental complexity, tests (no tautologies), cargo cult, architecture,
   redundant comments / prompt residue.

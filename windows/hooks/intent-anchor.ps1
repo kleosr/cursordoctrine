@@ -227,7 +227,7 @@ $queryLine = if ($hasQuery) { $currentQuery } else { '(current request unavailab
 # repeated demand each turn until the agent replaces it.
 $acceptanceUnsharpened = ($scopeAcceptance -match '^\s*<TODO' -or $scopeAcceptance -eq (Get-DefaultAcceptance) -or $scopeAcceptance -match 'Sharpen to the one deterministic check')
 $acceptanceDemand = if ($acceptanceUnsharpened) {
-    "`n`n>> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work."
+    "`n`n>> acceptance is still the seed. Sharpen it to the one deterministic check that decides done."
 } else { '' }
 
 # intent is SEEDED with the verbatim request (trace.query), never "locked" done. It
@@ -251,24 +251,18 @@ if ($scopeExists -and -not [string]::IsNullOrWhiteSpace($verbatim) -and -not [st
     $intentUnrefined = ([string]$scopeIntent).Trim() -ieq ([string]$verbatim).Trim()
 }
 $intentDemand = if ($intentUnrefined) {
-    "`n`n>> intent is still the VERBATIM request (byte-identical to trace.query). Your FIRST action this turn is a targeted string-replace on .scope.json setting 'intent' to your Step 0 restatement - one operational sentence in your OWN words: grammar fixed, pronouns resolved, implicit constraints made explicit, meaning preserved. Do NOT touch 'trace.query' (it is the audit anchor). Until intent is in your words you have not confirmed you understood the request."
+    "`n`n>> intent is still the VERBATIM request. FIRST action: string-replace .scope.json 'intent' with your Step 0 restatement (one operational sentence in your own words). Don't touch 'trace.query'."
 } else { '' }
 
 if ($regenerated) {
     $msg = @"
-INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
+INTENT ANCHOR (scope regenerated) - fresh .scope.json from your request.
 
   intent:     $scopeIntent
   files:      $scopeFiles
   acceptance: $scopeAcceptance
 
-The hook wrote a fresh scaffold to $scopePath from your current request. intent
-is SEEDED with your verbatim request - it is NOT done: rewrite it as your Step 0
-restatement (one operational sentence in your own words). files[] is AUTO-TRACKED -
-the scope hook records every file you edit, so do not maintain it by hand.
-acceptance is seeded with a sensible default; sharpen it to the one deterministic
-check, THEN proceed. This contract is re-injected every turn until your request
-changes again.$intentDemand$acceptanceDemand
+Re-injected every turn until the request changes.$intentDemand$acceptanceDemand
 "@
 } elseif (-not $scopeExists -or $scopeHollow) {
     $state = if ($scopeHollow) { "the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)" } else { "no .scope.json found in $root, and the current request was unavailable to scaffold from" }
@@ -297,14 +291,13 @@ takes over (re-injection + per-prompt regeneration).
         "(request unavailable to diff against - re-injecting the contract as-is.)"
     }
     $msg = @"
-INTENT ANCHOR (re-injected this turn from .scope.json) - your contract. Do not drift from it.
+INTENT ANCHOR (re-injected) - your contract. Don't drift.
 
   intent:     $scopeIntent
   files:      $scopeFiles
   acceptance: $scopeAcceptance
 
-$driftNote If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum.$intentDemand$acceptanceDemand
+$driftNote If a constraint conflicts with what you're about to do, stop and reconcile - the contract outranks momentum.$intentDemand$acceptanceDemand
 "@
 }
 

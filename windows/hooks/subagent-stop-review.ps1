@@ -82,7 +82,7 @@ behaviour the task asked for). Seven axes, in order:
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
   4. Anti-slop - if the scanner exists, run it --all first; otherwise read
-     ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all 13 items.
+     ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all items.
   5. Wiring completeness - trace every added behavior to a REAL EFFECT (persist/mutate/call/render).
      A dead end (handleSubmit that doesn't persist, an endpoint no caller invokes) is slop.
 If an axis is clean, say so in one line. Then stop.
