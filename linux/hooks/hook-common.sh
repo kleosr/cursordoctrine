@@ -77,6 +77,27 @@ safe_conversation_id() {
     printf '%s' "${cid:-default}"
 }
 
+# resolve_project_root <json> -> project root ('' if none resolves; NO $HOME fallback).
+# cwd -> workspace_roots -> CURSOR_PROJECT_DIR. intent-precompile, intent-anchor and
+# scope-gate all WRITE into $root/.scope.json; a $HOME fallback there was the 0.4.4
+# "ghost file" bug (a contract persisted in the user's profile). Shared here so the
+# five hooks that resolve a root can NEVER drift apart again (the drift that left
+# three of them still falling back to $HOME). Callers stay silent on ''. Mirrors
+# Resolve-ProjectRoot in the windows/.ps1 edition.
+resolve_project_root() {
+    local input="$1" root="" cand
+    while IFS= read -r cand; do
+        [ -n "$cand" ] && [ -d "$cand" ] && { root="${cand%/}"; break; }
+    done <<EOF
+$(json_get "$input" cwd)
+$(json_get_array "$input" workspace_roots)
+EOF
+    if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
+        root="${CURSOR_PROJECT_DIR%/}"
+    fi
+    printf '%s' "$root"
+}
+
 hooks_pending_dir() { printf '%s' "$HOME/.cursor/.hooks-pending"; }
 
 # sha256_hex <text> -> SHA-256 hex. SHARED so intent-precompile (beforeSubmitPrompt)

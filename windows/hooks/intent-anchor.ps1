@@ -96,21 +96,8 @@ if ($hasQuery) {
     $promptChanged = ($currentHash -ne $prevHash)
 }
 
-# --- repo root (same resolution as scope-gate-audit.ps1) ---------------------
-# Resolve cwd -> workspace_roots -> CURSOR_PROJECT_DIR. We do NOT fall back to
-# $HOME: writing .scope.json into $HOME was the 0.4.4 "ghost file" bug. If we
-# cannot resolve a real project root, the hook stays silent (no scaffold, no
-# demand) rather than litter the user's home directory.
-$root = ''
-$cands = @()
-if ($obj.PSObject.Properties['cwd'] -and $obj.cwd) { $cands += [string]$obj.cwd }
-if ($obj.PSObject.Properties['workspace_roots']) { foreach ($w in $obj.workspace_roots) { $cands += [string]$w } }
-foreach ($c in $cands) { $f = ConvertTo-FwdPath $c; if ($f -and (Test-Path -LiteralPath $f)) { $root = $f.TrimEnd('/'); break } }
-if (-not $root -and $env:CURSOR_PROJECT_DIR) {
-    $cpd = $env:CURSOR_PROJECT_DIR.Replace('\', '/').TrimEnd('/')
-    if (Test-Path -LiteralPath $cpd) { $root = $cpd }
-}
-# No $HOME fallback. If we still have no root, bail (cannot know where to write).
+# --- repo root (shared resolver; NO $HOME fallback - no ghost files) -----------
+$root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }
 
 # --- read the existing contract (if any) -------------------------------------
@@ -118,6 +105,7 @@ $scopeExists = $false
 $scopeIntent = ''
 $scopeAcceptance = ''
 $scopeFiles = ''
+$scopeTraceQuery = ''
 $scopeStale = $false    # true when the on-disk contract belongs to a DIFFERENT prompt -> regenerate (resets files[])
 $needsHeal = $false     # true when a model-written contract matches THIS prompt but lacks _intent_hash -> backfill in place
 $scopeHasHash = $false
@@ -129,6 +117,7 @@ if (Test-Path -LiteralPath $scopePath) {
         if ($sj.intent)     { $scopeIntent = [string]$sj.intent }
         if ($sj.acceptance) { $scopeAcceptance = [string]$sj.acceptance }
         if ($sj.files)      { $scopeFiles = (@($sj.files) -join ', ') }
+        if ($sj.trace -and $sj.trace.query) { $scopeTraceQuery = [string]$sj.trace.query }
         if ([string]::IsNullOrWhiteSpace($scopeFiles)) { $scopeFiles = '(none yet - auto-tracked as you edit)' }
         $scopeExists = $true
         $scopeHasHash = ($sj.PSObject.Properties['_intent_hash'] -and -not [string]::IsNullOrWhiteSpace([string]$sj._intent_hash))
@@ -200,6 +189,7 @@ if ($shouldCreate -or $shouldRegen) {
         $scopeIntent     = $intentVal
         $scopeAcceptance = $defaultAcceptance
         $scopeFiles      = '(auto-tracked - the scope hook records every file you edit)'
+        $scopeTraceQuery = $currentQuery
         $scopeExists     = $true
         $scopeStale      = $false
         $regenerated     = $true
@@ -240,6 +230,30 @@ $acceptanceDemand = if ($acceptanceUnsharpened) {
     "`n`n>> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work."
 } else { '' }
 
+# intent is SEEDED with the verbatim request (trace.query), never "locked" done. It
+# is owed the agent's normalized Step 0 restatement (see pre-compile.md Step 0). The
+# deterministic signal that the rewrite is still owed is intent == trace.query
+# (trim + case-insensitive): until the agent has put intent in its OWN words the two
+# are byte-identical, so a fresh scaffold AND any untouched seed both trip this. The
+# moment intent is rewritten they diverge and the demand goes quiet - exactly the
+# acceptance-sharpening pattern. For this reason the hook must NOT mechanically
+# normalize the seed (capitalize/trim punctuation): that would make intent !=
+# trace.query and silently disable the signal. trace.query is never touched - it is
+# the audit anchor final-review traces hunks against.
+$intentUnrefined = $false
+# Compare intent against the verbatim ground truth. Prefer trace.query (the
+# audit anchor the hook itself wrote); if a hand-authored contract lacks it
+# (the pre-compile.md hollow-exception path), fall back to the stashed prompt
+# ($currentQuery) so the demand can still fire on a verbatim intent.
+$verbatim = $scopeTraceQuery
+if ([string]::IsNullOrWhiteSpace($verbatim) -and $hasQuery) { $verbatim = $currentQuery }
+if ($scopeExists -and -not [string]::IsNullOrWhiteSpace($verbatim) -and -not [string]::IsNullOrWhiteSpace($scopeIntent)) {
+    $intentUnrefined = ([string]$scopeIntent).Trim() -ieq ([string]$verbatim).Trim()
+}
+$intentDemand = if ($intentUnrefined) {
+    "`n`n>> intent is still the VERBATIM request (byte-identical to trace.query). Your FIRST action this turn is a targeted string-replace on .scope.json setting 'intent' to your Step 0 restatement - one operational sentence in your OWN words: grammar fixed, pronouns resolved, implicit constraints made explicit, meaning preserved. Do NOT touch 'trace.query' (it is the audit anchor). Until intent is in your words you have not confirmed you understood the request."
+} else { '' }
+
 if ($regenerated) {
     $msg = @"
 INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
@@ -249,10 +263,12 @@ INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
   acceptance: $scopeAcceptance
 
 The hook wrote a fresh scaffold to $scopePath from your current request. intent
-is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
-records every file you edit, so do not maintain it by hand. acceptance is seeded
-with a sensible default; sharpen it to the one deterministic check, THEN proceed.
-This contract will be re-injected every turn until your request changes again.$acceptanceDemand
+is SEEDED with your verbatim request - it is NOT done: rewrite it as your Step 0
+restatement (one operational sentence in your own words). files[] is AUTO-TRACKED -
+the scope hook records every file you edit, so do not maintain it by hand.
+acceptance is seeded with a sensible default; sharpen it to the one deterministic
+check, THEN proceed. This contract is re-injected every turn until your request
+changes again.$intentDemand$acceptanceDemand
 "@
 } elseif (-not $scopeExists -or $scopeHollow) {
     $state = if ($scopeHollow) { "the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)" } else { "no .scope.json found in $root, and the current request was unavailable to scaffold from" }
@@ -264,7 +280,9 @@ Current request:
 
 YOU write the real contract to $scopePath now, from THIS conversation, BEFORE
 editing source. Do not leave the <TODO> placeholder:
-  intent:     one operational sentence - the ACTUAL request (not "<TODO>")
+  intent:     one operational sentence - YOUR Step 0 restatement (grammar fixed,
+              pronouns resolved, meaning preserved), NOT the verbatim request and
+              not "<TODO>"
   acceptance: the one deterministic check that decides done
   files:      [] (leave empty - the scope hook records every file you edit)
 
@@ -286,7 +304,7 @@ INTENT ANCHOR (re-injected this turn from .scope.json) - your contract. Do not d
   acceptance: $scopeAcceptance
 
 $driftNote If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum.$acceptanceDemand
+and reconcile - the contract outranks momentum.$intentDemand$acceptanceDemand
 "@
 }
 

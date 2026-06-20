@@ -27,13 +27,12 @@ if ($env:HOOKS_ENFORCE -eq '0' -or $env:SCOPE_GATE_ENFORCE -eq '0') { exit 0 }
 $obj = Read-HookStdinJson
 if (-not $obj) { exit 0 }
 
-# audit root: project from JSON (cwd, then workspace_roots), else CURSOR_PROJECT_DIR / HOME
-$root = ''
-$cands = @()
-if ($obj.PSObject.Properties['cwd'] -and $obj.cwd) { $cands += [string]$obj.cwd }
-if ($obj.PSObject.Properties['workspace_roots']) { foreach ($w in $obj.workspace_roots) { $cands += [string]$w } }
-foreach ($c in $cands) { $f = ConvertTo-FwdPath $c; if ($f -and (Test-Path -LiteralPath $f)) { $root = $f.TrimEnd('/'); break } }
-if (-not $root) { $root = (& { if ($env:CURSOR_PROJECT_DIR) { $env:CURSOR_PROJECT_DIR } else { $HOME } }).Replace('\', '/').TrimEnd('/') }
+# audit root: shared resolver (cwd -> workspace_roots -> CURSOR_PROJECT_DIR; NO
+# $HOME fallback). scope-gate WRITES to $root/.scope.json, so a $HOME fallback
+# here would perpetuate a ghost contract in the profile (the 0.4.4 bug). No real
+# root -> silent.
+$root = Resolve-ProjectRoot $obj
+if (-not $root) { exit 0 }
 
 # edited file -> repo-relative forward-slash path
 $fp = ''

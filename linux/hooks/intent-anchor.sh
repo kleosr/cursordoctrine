@@ -93,21 +93,8 @@ if [ "$has_query" = "1" ]; then
     [ "$current_hash" != "$prev_hash" ] && prompt_changed=1
 fi
 
-# --- repo root (same resolution as scope-gate-audit.sh, but NO $HOME fallback) -
-# We do NOT fall back to $HOME: writing .scope.json into $HOME was the 0.4.4
-# "ghost file" bug. If we cannot resolve a real project root, the hook stays
-# silent (no scaffold, no demand) rather than litter the user's home dir.
-root=""
-while IFS= read -r cand; do
-    [ -n "$cand" ] && [ -d "$cand" ] && { root="${cand%/}"; break; }
-done <<EOF
-$(json_get "$input" cwd)
-$(json_get_array "$input" workspace_roots)
-EOF
-if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
-    root="${CURSOR_PROJECT_DIR%/}"
-fi
-# No $HOME fallback. If we still have no root, bail (cannot know where to write).
+# --- repo root (shared resolver; NO $HOME fallback - no ghost files) -----------
+root="$(resolve_project_root "$input")"
 [ -n "$root" ] || exit 0
 
 # --- read the existing contract (if any) -------------------------------------
@@ -115,6 +102,7 @@ scope_exists=0
 scope_intent=""
 scope_acceptance=""
 scope_files=""
+scope_trace_query=""
 scope_stale=0    # 1 when the on-disk contract belongs to a DIFFERENT prompt -> regenerate (resets files[])
 needs_heal=0     # 1 when a model-written contract matches THIS prompt but lacks _intent_hash -> backfill in place
 scope_hollow=0   # 1 when the on-disk contract has no real intent (empty or a <TODO> placeholder) -> unusable
@@ -127,6 +115,7 @@ if [ -f "$scope_path" ]; then
         scope_acceptance="$(jq -r '.acceptance // empty' "$scope_path" 2>/dev/null)"
         scope_files="$(jq -r '(.files // []) | join(", ")' "$scope_path" 2>/dev/null)"
         on_disk_hash="$(jq -r '._intent_hash // empty' "$scope_path" 2>/dev/null)"
+        scope_trace_query="$(jq -r '.trace.query // empty' "$scope_path" 2>/dev/null)"
         scope_exists=1
     elif have_py; then
         read -r scope_intent scope_acceptance scope_files on_disk_hash <<EOF
@@ -143,6 +132,9 @@ except Exception:
 ' "$scope_path" 2>/dev/null)
 EOF
         [ $? -eq 0 ] && scope_exists=1 || scope_exists=0
+        scope_trace_query="$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("trace",{}).get("query","") or "")
+except Exception: pass' "$scope_path" 2>/dev/null)"
     fi
     # Staleness, hash-agnostic so it survives MODEL-written contracts:
     #   - hook-written (has _intent_hash): stale when that hash != current query hash.
@@ -227,6 +219,7 @@ with open(os.environ["I_FILE"], "w", encoding="utf-8") as f:
         scope_intent="$intent_val"
         scope_acceptance="$default_acc"
         scope_files="(auto-tracked - the scope hook records every file you edit)"
+        scope_trace_query="$current_query"
         scope_exists=1
         scope_stale=0
     fi
@@ -285,6 +278,34 @@ case "$scope_acceptance" in
 >> acceptance is still the seeded default. Your FIRST action this turn is a targeted string-replace on .scope.json setting acceptance to the one deterministic check that decides done - then do the work." ;;
 esac
 
+# intent is SEEDED with the verbatim request (trace.query), never "locked" done. It
+# is owed the agent's normalized Step 0 restatement (pre-compile.md Step 0). The
+# deterministic signal the rewrite is owed is intent == trace.query (trim + case-
+# insensitive): until the agent rewrites intent in its OWN words they are
+# byte-identical. The moment intent is rewritten they diverge and the demand goes
+# quiet - exactly the acceptance pattern. The hook must NOT normalize the seed
+# (capitalize/trim punctuation): that would make intent != trace.query and disable
+# the signal. When a hand-authored contract lacks trace.query, fall back to the
+# stashed prompt so the demand can still fire.
+trim_ws() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+verbatim="$scope_trace_query"
+[ -n "$verbatim" ] || { [ "$has_query" = "1" ] && verbatim="$current_query"; }
+intent_demand=""
+if [ "$scope_exists" = "1" ] && [ -n "$verbatim" ] && [ -n "$scope_intent" ]; then
+    ti_lc="$(printf '%s' "$(trim_ws "$scope_intent")" | tr '[:upper:]' '[:lower:]')"
+    tv_lc="$(printf '%s' "$(trim_ws "$verbatim")" | tr '[:upper:]' '[:lower:]')"
+    if [ "$ti_lc" = "$tv_lc" ]; then
+        intent_demand="
+
+>> intent is still the VERBATIM request (byte-identical to trace.query). Your FIRST action this turn is a targeted string-replace on .scope.json setting 'intent' to your Step 0 restatement - one operational sentence in your OWN words: grammar fixed, pronouns resolved, implicit constraints made explicit, meaning preserved. Do NOT touch 'trace.query' (it is the audit anchor). Until intent is in your words you have not confirmed you understood the request."
+    fi
+fi
+
 if [ "$regenerated" = "1" ]; then
     msg="INTENT ANCHOR (scope regenerated) - .scope.json written for this prompt.
 
@@ -293,10 +314,12 @@ if [ "$regenerated" = "1" ]; then
   acceptance: $scope_acceptance
 
 The hook wrote a fresh scaffold to $scope_path from your current request. intent
-is locked from what you just asked. files[] is AUTO-TRACKED - the scope hook
-records every file you edit, so do not maintain it by hand. acceptance is seeded
-with a sensible default; sharpen it to the one deterministic check, THEN proceed.
-This contract will be re-injected every turn until your request changes again.$acceptance_demand"
+is SEEDED with your verbatim request - it is NOT done: rewrite it as your Step 0
+restatement (one operational sentence in your own words). files[] is AUTO-TRACKED -
+the scope hook records every file you edit, so do not maintain it by hand.
+acceptance is seeded with a sensible default; sharpen it to the one deterministic
+check, THEN proceed. This contract is re-injected every turn until your request
+changes again.$intent_demand$acceptance_demand"
 elif [ "$scope_exists" != "1" ] || [ "$scope_hollow" = "1" ]; then
     if [ "$scope_hollow" = "1" ]; then
         state="the .scope.json in $root is only a <TODO> placeholder (the hook could not read your request to fill it)"
@@ -310,7 +333,9 @@ Current request:
 
 YOU write the real contract to $scope_path now, from THIS conversation, BEFORE
 editing source. Do not leave the <TODO> placeholder:
-  intent:     one operational sentence - the ACTUAL request (not \"<TODO>\")
+  intent:     one operational sentence - YOUR Step 0 restatement (grammar fixed,
+              pronouns resolved, meaning preserved), NOT the verbatim request and
+              not \"<TODO>\"
   acceptance: the one deterministic check that decides done
   files:      [] (leave empty - the scope hook records every file you edit)
 
@@ -330,7 +355,7 @@ else
   acceptance: $scope_acceptance
 
 $drift_note If a constraint above conflicts with what you are about to do, stop
-and reconcile - the contract outranks momentum.$acceptance_demand"
+and reconcile - the contract outranks momentum.$intent_demand$acceptance_demand"
 fi
 
 # --- stash to the feedback bus (drained by post-tool-use.sh) -----------------
