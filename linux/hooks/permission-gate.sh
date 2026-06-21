@@ -60,6 +60,7 @@ test_deny() {
 # while `git rm`, `npm run rm-cache`, `echo "rm -rf /"` stay allowed.
 test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*[[:space:]]+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
 test_deny ':\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:' 'fork-bomb pattern'
+test_deny '(^|[;&|][[:space:]]*)bash[[:space:]]+-c[[:space:]]+[''"]?[[:space:]]*:[[:space:]]*\(\)[[:space:]]*\{' 'fork-bomb pattern via bash -c'
 test_deny 'curl[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
 test_deny 'wget[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
 test_deny 'git[[:space:]]+push[[:space:]]+.*--force(-with-lease)?([[:space:]"'"'"']|$)' 'git push --force'

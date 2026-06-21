@@ -77,7 +77,13 @@ function isStaleOurs(command) {
   if (hookMatch) {
     const fname = `${hookMatch[1]}.${hookMatch[2]}`;
     // If the script still ships, it's current ours (handled elsewhere).
-    return !payloadHookFiles().includes(fname);
+    // payloadHookFiles() lists hooks/; doctrineFiles lists the parent-dir
+    // payloads (inject-doctrine.*, doctrine.md, ...). We must check BOTH,
+    // otherwise the sessionStart entry (inject-doctrine.ps1, shipped under
+    // the parent dir, not hooks/) is misclassified as stale and dropped
+    // from the merge — leaving the user with `"sessionStart": []` and no
+    // doctrine injection at session start.
+    return !payloadHookFiles().includes(fname) && !doctrineFiles.includes(fname);
   }
   if (INJECT_RE.test(command)) {
     return !doctrineFiles.includes(injectName) ? true : false;
@@ -278,6 +284,45 @@ function verify() {
 
   check('hooks.json parses as JSON', () => {
     JSON.parse(readFileSync(hooksJsonDst, 'utf8'));
+    return true;
+  });
+
+  // Validate that every command in hooks.json points at a file that actually
+  // exists in $HOME. This is the check that catches a broken install template
+  // (e.g. a hardcoded dev path, or a ~/ that did not get substituted) BEFORE the
+  // user restarts Cursor and discovers every hook silently failed to load. The
+  // direct-invocation checks below bypass hooks.json entirely, so without this
+  // gate they would give green on an install Cursor cannot use.
+  check('hooks.json command paths all resolve under $HOME', () => {
+    const cfg = JSON.parse(readFileSync(hooksJsonDst, 'utf8'));
+    const homeFwd = HOME.replaceAll('\\', '/');
+    const missing = [];
+    for (const entries of Object.values(cfg.hooks || {})) {
+      if (!Array.isArray(entries)) continue;
+      for (const e of entries) {
+        const cmd = e && typeof e.command === 'string' ? e.command : '';
+        if (!cmd) continue;
+        // Pull the script path out of the command line. Windows: -File <path>;
+        // Linux: bash <path>. Then expand ~ and resolve against $HOME.
+        let path = '';
+        const mF = cmd.match(/-File\s+([^\s]+)/);
+        if (mF) path = mF[1];
+        if (!path) {
+          const mB = cmd.match(/(?:^|\s)bash\s+([^\s]+)/);
+          if (mB) path = mB[1];
+        }
+        if (!path) continue;
+        if (path.startsWith('~/')) path = homeFwd + path.slice(1);
+        // Normalize to absolute with forward slashes for the existence check.
+        const abs = path.includes(':') || path.startsWith('/')
+          ? path
+          : homeFwd + '/' + path;
+        if (!existsSync(abs)) missing.push(`${path} (from: ${cmd.slice(0, 80)})`);
+      }
+    }
+    if (missing.length) {
+      return { ok: false, detail: `${missing.length} path(s) missing: ${missing.slice(0, 3).join('; ')}${missing.length > 3 ? ` (+${missing.length - 3} more)` : ''}` };
+    }
     return true;
   });
 
@@ -519,6 +564,23 @@ function verify() {
   }
   console.log(`  ${scannerOk ? ' ok ' : 'warn'}  anti-slop scanner --help${scannerOk ? '' : ' — unavailable (final review falls back to the checklist)'}`);
 
+  check('sweep runs and emits a structured report', () => {
+    // Sweep spawns the scanner in --all --format json and prints a category
+    // breakdown. We assert it runs and prints the two anchor lines every
+    // outcome shares (sloppy or clean), so a regression in the parser or the
+    // spawn wiring surfaces here instead of at sweep time.
+    const r = spawnSync(process.execPath, [join(pkgRoot, 'bin', 'cli.mjs'), 'sweep', pkgRoot], {
+      encoding: 'utf8', timeout: 120000, windowsHide: true,
+      env: { ...process.env, HOME, USERPROFILE: HOME },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    if (r.status !== 0 || r.error) return { ok: false, detail: `exit ${r.status} ${r.error ? r.error.message : ''}` };
+    if (!/anti-slop sweep \(whole codebase\)/.test(out)) return { ok: false, detail: 'missing sweep header' };
+    if (!/slop_found:/.test(out)) return { ok: false, detail: 'missing slop_found verdict line' };
+    return true;
+  });
+
   // Clean up verification state so the next real session starts fresh.
   if (existsSync(pendingDir)) {
     for (const f of readdirSync(pendingDir)) {
@@ -533,6 +595,174 @@ function verify() {
     process.exit(1);
   }
   console.log('All checks passed. Restart Cursor if you have not since installing.');
+}
+
+// Whole-codebase anti-slop sweep. Runs the scanner in AUDIT mode (--all) and
+// prints a structured, category-by-category breakdown of every slop signal in
+// the repo. This is the COMPREHENSIVE counterpart to the bounded session
+// final-review: it explicitly authorizes fixing pre-existing slop (the session
+// review forbids that, correctly). The scanner is reports-only and never edits;
+// this command is too — it hands the deterministic inventory plus a cleanup
+// doctrine to the agent, which iterates scan->fix->re-scan until clean.
+//
+// Why scan-only here: the scanner is deliberately dumb and high-precision
+// (it refuses to guess semantic slop). The fixing needs judgement (is a clone
+// load-bearing? is a swallowed error a legit best-effort cleanup?), which is
+// the model's job, not a script's. The doctrine pins the order and the
+// re-scan-after-each-category loop so the agent can't drift.
+function sweep() {
+  const root = resolve(process.argv[3] || '.');
+  console.log(`cursordoctrine ${pkg.version} — anti-slop sweep (whole codebase)`);
+  console.log(`  root   ${root}`);
+  if (!existsSync(join(root, '.git'))) {
+    console.log('  note: not a git root; --all scans tracked files, so results may be partial.');
+  }
+  console.log('');
+
+  const scanner = join(skillDst, 'scripts', 'scan_slop.py');
+  if (!existsSync(scanner)) {
+    console.error('anti-slop skill not installed. Run: npx cursordoctrine install');
+    process.exit(1);
+  }
+  const py = pythonCmd();
+  if (!py) {
+    console.error('Python 3.9+ not found — the scanner cannot run.');
+    console.error('Install Python, then re-run.');
+    process.exit(1);
+  }
+
+  // --all --format json: the deterministic inventory. --format json so we can
+  // parse totals + group signals by category for a readable report.
+  const r = spawnSync(py, [scanner, '--all', '--format', 'json', '--root', root], {
+    encoding: 'utf8',
+    timeout: 120000,
+    windowsHide: true,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error) {
+    console.error(`scanner failed to run: ${r.error.message}`);
+    process.exit(1);
+  }
+  let data;
+  try {
+    data = JSON.parse(`${r.stdout || ''}`);
+  } catch (e) {
+    console.error('scanner produced unparseable output.');
+    if (r.stderr) console.error(r.stderr);
+    process.exit(1);
+  }
+
+  const totals = data.totals || {};
+  const dup = data.duplication || {};
+  const nFiles = data.files_scanned || 0;
+  const warnings = data.warnings || [];
+
+  console.log(`scanned ${nFiles} file(s)   slop_found: ${data.slop_found ? 'YES' : 'no'}`);
+  for (const w of warnings) console.log(`  note: ${w}`);
+  console.log('');
+
+  if (!data.slop_found) {
+    console.log('No static slop signals across the codebase. Clean of the');
+    console.log('deterministic inventory. (Semantic slop — cargo-cult, superficial');
+    console.log('tests — still needs a model pass; invoke the anti-slop skill.)');
+    return;
+  }
+
+  // Group per-file signals by category, mapping scanner keys to human labels.
+  // Order matches the cleanup doctrine (cheapest/highest-precision first).
+  const categories = [
+    ['swallowed_errors', 'SWALLOWED ERRORS', 'empty catch / broad except+pass'],
+    ['abstractions', 'PREMATURE ABSTRACTIONS', 'Factory/Repository/CQRS with <2 call sites'],
+    ['dependencies', 'NEW DEPENDENCIES', 'lib for something stdlib/existing dep covers'],
+    ['type_escapes', 'TYPE ESCAPES', 'as any / as unknown / @ts-ignore / type:ignore'],
+    ['tautological_tests', 'TAUTOLOGICAL TESTS', 'assertion that cannot fail (trivially true)'],
+    ['async_wrappers', 'ASYNC WRAPPERS', 'await Promise.resolve / pointless async'],
+    ['guard_chains', 'GUARD CHAINS', 'deepening optional-chaining guard shape'],
+    ['boolean_traps', 'BOOLEAN TRAPS', 'flag-flip call sites: fn(x, true)'],
+    ['select_star', 'SELECT *', 'SELECT * in .sql'],
+    ['tailwind_slop', 'TAILWIND SLOP', 'class soup / magic px / z-[9999] / hardcoded hex'],
+    ['redundant_comments', 'REDUNDANT COMMENTS', 'restates the code // WHAT not WHY'],
+    ['ai_residue', 'AI RESIDUE', 'placeholder phrases / banner comments / emoji'],
+    ['semantic_density', 'SEMANTIC OPACITY', 'DataManager / process() / utils.ts / Pt'],
+  ];
+
+  const printFileList = (heading, count, files, maxShow = 8) => {
+    console.log(`  ${heading}: ${count}`);
+    const shown = files.slice(0, maxShow);
+    for (const f of shown) console.log(`      ${f}`);
+    if (files.length > maxShow) console.log(`      ... +${files.length - maxShow} more`);
+  };
+
+  for (const [key, label, desc] of categories) {
+    if (!totals[key]) continue;
+    const filesWith = [];
+    for (const f of data.files || []) {
+      if (f[key] && f[key].length) filesWith.push(`${f.file}  (${f[key].length})`);
+    }
+    console.log(`${label} — ${desc}`);
+    printFileList('files', filesWith.length, filesWith);
+    console.log('');
+  }
+
+  // Duplication block (the isRecord-class slop). The doctrine orders these first;
+  // we print them after per-file only because the summary count rolls them up.
+  const dupCount = (dup.name_clones?.length || 0) + (dup.body_clones?.length || 0)
+    + (dup.near_clones?.length || 0) + (dup.single_use?.length || 0)
+    + (dup.type_clones?.length || 0);
+  if (dupCount || dup.fingerprints && Object.keys(dup.fingerprints).length) {
+    console.log('DUPLICATION (isRecord-class slop):');
+    const dupRows = [
+      ['name_clones', 'Clone proliferation', 'same name in >=2 files'],
+      ['body_clones', 'Knowledge duplication', 'identical body (DRY -> ONE)'],
+      ['near_clones', 'Semantic fragmentation', 'drifted clones (same shape)'],
+      ['single_use', 'Single-use / dead helpers', 'inline then delete'],
+      ['type_clones', 'Duplicate type/interface', 'consolidate across files'],
+    ];
+    for (const [k, label, desc] of dupRows) {
+      const arr = dup[k] || [];
+      if (!arr.length) continue;
+      console.log(`  ${label} — ${desc}: ${arr.length}`);
+      for (const c of arr.slice(0, 6)) {
+        const names = (c.names || []).join('/');
+        const fls = (c.files || []).slice(0, 3).join(', ');
+        const more = (c.files || []).length > 3 ? `, +${c.files.length - 3}` : '';
+        console.log(`      ${names || '(unnamed)'}  x${c.count || arr.length}  ${fls}${more}`);
+      }
+      if (arr.length > 6) console.log(`      ... +${arr.length - 6} more`);
+    }
+    if (dup.fingerprints && Object.keys(dup.fingerprints).length) {
+      console.log(`  GENERATED FINGERPRINTS: ${Object.keys(dup.fingerprints).join(', ')}`);
+    }
+    if (dup.micro_count) {
+      console.log(`  micro-abstraction load: ${dup.micro_count} tiny is*/assert*/safe* helper(s)`
+        + ` of ${dup.total_defs || '?'} defs (Helper Hell risk)`);
+    }
+    console.log('');
+  }
+
+  // Summary counts for a one-line read.
+  const parts = [];
+  for (const [k, label] of categories) if (totals[k]) parts.push(`${totals[k]} ${label.toLowerCase().replace(/ /g, '-')}`);
+  console.log(`SUMMARY (audit): ${parts.join(', ') || 'no per-file slop signals'}`);
+  console.log('');
+
+  // Hand off to the agent. The cleanup doctrine pins the order and the
+  // scan->fix->re-scan loop; the scanner stays the deterministic source of
+  // truth ("STILL failing?" == "not fixed"). Bounded by the agent's own loop
+  // limit; this command is a single deterministic pass.
+  const doctrine = join(hooksDst, 'cleanup-doctrine.md');
+  const doctrineExists = existsSync(doctrine);
+  const scanAgain = `${py} ${scanner.replaceAll('\\', '/')} --all --root .`;
+  console.log('NEXT — fix the signals above, in this order:');
+  console.log('  1. Read the cleanup doctrine' + (doctrineExists ? ` at ${doctrine.replaceAll('\\', '/')}` : '') + '.');
+  console.log('  2. Work category-by-category; after EACH, re-run the scan and confirm');
+  console.log('     that category hit zero before moving on:');
+  console.log(`     ${scanAgain}`);
+  console.log('  3. Do NOT change observable behavior the project depends on. Prefer');
+  console.log('     rename -> re-point imports -> delete-copy. Run typecheck/build/tests');
+  console.log('     after each category; if something breaks, back it out and flag it.');
+  console.log('  4. Target end state: `slop_found: false`, or a residual you justified');
+  console.log('     as load-bearing. Do not weaken real code to chase a clean scan.');
 }
 
 function uninstall() {
@@ -607,6 +837,9 @@ Commands
   install      Install the hook pack, doctrine, and anti-slop skill into $HOME.
                Merges ~/.cursor/hooks.json — entries you added yourself are preserved.
   verify       Smoke-test every installed hook with fake payloads (no Cursor restart needed).
+  sweep        Whole-codebase anti-slop audit: scan every file, print a category-by-
+               category breakdown, hand off to the agent to fix pre-existing slop
+               (the bounded session review does NOT touch pre-existing slop).
   uninstall    Remove installed files and strip our hooks.json entries.
   help         Show this help.
 
@@ -616,6 +849,7 @@ After install
 Examples
   npx cursordoctrine@latest install
   npx cursordoctrine verify
+  npx cursordoctrine sweep
   npx cursordoctrine uninstall
 
 Kill switches (environment variables, all hooks fail open)
@@ -640,6 +874,9 @@ switch (cmd) {
   case 'verify':
   case 'check':
     verify();
+    break;
+  case 'sweep':
+    sweep();
     break;
   case 'uninstall':
   case 'remove':

@@ -24,11 +24,12 @@ force a guess that changes what "correct" means, you do not bury the guess in
 the restatement — you ask one sharp question (§5) and wait.
 
 The user's verbatim words stay the ground truth: `.scope.json`'s `trace.query`
-keeps them exactly as typed, and final-review traces every diff hunk back to
-THAT, not to your paraphrase. Your normalized sentence becomes `intent` (and the
-Anchor Set's OBJECTIVE below). The two must say the same thing in different
-words — if you cannot make `intent` and `trace.query` agree, you have misread
-the request, and that is the bug to fix first.
+keeps them exactly as typed, and the final-review hook pulls the same verbatim
+request from the transcript to trace every diff hunk back to. Your normalized
+sentence becomes `intent` (and the Anchor Set's OBJECTIVE below). The two must
+say the same thing in different words — if you cannot make `intent` and
+`trace.query` agree, you have misread the request, and that is the bug to fix
+first.
 
 ## The Anchor Set
 

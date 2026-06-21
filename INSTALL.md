@@ -3,7 +3,10 @@
 > Fast path: if Node 18+ is on the machine, `npx cursordoctrine@latest install`
 > does step 2 (including the hooks.json merge), and `npx cursordoctrine verify`
 > does step 3. Then restart Cursor and continue from step 4. The prompt below
-> is the manual path for machines without Node.
+> is the manual path for machines without Node. Run `npx cursordoctrine sweep`
+> on demand for a whole-codebase anti-slop cleanup (it audits every tracked
+> file and hands off to the agent under a cleanup doctrine — distinct from the
+> bounded session final-review, which scans only the files you changed).
 
 > Paste everything below this line into a Cursor agent chat on the target machine.
 
@@ -121,7 +124,7 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
 6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)
 7. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
-8. (Optional, opt-in scope gate) Have the agent write a `.scope.json` in the repo root (`intent` + `files[]` + `acceptance`), then edit a file outside `files[]`. The next turn should carry a `[SCOPE VIOLATION]` advisory quoting the declared `intent` and `acceptance`. Delete the file to disable the gate.
+8. (Optional, opt-in scope gate) Have the agent write a `.scope.json` in the repo root (`intent` + `files[]` + `acceptance`), then edit a file. After the edit, `.scope.json`'s `files[]` should now contain the edited path — `scope-gate-audit` auto-records every edit so the contract's footprint stays accurate without the agent maintaining it by hand. Delete the file to disable the recorder.
 
 ## 5. Report
 

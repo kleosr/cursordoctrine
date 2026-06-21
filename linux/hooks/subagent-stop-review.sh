@@ -109,8 +109,10 @@ behaviour the task asked for). Seven axes, in order:
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - if the scanner exists, run it --all first; otherwise read
-     ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all items.
+  4. Anti-slop - the ANTI-SLOP SCAN block in the header is scoped to the files
+     you changed (NOT --all): fix those hits on lines you added. If absent, run
+     the scanner on <the files above> (never --all at review time). Then read
+     ~/.agents/hooks/anti-slop.md (single source of truth) and apply all items.
   5. Wiring completeness - trace every added behavior to a REAL EFFECT (persist/mutate/call/render).
      A dead end (handleSubmit that doesn'"'"'t persist, an endpoint no caller invokes) is slop.
 If an axis is clean, say so in one line. Then stop.'
@@ -134,12 +136,16 @@ done <<EOF
 $edited
 EOF
 file_list="$(printf '%s' "$file_list" | head -n 30)"
+# Session-scoped anti-slop scan over ONLY the files changed this run (NOT --all,
+# which audits the whole pre-existing codebase - not actionable here).
+gate_root="$(resolve_project_root "$input")"
+slop_block="$(session_slop_block "$edited" "$gate_root")"
 msg="SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.
 
 Files you changed this run:
 $file_list
 
-${body}${reentry_line}"
+${slop_block}${body}${reentry_line}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 touch "$flag" 2>/dev/null

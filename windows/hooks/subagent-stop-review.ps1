@@ -113,8 +113,10 @@ behaviour the task asked for). Seven axes, in order:
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled, no swallowed errors, resources released.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - if the scanner exists, run it --all first; otherwise read
-     ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all items.
+  4. Anti-slop - the header's ANTI-SLOP SCAN block is scoped to the files you
+     changed (NOT --all): fix those hits on lines you added. If absent, run the
+     scanner on <the files above> (never --all at review time). Then read
+     ~/.agents/hooks/anti-slop.md (single source of truth) and apply all items.
   5. Wiring completeness - trace every added behavior to a REAL EFFECT (persist/mutate/call/render).
      A dead end (handleSubmit that doesn't persist, an endpoint no caller invokes) is slop.
 If an axis is clean, say so in one line. Then stop.
@@ -129,7 +131,11 @@ $reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if an axis failed, forget the appr
 
 $resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
 $fileList = ($resolved | Select-Object -First 30) -join "`n  "
-$msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n$body${reentryLine}"
+# Session-scoped anti-slop scan over ONLY the files changed this run (NOT --all,
+# which audits the whole pre-existing codebase - not actionable here).
+$gateRoot = Resolve-ProjectRoot $obj
+$slopBlock = Get-SessionSlopBlock -Edited $edited -Root $gateRoot
+$msg = "SUBAGENT FINAL REVIEW - you just finished delegated implementation work. Before your result returns to the parent agent, audit it.`n`nFiles you changed this run:`n  $fileList`n`n${slopBlock}$body${reentryLine}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null

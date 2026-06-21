@@ -322,3 +322,63 @@ merge_subagent_edit_markers() {
     done
     return $folded
 }
+
+# Session-scoped anti-slop scan for the stop / subagentStop review hooks.
+# WHY THIS EXISTS: the review doctrine used to say `scan_slop.py --all`, which
+# audits the ENTIRE pre-existing codebase. At review time the model only owns
+# the session diff, so a wall of pre-existing slop is NOT its job (Axis 0 /
+# Regla R1 forbid the scope creep) -> it fixed ~nothing and the one-shot brake
+# ended the loop. Scoping the scan to the files actually changed this session
+# makes the output actionable. `--all` is a deliberate manual whole-codebase
+# audit, NOT a review-time tool. Echoes a block to embed ('' = unavailable).
+# $1 = newline-separated edited paths, $2 = project root (may be empty).
+session_slop_block() {
+    local edited="$1" root="$2"
+    [ -n "$edited" ] || return 0
+    local scanner="$HOME/.cursor/skills/anti-slop/scripts/scan_slop.py"
+    [ -f "$scanner" ] || return 0
+    # Verify the interpreter actually RUNS (a WindowsApps `python3` stub can sit
+    # on PATH yet do nothing); try candidates until one executes.
+    local py=""
+    for c in python3 python; do
+        if command -v "$c" >/dev/null 2>&1 && "$c" -c 'pass' >/dev/null 2>&1; then
+            py="$c"; break
+        fi
+    done
+    [ -n "$py" ] || return 0
+
+    local root_fwd=""
+    [ -n "$root" ] && root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+
+    # Collect project-relative paths (cleaner report; falls back to absolute).
+    local collected=""
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        local rp; rp="$(resolve_agent_path "$p")"
+        [ -n "$rp" ] || continue
+        if [ -n "$root_fwd" ]; then
+            case "$rp" in
+                "$root_fwd"/*) rp="${rp#"$root_fwd"/}" ;;
+                "$root_fwd") continue ;;
+            esac
+        fi
+        collected="${collected}${rp}"$'\n'
+    done <<EOF
+$edited
+EOF
+    # Dedupe preserving order, cap at 40.
+    local files; files="$(printf '%s' "$collected" | awk 'NF && !seen[$0]++ {print; if(++n>=40) exit}')"
+    [ -n "$files" ] || return 0
+
+    local root_arg="$root_fwd"; [ -n "$root_arg" ] || root_arg="."
+    # Null-delimit so paths with spaces survive xargs (portable -0).
+    local out
+    out="$(printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 "$py" "$scanner" --root "$root_arg" 2>/dev/null)" || true
+    [ -n "$out" ] || return 0
+    local lc; lc="$(printf '%s\n' "$out" | grep -c '')"
+    if [ "$lc" -gt 60 ]; then
+        out="$(printf '%s\n' "$out" | head -n 60)
+... (scan output truncated; run the scanner directly for the full report)"
+    fi
+    printf 'ANTI-SLOP SCAN (session-scoped to the files you changed this session - NOT --all):\n%s\n\nFix ONLY the hits on lines you added. Pre-existing slop in these files is out of scope (Axis 0 / Regla R1). A whole-codebase audit (--all) is a separate manual task, never part of this review.\n\n' "$out"
+}

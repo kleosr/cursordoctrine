@@ -255,3 +255,56 @@ function Merge-SubagentEditMarkers($obj, [string]$parentCid) {
     }
     return $folded
 }
+
+# Session-scoped anti-slop scan for the stop / subagentStop review hooks.
+# WHY THIS EXISTS: the review doctrine used to say `scan_slop.py --all`, which
+# audits the ENTIRE pre-existing codebase. At review time the model only owns
+# the session diff, so a wall of pre-existing slop is NOT its job (Axis 0 /
+# Regla R1 forbid the scope creep) -> it fixed ~nothing and the one-shot brake
+# ended the loop. Scoping the scan to the files actually changed this session
+# makes the output actionable. `--all` is a deliberate manual whole-codebase
+# audit, NOT a review-time tool. Returns a block to embed ('' = unavailable).
+function Get-SessionSlopBlock {
+    param([string[]]$Edited, [string]$Root)
+    if (-not $Edited -or $Edited.Count -eq 0) { return '' }
+    $scanner = Join-Path $HOME '.cursor\skills\anti-slop\scripts\scan_slop.py'
+    if (-not (Test-Path -LiteralPath $scanner)) { return '' }
+    # Verify the interpreter actually RUNS (a WindowsApps `python` stub can sit on
+    # PATH yet do nothing); try candidates until one prints back.
+    $py = $null
+    foreach ($name in 'python','python3','py') {
+        $c = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $c) { continue }
+        try { if ((& $c.Source -c "print(1)" 2>$null | Out-String).Trim() -eq '1') { $py = $c; break } } catch { }
+    }
+    if (-not $py) { return '' }
+
+    # Project-relative paths give a cleaner report (fall back to absolute).
+    $rootFwd = ''
+    if ($Root) { $rootFwd = (ConvertTo-FwdPath $Root).TrimEnd('/') }
+    $rels = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $Edited) {
+        $rp = Resolve-AgentPath $p
+        if (-not $rp) { continue }
+        if ($rootFwd) {
+            if ($rp.StartsWith($rootFwd + '/')) { $rp = $rp.Substring($rootFwd.Length + 1) }
+            elseif ($rp -ieq $rootFwd) { continue }
+        }
+        $rels.Add($rp) | Out-Null
+    }
+    if ($rels.Count -eq 0) { return '' }
+    $uniq = @($rels | Select-Object -Unique | Select-Object -First 40)
+    $rootArg = if ($rootFwd) { $rootFwd } else { '.' }
+
+    # Run the scanner over ONLY the session files. 2>$null: on a Python failure
+    # stdout is empty -> return '' (graceful; review proceeds without the block).
+    $cmdArgs = @($scanner, '--root', $rootArg) + $uniq
+    $out = ''
+    try { $out = (& $py.Source @cmdArgs 2>$null | Out-String).Trim() } catch { return '' }
+    if (-not $out) { return '' }
+    $lines = $out -split "`r?`n"
+    if ($lines.Count -gt 60) {
+        $out = ($lines[0..59] -join "`n") + "`n... (scan output truncated; run the scanner directly for the full report)"
+    }
+    return "ANTI-SLOP SCAN (session-scoped to the files you changed this session - NOT --all):`n$out`n`nFix ONLY the hits on lines you added. Pre-existing slop in these files is out of scope (Axis 0 / Regla R1). A whole-codebase audit (--all) is a separate manual task, never part of this review.`n`n"
+}
