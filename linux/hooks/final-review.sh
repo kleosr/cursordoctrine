@@ -155,10 +155,11 @@ if [ -z "$body" ]; then
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - if the anti-slop scanner exists, run `python <scanner> --all` first;
-     then read ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all
-     items to the session diff. Consolidate clones; drop premature abstraction,
-     unneeded deps, operational slop, unjustified files. Do NOT re-list the items here.
+  4. Anti-slop - the ANTI-SLOP SCAN block in the header is scoped to the files
+     you changed (NOT --all): fix those hits on lines you added. If absent, run
+     `python <scanner> <the files above>` (never --all at review time - that
+     audits the whole pre-existing codebase, out of scope here). Then read
+     ~/.agents/hooks/anti-slop.md (single source of truth) and apply all items.
   5. Wiring completeness - for every user-visible behavior you added/changed
      (button, submit, API call, route, state transition), trace its execution
      path to a REAL EFFECT (persist, mutate, call, render). A dead end is slop:
@@ -211,12 +212,17 @@ surface_block="Session footprint: ${unique_files} file(s) touched. If a simple r
 
 "
 
+# Session-scoped anti-slop scan: runs the scanner over ONLY the files changed
+# this session (NOT --all, which audits the entire pre-existing codebase and is
+# not actionable at review time - see session_slop_block in hook-common.sh).
+slop_block="$(session_slop_block "$edited" "$gate_root")"
+
 msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.
 
 ${surface_block}${intent_block}Files you changed this session:
 $file_list
 
-${body}${reentry_line}"
+${slop_block}${body}${reentry_line}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 touch "$flag" 2>/dev/null

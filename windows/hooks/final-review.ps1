@@ -160,10 +160,12 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - if the anti-slop scanner exists, run `python <scanner> --all` first;
-     then read ~/.agents/hooks/anti-slop.md (the single source of truth) and apply all
-     items to the session diff. Consolidate clones; drop premature abstraction,
-     unneeded deps, operational slop, unjustified files. Do NOT re-list the items here.
+  4. Anti-slop - the header's ANTI-SLOP SCAN block is scoped to the files you
+     changed (NOT --all): fix those hits on lines you added. If the block is
+     absent, run `python <scanner> <the files above>` (never --all at review
+     time - that audits the whole pre-existing codebase, out of scope here).
+     Then read ~/.agents/hooks/anti-slop.md (single source of truth) and apply
+     all items to the session diff. Do NOT re-list the items here.
   5. Wiring completeness - for every user-visible behavior you added/changed
      (button, submit, API call, route, state transition), trace its execution
      path to a REAL EFFECT (persist, mutate, call, render). A dead end is slop:
@@ -202,7 +204,12 @@ if ($userQuery) {
 $uniqueFiles = @($edited | Select-Object -Unique).Count
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
 
-$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body${reentryLine}"
+# Session-scoped anti-slop scan: runs the scanner over ONLY the files changed
+# this session (NOT --all, which audits the entire pre-existing codebase and is
+# not actionable at review time - see Get-SessionSlopBlock in hook-common.ps1).
+$slopBlock = Get-SessionSlopBlock -Edited $edited -Root $gateRoot
+
+$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n${slopBlock}$body${reentryLine}"
 
 # Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null

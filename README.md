@@ -55,13 +55,23 @@ Node 18+:
 ```bash
 npx cursordoctrine@latest install   # copies the hook pack into ~/.agents/hooks + ~/.cursor, merges hooks.json
 npx cursordoctrine verify           # smoke-tests every hook with fake payloads, no restart needed
+npx cursordoctrine sweep            # whole-codebase anti-slop audit + fix-handoff (see below)
 ```
 
 Restart Cursor after install — `hooks.json` is read at startup. `install` is idempotent; re-run to update. Entries you added to `~/.cursor/hooks.json` yourself are kept. `npx cursordoctrine uninstall` removes the pack the same way.
 
 No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist. Copy commands are in the same file if you prefer doing it by hand.
 
-The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector for per-edit advisories and final-review axis 4. Final review runs the scanner from the skill path first when it's there.
+The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector for per-edit advisories and final-review axis 4. The session final-review runs a **session-scoped** scan (only the files changed this session) — never `--all`, which audits the entire pre-existing codebase and is out of scope for a bounded review.
+
+### Session review vs. `sweep` — two jobs, two scopes
+
+The bounded session final-review and the whole-codebase `sweep` solve different problems and must not be mixed:
+
+- **Session final-review** (`stop` / `subagentStop`): scans only the files the agent changed this session. Fixes are limited to lines the agent added. Pre-existing slop is out of scope (axis 0 intent-trace; touching it is scope creep, and 100+ files won't fit in one bounded pass).
+- **`npx cursordoctrine sweep`**: whole-repo cleanup. Runs the scanner in `--all` mode across every tracked file, prints a category-by-category breakdown, and hands off to the agent under a cleanup doctrine that authorizes fixing pre-existing slop, category by category, with a re-scan after each. Use it when you want a codebase cleanup, not on every session.
+
+Session review stays bounded so it can finish. Sweep is the on-demand pass for accumulated slop across the repo.
 
 ## The proactive phase: the Anchor Set
 
@@ -87,7 +97,7 @@ It then writes that contract to `.scope.json` in the repo root:
 
 Two machine-checkable consequences:
 
-- **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) audits every edit against `files[]` and quotes `intent` + `acceptance` back on a violation. Editing outside the declared set is the textbook scope-creep signal.
+- **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) auto-records every edited file into `.scope.json`'s `files[]`. The contract's footprint is always an accurate ledger of what the session touched — the agent never maintains it by hand. `final-review` audits that footprint against `intent` (the "you touched 8 files for a 1-line request — justify" axis).
 - **final-review axis 0** (intent trace) traces every diff hunk back to `intent`. Anything untraceable is a hallucinated requirement.
 
 **Before the agent's first token**, `intent-precompile` (`beforeSubmitPrompt`) materializes the Anchor Set: the moment you hit send it writes `.scope.json` to the repo root with `intent` locked from the prompt (which is in the event payload directly) and `acceptance` seeded with a real default — so the contract is the first artifact of the turn. `intent-anchor` (`postToolUse`) then re-injects it into context on the first tool boundary. One contract per prompt, re-injection per turn. The intent-anchor latch is armed on first fire and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-fires and can never get stranded silenced mid-session.
@@ -104,7 +114,7 @@ The contract has to exist *before* the agent edits and stay in focus *as* it edi
 
 > **The hooks write `.scope.json` deliberately.** The contract must exist before the agent edits and track the request. Safeguards: (a) **never writes to `$HOME`** — if the repo root can't be resolved the hook stays silent rather than drop a ghost file; (b) **regenerates on prompt CHANGE, not every turn** — staleness is tracked via `_intent_hash` in the file, and `intent-precompile`/`intent-anchor` share one hashing helper so a same-prompt turn re-injects without rewriting; (c) **`trace.query` stays verbatim** as the audit anchor even when the agent normalizes `intent`.
 
-Crucially, `intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn — something the path-only `scope-gate-audit` can never do. That is what makes "the agent forgot about grid symmetry while editing the right file" catchable: the symmetry requirement is re-stated in front of the model before each edit, not just checked against a file list after.
+`intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn. `scope-gate-audit` only tracks file paths. That difference is why "the agent forgot about grid symmetry while editing the right file" is catchable: the symmetry requirement goes back in front of the model before each edit, instead of only checking the file list afterward.
 
 ## The flows
 
@@ -132,9 +142,8 @@ linux/            bash hooks — install on Linux machines and SSH remotes
   hooks/          same hooks, ported to bash (jq preferred, python3 fallback)
 skills/           Cursor agent skills shipped with the package
   anti-slop/      SKILL.md + the duplication scanner (final review runs it)
-                  scripts/scope_match.py — the .scope.json matcher shared by
-                  scope-gate-audit and final-review (returns intent + acceptance)
-bin/              the npm CLI (npx cursordoctrine install / verify / uninstall)
+                  scripts/scan_slop.py, low_density.py, density_scan.py
+bin/              the npm CLI (npx cursordoctrine install / verify / sweep / uninstall)
 INSTALL.md        ready-to-paste prompt that tells a Cursor agent to
                   install the right folder and verify every hook
 ```
@@ -155,7 +164,6 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 | `ANTI_SLOP_ENFORCE=0` | on | disables the slop advisory |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
 | `SUBAGENT_REVIEW_ENFORCE=0` | on | disables the in-subagent review pass |
-| `MINIMAL_EDIT_WARN_LINES` / `MINIMAL_EDIT_FAIL_LINES` | 100 / 400 | over-edit thresholds |
 | `ANTI_SLOP_CHECKLIST_LINES` | 40 | added-lines threshold for the checklist |
 
 ## Design notes

@@ -231,7 +231,7 @@ session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
 and auto-submits a `followup_message` so the model audits seven axes: intent,
 correctness, reliability, coverage, anti-slop, wiring completeness. Axis 4 delegates to this skill's
 scanner (`scan_slop.py --all`) and the canonical checklist at
-`~/.agents/hooks/anti-slop.md` (13 items, including semantic contracts,
+`~/.agents/hooks/anti-slop.md` (21 items, including semantic contracts,
 operational slop, and change surface). One bounded pass per implementation.
 
 ## Hard constraints
@@ -266,16 +266,16 @@ Diff: {before} → {after} lines.   Tests: {pass | n/a}
 | Invoke | `/anti-slop`, or "remove the AI slop" |
 | Scanner | `python scripts/scan_slop.py --all` |
 | Final review | automatic via `stop` hook (`final-review.ps1` / `final-review.sh`) |
-| Hook checklist | `~/.agents/hooks/anti-slop.md` (13 items; per-edit + final-review axis 4) |
+| Hook checklist | `~/.agents/hooks/anti-slop.md` (21 items; per-edit + final-review axis 4) |
 
 The scanner is stdlib-only and needs Python 3.9+. Pairs with the **anti-slop
 audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the
 **semantic-density-audit hook** (`semantic-density-audit.ps1` / `.sh`, flags
 low-density identifiers per edit — shares `low_density.py` with this scanner's
 `semantic_density` bucket), the **scope-gate-audit hook**
-(`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in declared-scope gate
-that flags edits outside `.scope.json`; shares `scope_match.py` with the
-**stop hook** (`final-review.ps1` / `.sh`,
+(`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in auto-recorder that
+appends every edited file to `.scope.json` `files[]`),
+the **stop hook** (`final-review.ps1` / `.sh`,
 seven-axis session review incl. intent trace, wiring completeness, and mechanics & stack integrity), and
 **declared-editing** (YAGNI ultra ladder injected at session start).
 This skill is the active "delete it now" layer those only nudge toward.
