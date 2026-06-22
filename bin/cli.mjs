@@ -43,6 +43,27 @@ const hooksJsonDst = join(cursorDst, 'hooks.json');
 const injectName = platform === 'windows' ? 'inject-doctrine.ps1' : 'inject-doctrine.sh';
 const doctrineFiles = [injectName, 'doctrine.md'];
 
+// Hook scripts this pack used to ship but no longer does. install() deletes
+// these from ~/.agents/hooks so a version bump cannot leave orphans that call
+// functions removed from hook-common. Only explicit basenames — never wildcards.
+const STALE_HOOK_FILES = [
+  'anti-slop-audit.ps1', 'anti-slop-audit.sh',
+  'intent-anchor.ps1', 'intent-anchor.sh',
+  'post-tool-use.ps1', 'post-tool-use.sh',
+  'scope-gate-audit.ps1', 'scope-gate-audit.sh',
+  'self-review-trigger.ps1', 'self-review-trigger.sh',
+  'semantic-density-audit.ps1', 'semantic-density-audit.sh',
+  'subagent-stop-review.ps1', 'subagent-stop-review.sh',
+  'self-review.md',
+  'biome-advisory.ps1', 'biome-advisory.sh',
+  'semgrep-advisory.ps1', 'semgrep-advisory.sh',
+  'anchor-set-nudge.ps1', 'anchor-set-nudge.sh',
+  'minimal-edit-audit.ps1', 'minimal-edit-audit.sh',
+];
+
+// Doctrine files removed from the sessionStart payload across versions.
+const STALE_CURSOR_FILES = ['pre-compile.md', 'USER-RULES.md', 'declared-editing.md'];
+
 function payloadHookFiles() {
   return readdirSync(join(payload, 'hooks'));
 }
@@ -159,6 +180,22 @@ function install() {
 
   const hookFiles = payloadHookFiles();
   for (const f of hookFiles) cpSync(join(payload, 'hooks', f), join(hooksDst, f));
+  const reapedHooks = [];
+  for (const f of STALE_HOOK_FILES) {
+    const p = join(hooksDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      reapedHooks.push(f);
+    }
+  }
+  const reapedCursor = [];
+  for (const f of STALE_CURSOR_FILES) {
+    const p = join(cursorDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      reapedCursor.push(f);
+    }
+  }
 
   for (const f of doctrineFiles) cpSync(join(payload, f), join(cursorDst, f));
 
@@ -205,7 +242,13 @@ function install() {
 
   console.log('');
   console.log(`  ~/.agents/hooks        ${hookFiles.length} files`);
+  if (reapedHooks.length) {
+    console.log(`  reaped stale hooks     ${reapedHooks.join(', ')}`);
+  }
   console.log(`  ~/.cursor              ${doctrineFiles.join(', ')}`);
+  if (reapedCursor.length) {
+    console.log(`  reaped stale doctrine  ${reapedCursor.join(', ')}`);
+  }
   console.log(`  ~/.cursor/hooks.json   ${hooksJsonNote}`);
   console.log('  ~/.cursor/skills       anti-slop (SKILL.md + scanner)');
   console.log('');

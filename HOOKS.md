@@ -42,12 +42,14 @@ every postToolUse but emits nothing when no stash is present (most fires,
 between edits, are silent). Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
 ## beforeShellExecution — permission-gate (.ps1/.sh)
-5s, `failClosed: true`. Deny a small explicit list of dangerous commands
+5s, `failClosed: false`. Deny a small explicit list of dangerous commands
 (`rm -rf` on absolute paths, `curl|sh`, force-push, `npm publish`, ...).
 Default-allow, deny-by-list. Emits canonical
-`{"permission":"allow"|"deny","user_message":...}`. `failClosed: true` means
-a slow pwsh cold-start that times out denies by default — the safe direction
-for a security-critical gate.
+`{"permission":"allow"|"deny","user_message":...}`. The script itself fails
+open on parse/runtime errors. `failClosed: false` matches that: if Cursor's
+hook runner aborts pwsh before the script returns (cold-start timeout, signal),
+shell is not blocked. Set `failClosed: true` in your merged `hooks.json` only
+if you prefer deny-on-timeout over availability.
 
 ## stop — final-review (.ps1/.sh)
 10s, `loop_limit: 2`. ONE comprehensive end-of-implementation review across

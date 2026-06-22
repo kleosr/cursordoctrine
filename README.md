@@ -22,7 +22,7 @@
 Three Cursor hooks. No state machine, no per-edit advisories, no contract files written to your repos.
 
 1. **Inject the doctrine** at `sessionStart` — every chat starts with the same short governing text (`doctrine.md`): smallest correct diff, YAGNI ultra, ask-don't-guess, conventional commits, the auditor mindset. ~80 lines, read once.
-2. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). `failClosed: true` so a slow cold-start denies by default. Everything else passes.
+2. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). The script fails open on internal errors; `failClosed: false` so a pwsh cold-start abort does not block all shell use. Everything else passes.
 3. **One final review** at `stop` — when an implementation finishes and `git` sees changed files, Cursor auto-submits one `FINAL REVIEW` follow-up. Six axes: intent trace (tie every diff hunk to the original request — anything untraceable is a hallucinated requirement), correctness, reliability, coverage, anti-slop, wiring completeness. The hook reads `git diff --name-only HEAD` + untracked files; zero state on disk.
 
 The model is the auditor. A self-review done by the model in its own context is free — it has the file, the diff, the user's intent, and the ability to fix. The harness's only non-advisory lever is the permission gate's hard deny.
