@@ -1,12 +1,6 @@
 {
   "version": 1,
   "hooks": {
-    "beforeSubmitPrompt": [
-      {
-        "command": "bash ~/.agents/hooks/intent-precompile.sh",
-        "timeout": 5
-      }
-    ],
     "sessionStart": [
       {
         "command": "bash ~/.cursor/inject-doctrine.sh",
@@ -15,55 +9,29 @@
     ],
     "afterFileEdit": [
       {
-        "command": "bash ~/.agents/hooks/self-review-trigger.sh",
+        "command": "bash ~/.agents/hooks/scope-refresh.sh",
         "timeout": 5,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "bash ~/.agents/hooks/semantic-density-audit.sh",
-        "timeout": 15,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "bash ~/.agents/hooks/scope-gate-audit.sh",
-        "timeout": 10,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "bash ~/.agents/hooks/anti-slop-audit.sh",
-        "timeout": 15,
         "matcher": "^Write$"
       }
     ],
     "postToolUse": [
       {
-        "command": "bash ~/.agents/hooks/intent-anchor.sh",
+        "command": "bash ~/.agents/hooks/scope-drain.sh",
         "timeout": 5
-      },
-      {
-        "command": "bash ~/.agents/hooks/post-tool-use.sh",
-        "timeout": 5
-      }
-    ],
-    "subagentStop": [
-      {
-        "command": "bash ~/.agents/hooks/subagent-stop-review.sh",
-        "timeout": 5,
-        "loop_limit": 3
       }
     ],
     "beforeShellExecution": [
       {
         "command": "bash ~/.agents/hooks/permission-gate.sh",
         "timeout": 5,
-        "failClosed": false
+        "failClosed": true
       }
     ],
     "stop": [
       {
         "command": "bash ~/.agents/hooks/final-review.sh",
         "timeout": 10,
-        "loop_limit": 5
+        "loop_limit": 2
       }
     ]
   }

@@ -4,9 +4,7 @@
 > does step 2 (including the hooks.json merge), and `npx cursordoctrine verify`
 > does step 3. Then restart Cursor and continue from step 4. The prompt below
 > is the manual path for machines without Node. Run `npx cursordoctrine sweep`
-> on demand for a whole-codebase anti-slop cleanup (it audits every tracked
-> file and hands off to the agent under a cleanup doctrine — distinct from the
-> bounded session final-review, which scans only the files you changed).
+> on demand for a whole-codebase anti-slop cleanup.
 
 > Paste everything below this line into a Cursor agent chat on the target machine.
 
@@ -29,8 +27,8 @@ Do not guess from the shell you happen to be running in — a Windows machine dr
 
 Check the prerequisites first:
 
-- Windows: **PowerShell 7 (`pwsh`) on PATH**, plus `git`. Python 3.9+ if you want the anti-slop scanner (the hooks work without it). Confirm with `pwsh -Version` — Windows PowerShell 5.1 (`powershell.exe`) is NOT supported; install PowerShell 7 via `winget install --id Microsoft.PowerShell --source winget` if missing.
-- Linux: `bash`, `git`, and either `jq` or `python3` (the hooks prefer `jq` and fall back to `python3`; install `jq` if neither is present). Python 3.9+ for the anti-slop scanner.
+- Windows: **PowerShell 7 (`pwsh`) on PATH**, plus `git`. Python 3.9+ if you want the anti-slop scanner (`cursordoctrine sweep` uses it). Confirm with `pwsh -Version` — Windows PowerShell 5.1 (`powershell.exe`) is NOT supported; install PowerShell 7 via `winget install --id Microsoft.PowerShell --source winget` if missing.
+- Linux: `bash`, `git`, and either `jq` or `python3` (the hooks prefer `jq` and fall back to `python3`; install `jq` if neither is present). Python 3.9+ for the sweep scanner.
 
 ## 2. Copy the files
 
@@ -39,12 +37,12 @@ Windows (from the repo root, in pwsh):
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.agents\hooks", "$HOME\.cursor" | Out-Null
 Copy-Item windows\hooks\* "$HOME\.agents\hooks\" -Force
-Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md, windows\USER-RULES.md, windows\declared-editing.md, windows\pre-compile.md "$HOME\.cursor\" -Force
+Copy-Item windows\inject-doctrine.ps1, windows\doctrine.md "$HOME\.cursor\" -Force
 # hooks.json ships with ~/ placeholders; pwsh -File does NOT expand ~, so
 # substitute the real profile path (forward slashes) at install time:
 $h = $HOME -replace '\\', '/'
 (Get-Content windows\hooks.json -Raw).Replace('~/', "$h/") | Set-Content "$HOME\.cursor\hooks.json" -NoNewline
-# anti-slop skill (SKILL.md + the scanner the final-review hook runs):
+# anti-slop skill (SKILL.md + the scanner the sweep command runs):
 New-Item -ItemType Directory -Force "$HOME\.cursor\skills" | Out-Null
 Copy-Item skills\anti-slop "$HOME\.cursor\skills\" -Recurse -Force
 ```
@@ -54,10 +52,10 @@ Linux (from the repo root, in bash):
 ```bash
 mkdir -p ~/.agents/hooks ~/.cursor
 cp linux/hooks/* ~/.agents/hooks/
-cp linux/inject-doctrine.sh linux/doctrine.md linux/USER-RULES.md linux/declared-editing.md linux/pre-compile.md ~/.cursor/
+cp linux/inject-doctrine.sh linux/doctrine.md ~/.cursor/
 cp linux/hooks.json ~/.cursor/hooks.json
 chmod +x ~/.agents/hooks/*.sh ~/.cursor/inject-doctrine.sh
-# anti-slop skill (SKILL.md + the scanner the final-review hook runs):
+# anti-slop skill (SKILL.md + the scanner the sweep command runs):
 mkdir -p ~/.cursor/skills
 cp -r skills/anti-slop ~/.cursor/skills/
 ```
@@ -73,44 +71,25 @@ Linux:
 ```bash
 echo '{"command":"git push --force"}' | bash ~/.agents/hooks/permission-gate.sh   # expect "permission":"deny"
 echo '{"command":"git status"}'       | bash ~/.agents/hooks/permission-gate.sh   # expect {"permission":"allow"}
-echo '{"conversation_id":"t1","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
-echo '{"conversation_id":"t1"}'       | bash ~/.agents/hooks/post-tool-use.sh     # expect {"additional_context": ...}
-echo '{"conversation_id":"t1","status":"completed"}' | bash ~/.agents/hooks/final-review.sh  # expect {"followup_message": ...} once, then {}
-echo '{"conversation_id":"t2","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/self-review-trigger.sh
-echo '{"conversation_id":"t2","status":"completed"}' | bash ~/.agents/hooks/subagent-stop-review.sh  # expect {"followup_message": "SUBAGENT FINAL REVIEW ..."} once, then {}
-echo '{"conversation_id":"t2"}'       | bash ~/.agents/hooks/post-tool-use.sh     # drain t2's leftover feedback file
-# intent-precompile: writes .scope.json from the prompt BEFORE the first token.
-# Needs a repo root (workspace_roots/cwd; it will NOT write to $HOME - that's the guard).
-echo '{"conversation_id":"t3","cwd":"/tmp","prompt":"fix the dashboard bug"}' | bash ~/.agents/hooks/intent-precompile.sh
-cat /tmp/.scope.json                                                         # expect intent="fix the dashboard bug", a seeded acceptance (no <TODO>)
-# intent-anchor: re-injects the contract (and is the fallback creator).
-echo '{"conversation_id":"t3","cwd":"/tmp","file_path":"/tmp/x.py"}' | bash ~/.agents/hooks/intent-anchor.sh
-echo '{"conversation_id":"t3"}'       | bash ~/.agents/hooks/post-tool-use.sh # expect additional_context with the contract
+# final-review needs a git repo to find changes. Seed a tiny one and modify a file:
+mkdir -p /tmp/cd-verify && cd /tmp/cd-verify && git init -q && echo a > f.txt && git add . && git commit -q -m init && echo b > f.txt
+echo '{"conversation_id":"t1","status":"completed","cwd":"/tmp/cd-verify"}' | bash ~/.agents/hooks/final-review.sh   # expect {"followup_message": ...}
+echo '{"conversation_id":"t1","status":"completed","cwd":"/tmp/cd-verify"}' | bash ~/.agents/hooks/final-review.sh   # expect {} (brake armed)
 echo '{}' | bash ~/.cursor/inject-doctrine.sh                                # expect {"additional_context": ...}
-python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help               # expect usage text (final review's scanner)
-rm -f /tmp/.scope.json                                                        # cleanup the test scaffold
+python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py --help               # expect usage text
+rm -rf /tmp/cd-verify
 ```
 
-If the scanner check fails, the final review still works — it falls back to the
-`~/.agents/hooks/anti-slop.md` checklist — but re-run the copy step above. The
-skill itself (`~/.cursor/skills/anti-slop/SKILL.md`) needs Python 3.9+ for the
-scanner and nothing else.
-
-Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, `inject-doctrine.ps1` lives in `$HOME\.cursor`, and use `python` instead of `python3` for the scanner check):
+Windows (same payloads, swap `bash ~/...sh` for `pwsh.exe -NoProfile -File $HOME\.agents\hooks\<name>.ps1`, `inject-doctrine.ps1` lives in `$HOME\.cursor`, and use `python` instead of `python3`):
 
 ```powershell
 echo '{"command":"git push --force"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\permission-gate.ps1
-echo '{"conversation_id":"t2","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\self-review-trigger.ps1
-echo '{"conversation_id":"t2","status":"completed"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\subagent-stop-review.ps1  # SUBAGENT FINAL REVIEW once, then {}
-# intent-precompile: writes .scope.json from the prompt BEFORE the first token.
-# Needs a repo root (workspace_roots/cwd; it will NOT write to $HOME - that's the guard).
-echo '{"conversation_id":"t3","cwd":"C:\tmp","prompt":"fix the dashboard bug"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\intent-precompile.ps1
-Get-Content C:\tmp\.scope.json                                            # expect intent="fix the dashboard bug", a seeded acceptance (no <TODO>)
-# intent-anchor: re-injects the contract (and is the fallback creator).
-echo '{"conversation_id":"t3","cwd":"C:\tmp","file_path":"C:\tmp\x.py"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\intent-anchor.ps1
-echo '{"conversation_id":"t3"}'  | pwsh.exe -NoProfile -File $HOME\.agents\hooks\post-tool-use.ps1  # additional_context with the contract
+mkdir C:\tmp\cd-verify -Force; Set-Location C:\tmp\cd-verify; git init -q; 'a' | Out-File f.txt; git add .; git commit -q -m init; 'b' | Out-File f.txt
+echo '{"conversation_id":"t1","status":"completed","cwd":"C:/tmp/cd-verify"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\final-review.ps1
+echo '{"conversation_id":"t1","status":"completed","cwd":"C:/tmp/cd-verify"}' | pwsh.exe -NoProfile -File $HOME\.agents\hooks\final-review.ps1
+echo '{}' | pwsh.exe -NoProfile -File $HOME\.cursor\inject-doctrine.ps1
 python $HOME\.cursor\skills\anti-slop\scripts\scan_slop.py --help
-Remove-Item C:\tmp\.scope.json -Force                                     # cleanup the test scaffold
+Remove-Item C:\tmp\cd-verify -Recurse -Force
 ```
 
 Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
@@ -118,16 +97,14 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 ## 4. Verify inside Cursor
 
 1. Restart Cursor (hooks.json is read at startup).
-2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §2; ask "what is the Anchor Set?" and it should answer from `pre-compile.md` (Objective / Constraints / Scope / Deterministic success).
-3. Send a prompt. `.scope.json` should appear in the repo root **immediately** (before the agent's first edit), written by `intent-precompile` with `intent` from your prompt and a seeded `acceptance` (not a bare `<TODO>`). Have the agent make a small edit: on the next turn it should receive a `SELF-REVIEW TRIGGER` message, and `intent-anchor` re-injects the contract. The contract regenerates when your prompt changes.
-4. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
-5. Finish a small implementation and stop. A single `FINAL REVIEW` follow-up should fire — exactly once.
-6. Delegate a small edit to a subagent (e.g. ask the agent to "use a generalPurpose subagent to add a comment to <file>"). The subagent should receive one `SUBAGENT FINAL REVIEW` follow-up before returning, and the parent should see `SUBAGENT WORK DETECTED` at its next tool boundary. (`subagentStop` is only read at startup — if nothing fires, restart Cursor again.)
-7. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
-8. (Optional, opt-in scope gate) Have the agent write a `.scope.json` in the repo root (`intent` + `files[]` + `acceptance`), then edit a file. After the edit, `.scope.json`'s `files[]` should now contain the edited path — `scope-gate-audit` auto-records every edit so the contract's footprint stays accurate without the agent maintaining it by hand. Delete the file to disable the recorder.
+2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §1 and §3.
+3. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
+4. Finish a small implementation in a git repo and stop. A single `FINAL REVIEW` follow-up should fire — exactly once. The follow-up lists the files git sees as changed (tracked diff + untracked new files), prepends your last user message for intent trace, and asks the model to audit across six axes.
+5. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
+6. (Optional) Run `npx cursordoctrine sweep` for a whole-codebase anti-slop audit with a category-by-category breakdown and a cleanup handoff.
 
 ## 5. Report
 
 Tell the user what was installed, which checks passed, and anything that failed with the exact error. Do not silently work around a failing check.
 
-Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything advisory off), `PERM_GATE_ENFORCE=0`, `INTENT_ANCHOR_ENFORCE=0` (thin-intent `.scope.json` scaffold/re-injection off), `SEMANTIC_DENSITY_ENFORCE=0`, `SCOPE_GATE_ENFORCE=0`, `ANTI_SLOP_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`, `SUBAGENT_REVIEW_ENFORCE=0`.
+Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything off), `PERM_GATE_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`.

@@ -9,7 +9,8 @@ Do not explain. If clean, say nothing.
   1. EDGE CASES — Happy path only? Check null / empty / zero / boundary / error
      inputs the task implies.
 
-  2. DUPLICATION — Logic that already exists in this repo? Call it; do not
+  2. DUPLICATION — Logic that already exists in this repo? **Search before
+     claiming reuse** (Grep the codebase, don't assume). Call it; do not
      re-implement. Same function in many files (isRecord-class) → one source.
 
   3. CONVENTIONS — Match the FILE's style, naming, structure, error-handling,
@@ -95,8 +96,42 @@ Do not explain. If clean, say nothing.
 
  21. SWITCH / IF-ELSE BLOAT — A giant switch or a long if/else-if chain of many
      cases. The model maps states this way instead of dispatching. Stop:
-     DICTIONARY DISPATCH / MAP LOOKUP. A `Record<State, Handler>` (or Command
-     pattern) replaces the switch - a new case is one table row, not a new branch.
+      DICTIONARY DISPATCH / MAP LOOKUP. A `Record<State, Handler>` (or Command
+      pattern) replaces the switch - a new case is one table row, not a new branch.
+
+ 22. REACT MEMO/CALLBACK SLOP (Tier 6) — `useMemo` / `useCallback` added without
+      a measured render-identity or expensive-computation reason. The model wraps
+      everything in memo "for perf" when plain values and functions are correct.
+      Stop: default to raw values. Memoize ONLY when (a) the value is the
+      dependency of an effect or a child's identity check, AND (b) the
+      computation or referential equality is provably costly. Delete memoization
+      added to quiet performance anxiety.
+
+ 23. EFFECT SLOP (Tier 6) — `useEffect` that mirrors props into state, resets
+      derived state after the fact, or handles events reactively. Stop: apply
+      "You Might Not Need an Effect" — derive values during render, move event-
+      caused work into event handlers, reset component state with the `key` prop
+      instead of an effect. An effect that exists to keep two things in sync is
+      the smell; the structure that needs syncing is the bug.
+
+ 24. DIFF CHURN — Unrelated renames, formatting, comment shuffling, or wrapper
+      extractions that grow the diff without changing the design. The model
+      tidies as it goes. Stop: the diff is proportional to the task. Revert
+      churn. If a rename is genuinely needed, ship it in its own commit, not
+      piggybacked on a behavior change.
+
+ 25. COMPATIBILITY CRUFT — Bolted-on flags, params, or branches that preserve
+      accidental architecture instead of building the coherent end state. "The
+      old code did this" is not a reason. Stop: if the only justification for a
+      branch is backward compatibility with internal code you own, delete the
+      branch and migrate the caller. A codebase that preserves every accidental
+      shape accumulates cruft faster than it ships features.
+
+ 26. PARAMETER SPRAWL — A function with 4+ positional params, or boolean/flag
+      params that switch behavior. The boundary is wrong: one function is doing
+      several. Stop: split into named functions for each behavior, or accept an
+      options object. `processData(data, true, false, true)` is the smell; the
+      caller cannot read what it gets.
 
 Hard constraints: never revert what the USER asked for — slop is what got added
 on top. At most a few targeted edits, then stop.

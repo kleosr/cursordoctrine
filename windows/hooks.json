@@ -1,12 +1,6 @@
 {
   "version": 1,
   "hooks": {
-    "beforeSubmitPrompt": [
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-precompile.ps1",
-        "timeout": 5
-      }
-    ],
     "sessionStart": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.cursor/inject-doctrine.ps1",
@@ -15,55 +9,29 @@
     ],
     "afterFileEdit": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/self-review-trigger.ps1",
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-refresh.ps1",
         "timeout": 5,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/semantic-density-audit.ps1",
-        "timeout": 15,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-gate-audit.ps1",
-        "timeout": 10,
-        "matcher": "^Write$"
-      },
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/anti-slop-audit.ps1",
-        "timeout": 15,
         "matcher": "^Write$"
       }
     ],
     "postToolUse": [
       {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-anchor.ps1",
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-drain.ps1",
         "timeout": 5
-      },
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/post-tool-use.ps1",
-        "timeout": 5
-      }
-    ],
-    "subagentStop": [
-      {
-        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/subagent-stop-review.ps1",
-        "timeout": 5,
-        "loop_limit": 3
       }
     ],
     "beforeShellExecution": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/permission-gate.ps1",
         "timeout": 5,
-        "failClosed": false
+        "failClosed": true
       }
     ],
     "stop": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/final-review.ps1",
         "timeout": 10,
-        "loop_limit": 5
+        "loop_limit": 2
       }
     ]
   }

@@ -1,26 +1,20 @@
 # final-review.ps1 - stop hook (Cursor).
 #
-# ONE comprehensive end-of-implementation review across seven axes:
-# intent, correctness, reliability, coverage, anti-slop, wiring completeness,
-# and mechanics & stack integrity. When the agent finishes an
-# implementation that touched files, Cursor auto-submits this hook's
-# `followup_message` as the next user turn, so the model re-audits everything it
-# changed this session and FIXES what fails - the model-as-auditor pattern over
-# the whole implementation (the per-edit afterFileEdit hooks catch each edit;
-# this catches the finished whole).
+# ONE end-of-implementation review across six axes (intent, correctness,
+# reliability, coverage, anti-slop, wiring). On a clean stop where files
+# changed this session, Cursor auto-submits this hook's `followup_message` as
+# the next user turn so the model re-audits its whole session diff.
 #
-# Bounded so it can't loop forever:
-#   - a per-conversation reviewed-flag: the stop AFTER the review pass clears
-#     it and ends the loop (one review per implementation). NOTE: we do NOT
-#     gate on stdin's loop_count - docs define it as cumulative follow-ups
-#     "for this conversation", so a loop_count>=1 guard would suppress every
-#     review after the first implementation in a long conversation,
+# Change detection: `git diff --name-only HEAD` + `git ls-files --others
+# --exclude-standard` against the resolved repo root. Zero state on disk.
+#
+# Bounded:
+#   - per-cid reviewed-<cid>.flag: the stop AFTER the review clears it and
+#     ends the loop (one review per implementation),
 #   - loop_limit in hooks.json caps runaway follow-ups harness-side,
-#   - only if a file was actually edited this loop (the session-edits marker
-#     written by self-review-trigger.ps1). Pure Q&A turns get nothing.
-# Plus: only on status == 'completed' (not aborted/errored).
+#   - only on status == 'completed'.
 #
-# Always emits valid JSON ({} = no follow-up). The review prompt lives in
+# Always emits valid JSON ({} = no follow-up). Review prompt lives in
 # final-review.md next to this script (embedded fallback if missing).
 # Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0.
 
@@ -38,117 +32,59 @@ $status = ''
 if ($obj.PSObject.Properties['status']) { $status = [string]$obj.status }
 $cid = Get-SafeConversationId $obj
 
-$pendingDir = Get-HooksPendingDir
-$marker = Join-Path $pendingDir "session-edits-$cid.txt"
-$flag   = Join-Path $pendingDir "reviewed-$cid.flag"
-$intentLatch = Join-Path $pendingDir "intent-injected-$cid.flag"
+$pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
+$flag = Join-Path $pendingDir "reviewed-$cid.flag"
 
-# Sweep state from sessions that died before their stop hook ran. Cheap (one
-# directory listing on an event that fires once per agent loop).
-Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
-    Remove-Item -Force -ErrorAction SilentlyContinue
+# Sweep state older than 7 days from sessions that died before their stop hook.
+try {
+    Get-ChildItem $pendingDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+} catch { }
 
-# Unconditionally clear the intent-anchor per-turn latch so the next turn
-# re-fires. Every stop is a turn boundary; clearing here (not only inside the
-# reviewed-flag block below) guarantees it re-fires on the first tool of the
-# NEXT turn and can never get stranded silenced mid-session.
-# last-query-<cid>.hash is NOT cleared here - it persists turn-to-turn so
-# intent-anchor can detect prompt changes; the 7-day sweep above reaps it.
-Remove-Item $intentLatch -Force -ErrorAction SilentlyContinue
-
-# --- INTENT ENFORCEMENT GATE (Tier -1, the fix for "intent stays verbatim") ---
-# intent-anchor.ps1 already DEMANDS the Step 0 restatement via additional_context,
-# but additional_context is advisory noise the agent routinely buries -> intent
-# stays byte-identical to trace.query for the whole turn. The ONLY non-advisory
-# lever in this harness is a stop followup_message: Cursor resubmits it as a REAL
-# user turn (max salience), not ignorable context. So if the agent stops with
-# intent still verbatim, force ONE sharp followup whose sole instruction is the
-# string-replace on .scope.json. Bounded: intent-gate-fired-<cid>.hash records the
-# _intent_hash it fired on -> fires AT MOST ONCE per prompt (if ignored, give up
-# gracefully instead of starving the real review of loop_limit turns). Resets
-# automatically when the prompt changes (hash differs). Precondition-first: a
-# final review against a verbatim intent is auditing the wrong contract.
-$gateRoot = Resolve-ProjectRoot $obj
-if ($gateRoot) {
-    $gateScope = Join-Path $gateRoot '.scope.json'
-    if (Test-Path -LiteralPath $gateScope) {
-        $gateSj = $null
-        try { $gateSj = Get-Content -LiteralPath $gateScope -Raw | ConvertFrom-Json } catch { $gateSj = $null }
-        if ($gateSj -and $gateSj.PSObject.Properties['intent'] -and $gateSj.trace) {
-            $gIntent = [string]$gateSj.intent
-            $gTrace  = ''
-            if ($gateSj.trace.PSObject.Properties['query']) { $gTrace = [string]$gateSj.trace.query }
-            $gHash = ''
-            if ($gateSj.PSObject.Properties['_intent_hash']) { $gHash = [string]$gateSj._intent_hash }
-            $gVerbatim = (-not [string]::IsNullOrWhiteSpace($gIntent)) `
-                -and (-not [string]::IsNullOrWhiteSpace($gTrace)) `
-                -and ($gIntent.Trim() -ieq $gTrace.Trim())
-            if ($gVerbatim -and $gHash) {
-                $gateFiredFile = Join-Path $pendingDir "intent-gate-fired-$cid.hash"
-                $gFiredHash = ''
-                if (Test-Path $gateFiredFile) { $gFiredHash = (Get-Content $gateFiredFile -Raw -ErrorAction SilentlyContinue).Trim() }
-                if ($gFiredHash -ne $gHash) {
-                    try { Set-Content -Path $gateFiredFile -Value $gHash -NoNewline -ErrorAction SilentlyContinue } catch { }
-                    $scopeFwd = ConvertTo-FwdPath $gateScope
-                    $gateMsg = @"
-INTENT REFINEMENT REQUIRED (precondition before any review or further work).
-
-You stopped, but .scope.json's 'intent' field is still your VERBATIM request
-(byte-identical to 'trace.query') - you never did your Step 0 restatement, so
-you have not confirmed you understood the request. Do EXACTLY this one edit and
-nothing else:
-
-  1. Open $scopeFwd
-  2. Replace ONLY the value of the 'intent' field with ONE operational sentence
-     in YOUR OWN words: the request restated - grammar fixed, pronouns resolved,
-     implicit constraints made explicit, meaning preserved. Not 'improve X' -
-     the concrete verb (what to make return / change / happen).
-  3. Do NOT touch 'trace.query', '_intent_hash', '_generated_by', 'files', or
-     'acceptance'. Do NOT rewrite the whole file - one targeted string-replace
-     on the 'intent' value only.
-
-'intent' and 'trace.query' must say the SAME thing in DIFFERENT words. Make this
-single edit, then stop.
-"@
-                    Write-HookJson @{ followup_message = $gateMsg }
-                    exit 0
-                }
-            }
-        }
-    }
-}
-
-# One-shot brake: the previous stop for this conversation emitted the review.
-# Clear the flag (and whatever the review pass itself edited) and end the loop.
+# One-shot brake: the previous stop emitted the review; clear it and end the loop.
 if (Test-Path $flag) {
-    Remove-Item $flag, $marker -Force -ErrorAction SilentlyContinue
+    Remove-Item $flag -Force -ErrorAction SilentlyContinue
     Emit-None
 }
 
-# Fold completed subagents' edit markers into this conversation's marker so
-# the review covers delegated work (subagent edits fire afterFileEdit under
-# the SUBAGENT's conversation_id; postToolUse never fires for the Task tool,
-# so this stop-time fold is the terminal backstop after the per-tool fold in
-# post-tool-use.ps1).
-Merge-SubagentEditMarkers $obj $cid | Out-Null
+# Review only a clean completion.
+if ($status -and $status -ne 'completed') { Emit-None }
 
-# Review only a clean completion; otherwise just clear the marker and stop.
-if ($status -and $status -ne 'completed') {
-    Remove-Item $marker -Force -ErrorAction SilentlyContinue
-    Emit-None
+# Resolve repo root. No root -> no audit scope -> nothing to review.
+$root = Resolve-ProjectRoot $obj
+if (-not $root) { Emit-None }
+
+# Confirm git repo at root.
+& git -C $root rev-parse --git-dir 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Emit-None }
+
+# --- collect changed files: tracked diff + untracked new files ----------------
+$edited = New-Object System.Collections.Generic.List[string]
+foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
+    if ($l) { $edited.Add($l) }
 }
-# No edits this loop -> nothing to review.
-if (-not (Test-Path $marker)) { Emit-None }
-$edited = @(Get-Content $marker -ErrorAction SilentlyContinue |
-    Where-Object { $_ -and $_.Trim() } | Select-Object -Unique)
-Remove-Item $marker -Force -ErrorAction SilentlyContinue
+foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
+    if ($l) { $edited.Add($l) }
+}
 if ($edited.Count -eq 0) { Emit-None }
 
-# Compose the follow-up review prompt (md preferred, embedded fallback).
-$promptFile = Join-Path $HOME '.agents\hooks\final-review.md'
+# Dedupe, normalize to repo-relative forward-slash paths.
+$rel = New-Object System.Collections.Generic.List[string]
+foreach ($f in $edited) {
+    $rp = ConvertTo-FwdPath $f
+    if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
+        $rp = $rp.Substring($root.Length + 1)
+    }
+    $rp = $rp.TrimStart('/')
+    if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+}
+if ($rel.Count -eq 0) { Emit-None }
+
+# --- review prompt body (md preferred, embedded fallback) ---------------------
 $body = ''
-if (Test-Path $promptFile) { $body = Get-Content -Raw $promptFile }
+$promptFile = Join-Path $HOME '.agents\hooks\final-review.md'
+if (Test-Path -LiteralPath $promptFile) { $body = Get-Content -Raw -LiteralPath $promptFile }
 if (-not $body) {
     $body = @'
 FINAL REVIEW - audit everything you changed this session and FIX what fails
@@ -160,58 +96,83 @@ FINAL REVIEW - audit everything you changed this session and FIX what fails
      released on every path, no races, input validated at the boundary.
   3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
      no tautological tests.
-  4. Anti-slop - the header's ANTI-SLOP SCAN block is scoped to the files you
-     changed (NOT --all): fix those hits on lines you added. If the block is
-     absent, run `python <scanner> <the files above>` (never --all at review
-     time - that audits the whole pre-existing codebase, out of scope here).
-     Then read ~/.agents/hooks/anti-slop.md (single source of truth) and apply
-     all items to the session diff. Do NOT re-list the items here.
-  5. Wiring completeness - for every user-visible behavior you added/changed
-     (button, submit, API call, route, state transition), trace its execution
-     path to a REAL EFFECT (persist, mutate, call, render). A dead end is slop:
-     handleSubmit that does not persist, an endpoint no caller invokes, a store
-     never consumed, a stub/TODO/console.log standing in for the effect. Wire it
-     now or remove the dead half; mark later-stubs with TODO(wire):.
-Fix now, re-run the scan + tests, then stop. If an axis is clean, say so in one line.
+  4. Anti-slop - read ~/.agents/hooks/anti-slop.md (single source of truth) and apply
+     all items to the session diff.
+  5. Wiring completeness - for every user-visible behavior you added/changed,
+     trace its execution path to a REAL EFFECT (persist, mutate, call, render).
+     A dead end is slop: handleSubmit that does not persist, an endpoint no caller
+     invokes, a stub/TODO/console.log standing in for the effect. Wire it now or
+     remove the dead half; mark later-stubs with TODO(wire):.
+Fix now, re-run tests, then stop. If an axis is clean, say so in one line.
 '@
 }
-# Expand ~ in the body AND in the fallback above, so the model gets literal
-# absolute paths it can paste into pwsh on Windows (where ~ does NOT expand).
-# Same treatment applied to the scanner path so the anti-slop Step A command runs.
 $body = Expand-AgentPaths $body
 
-# Regla R1 (re-entry): if this review pass is a re-audit after a failed gate or
-# axis, suppress History Propagation - the model must NOT build on its own prior
-# wrong diff. Reset its prior to the Anchor Set, not to its previous attempt.
-$reentryLine = "`n`nRE-ENTRY RULE (Regla R1): if a gate or axis failed, forget the approach that produced it. Re-read your ORIGINAL REQUEST above and your Anchor Set (.scope.json, maintained by the intent-anchor hook). Fix ONLY what is failing. Do not refactor in this pass - that is History Propagation, the exact failure mode the Anchor Set exists to prevent.`n"
-
-$resolved = @($edited | ForEach-Object { Resolve-AgentPath $_ })
-$fileList = ($resolved | Select-Object -First 30) -join "`n  "
-
-# Tier 0: extract the last user <user_query> from the transcript so the model
-# can trace every diff hunk back to a concrete request. Anything untraceable is
-# a hallucinated requirement. Empty when there is no transcript or no user_query
-# (sandboxed verify runs, fresh installs) — the axis is then a no-op.
-$userQuery = Get-LastUserQuery $obj
-$intentBlock = ''
-if ($userQuery) {
-    $intentBlock = "ORIGINAL REQUEST (your last user message, for intent trace):`n---`n$userQuery`n---`n`n"
+# --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
+# If present, prefer its intent for axis 0 (sharper than transcript extraction)
+# and compute the blast-radius diff: declared vs touched.
+$scopePath = Join-Path $root '.scope.json'
+$scopeBlock = ''
+$declaredNote = ''
+$scopeIntent = ''
+if (Test-Path -LiteralPath $scopePath) {
+    try {
+        $sj = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json
+        if ($sj.PSObject.Properties['intent'] -and $sj.intent) {
+            $scopeIntent = [string]$sj.intent
+        }
+        if ($sj.PSObject.Properties['acceptance'] -and $sj.acceptance) {
+            $scopeBlock = "Declared acceptance: $($sj.acceptance)`n`n"
+        }
+        if ($sj.PSObject.Properties['files'] -and $sj.files) {
+            $declared = @($sj.files | Where-Object { $_ -and $_.Trim() -and $_ -notmatch '^\s*<' } |
+                           ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
+                           Select-Object -Unique)
+            if ($declared.Count -gt 0) {
+                # The contract file itself isn't a real edit; exclude from the
+                # touched set so it doesn't read as "touched but not declared".
+                $touchedSet = @{}
+                foreach ($f in ($rel | Where-Object { $_ -ieq '.scope.json' -eq $false })) {
+                    $touchedSet[$f.ToLowerInvariant()] = $true
+                }
+                $declaredSet = @{}
+                foreach ($f in $declared) { $declaredSet[$f.ToLowerInvariant()] = $true }
+                $missed = @($declared | Where-Object { -not $touchedSet.ContainsKey($_.ToLowerInvariant()) })
+                $extra  = @($rel     | Where-Object { -not($_ -ieq '.scope.json') -and -not $declaredSet.ContainsKey($_.ToLowerInvariant()) })
+                $lines = New-Object System.Collections.Generic.List[string]
+                $lines.Add("Declared scope: $($declared.Count) file(s); git sees $($rel.Count) touched.")
+                if ($missed.Count -gt 0) {
+                    $lines.Add("  Declared but NOT touched ($($missed.Count)): " + (($missed | Select-Object -First 8) -join ', '))
+                }
+                if ($extra.Count -gt 0) {
+                    $lines.Add("  Touched but NOT declared ($($extra.Count)): " + (($extra | Select-Object -First 8) -join ', '))
+                }
+                if ($missed.Count -eq 0 -and $extra.Count -eq 0) {
+                    $lines.Add("  (matches declared scope)")
+                }
+                $declaredNote = ($lines -join "`n") + "`n`n"
+            }
+        }
+    } catch { }   # malformed .scope.json -> ignore, fall back to transcript
 }
 
-# Tier 5: cross-file change-surface metric. The per-file afterFileEdit audits
-# miss the 50-file rename case; this seeds the whole-session footprint so the
-# model can judge whether the change surface is proportional to the request.
-$uniqueFiles = @($edited | Select-Object -Unique).Count
+# --- intent trace: prefer .scope.json's intent, fall back to transcript --------
+$userQuery = $scopeIntent
+if ([string]::IsNullOrWhiteSpace($userQuery)) { $userQuery = Get-LastUserQuery $obj }
+$intentBlock = ''
+if ($userQuery) {
+    $intentBlock = "ORIGINAL REQUEST (intent trace):`n---`n$userQuery`n---`n`n"
+}
+
+# --- change-surface metric ----------------------------------------------------
+$fileList = ($rel | Select-Object -First 30) -join "`n  "
+$uniqueFiles = @($rel | Select-Object -Unique).Count
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
 
-# Session-scoped anti-slop scan: runs the scanner over ONLY the files changed
-# this session (NOT --all, which audits the entire pre-existing codebase and is
-# not actionable at review time - see Get-SessionSlopBlock in hook-common.ps1).
-$slopBlock = Get-SessionSlopBlock -Edited $edited -Root $gateRoot
+$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${scopeBlock}${declaredNote}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
 
-$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n${slopBlock}$body${reentryLine}"
-
-# Arm the one-shot brake BEFORE emitting, so a crash after emit can't re-fire.
+# Arm the brake BEFORE emitting, so a crash after emit can't re-fire.
+New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
 
 Write-HookJson @{ followup_message = $msg }

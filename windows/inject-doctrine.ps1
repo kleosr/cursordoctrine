@@ -27,17 +27,11 @@ function Write-StdoutAscii([string]$s) {
 }
 
 try {
-    $paths = @(
-        (Join-Path $PSScriptRoot 'doctrine.md'),
-        (Join-Path $PSScriptRoot 'USER-RULES.md'),
-        (Join-Path $PSScriptRoot 'declared-editing.md'),
-        (Join-Path $PSScriptRoot 'pre-compile.md')
-    )
-
-    $parts = foreach ($p in $paths) {
-        if (Test-Path -LiteralPath $p) { Get-Content -Raw -LiteralPath $p }
+    $doctrinePath = Join-Path $PSScriptRoot 'doctrine.md'
+    $context = ''
+    if (Test-Path -LiteralPath $doctrinePath) {
+        $context = (Get-Content -Raw -LiteralPath $doctrinePath).Trim()
     }
-    $context = ($parts -join "`n`n").Trim()
 
     if (-not $context) { Write-StdoutAscii '{}'; exit 0 }
 

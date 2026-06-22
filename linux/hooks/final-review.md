@@ -7,7 +7,11 @@ Every diff hunk traces to the ORIGINAL REQUEST above. Anything that doesn't is
 a HALLUCINATED REQUIREMENT — feature, flag, refactor, abstraction, dep, or
 "nice to have" nobody asked for. Revert each. "Clean code, wrong feature" is
 the worst failure; no later axis catches it. (No ORIGINAL REQUEST → sandboxed
-run → skip.)
+run → skip.) If `.scope.json` exists, the header also carries a **Declared
+scope** block: every file in the blast radius you declared at Step 0 vs what
+git sees touched. Files you declared but didn't touch — did you miss them, or
+did they not need changes? Files you touched but didn't declare — that's scope
+creep, justify or revert.
 
 ## 1. Correctness
 Logic does what the task requires. Edge cases: null / empty / zero / negative /
@@ -27,23 +31,22 @@ guarded; idempotent ops stay idempotent. Inputs validated at the boundary.
 Behaviour-bearing changes have tests asserting real OUTCOMES and the edge
 cases above — not "it runs", not a mirror of the impl, not a test that can't
 fail. If the project has a suite, RUN it and make it pass. Add the missing
-tests; delete tautological ones.
+tests; delete tautological ones. **Linters at max**: run the project's
+strictest checkers and confirm zero new findings — Biome
+`biome check --error-on-warnings`, Semgrep `semgrep --config auto --error`,
+Ruff `ruff check --select ALL`, ESLint `--max-warnings=0`. Whatever the repo
+has configured; if `.scope.json` declared an acceptance, that's the bar.
 
 ## 4. Anti-slop
-Step A (if available): the review header carries the ANTI-SLOP SCAN block —
-it is scoped to the files you changed this session (NOT `--all`). Fix the hits
-on lines you added. NEVER run `--all` at review time: that audits the entire
-pre-existing codebase, which is out of scope here (axis 0) and not actionable
-in a bounded review — a whole-codebase audit is a separate, deliberate manual
-task. If the header has no scan block, run
-`python ~/.cursor/skills/anti-slop/scripts/scan_slop.py <the files listed
-above>`; if the scanner is unavailable, skip (not a failure).
-Step B (always): apply ALL items in `~/.agents/hooks/anti-slop.md` (single
-source of truth — not repeated here) to every hunk. Fix hits; consolidate
-clones. Step C: if the header's Session footprint is >5 files or the request
-was simple, justify each file or trim. Re-run the scoped scan + tests; then
-stop. (The per-edit `scope-gate-audit` hook already checks `.scope.json`
-files[] — trust it; axis 0 is the whole-session backstop.)
+Apply ALL items in `~/.agents/hooks/anti-slop.md` (single source of truth —
+not repeated here) to every hunk. Fix hits; consolidate clones. If the scanner
+is available, run it scoped to the files listed above
+(`python ~/.cursor/skills/anti-slop/scripts/scan_slop.py <files>`); NEVER use
+`--all` at review time — that audits the entire pre-existing codebase, which
+is out of scope here (axis 0) and not actionable in a bounded review. A
+whole-codebase audit is a separate, deliberate manual task (`cursordoctrine
+sweep`). Step B: if the header's Session footprint is >5 files or the request
+was simple, justify each file or trim. Re-run tests; then stop.
 
 ## 5. Wiring completeness
 Every user-visible change traces click → handler → call → store → render to a

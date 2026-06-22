@@ -161,6 +161,19 @@ SELECT_STAR = re.compile(r"\bSELECT\s+\*", re.I)
 TAILWIND_SOUP = re.compile(r"class(?:Name)?\s*=\s*[{]?\s*['\"`][^'\"`]{200,}")
 # Arbitrary >=100px values defeat the spacing scale (w-[347px] magic numbers).
 TAILWIND_MAGIC_PX = re.compile(r"-\[\d{3,}(?:\.\d+)?px\]")
+# Pure re-export indirection: `export * from './x'` or `export { a, b } from './x'`.
+# Does NOT match `export function`, `export const x = ...`, or local re-exports
+# (`export { foo }` without `from`) — only the case where the line ships nothing
+# of its own and just re-surfaces another module's exports. The "barrel that
+# earns its place" judgement stays with the model; the scanner flags the pattern.
+BARE_REEXPORT = re.compile(
+    r"^\s*export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+['\"]"
+)
+# index.{ts,tsx,js,jsx,mjs,cjs} as the only file in a directory: the re-export
+# smell the cross-file duplication pass catches (a single-file dir whose only
+# occupant is an index module is almost always barrel indirection). Computed
+# once per --all scan from the file list; not a per-line regex.
+INDEX_FILE = re.compile(r"^index\.(ts|tsx|js|jsx|mjs|cjs)$", re.I)
 SOURCE = re.compile(
     r"\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|cs|cpp|cc|cxx|c|h|hpp|rb"
     r"|php|swift|scala|m|mm|sh|ps1|lua|dart|ex|exs|vue|svelte|astro|html|sql)$"
@@ -434,6 +447,7 @@ _SIGNALS = {
     "boolean_traps":      ("boolean trap         ", "boolean-trap"),
     "select_star":        ("SELECT *             ", "select-star"),
     "tailwind_slop":      ("tailwind smell       ", "tailwind"),
+    "reexport_slop":      ("bare re-export       ", "reexport"),
     "semantic_density":   ("semantic opacity     ", "semantic-density"),
 }
 _SIGNAL_KEYS = tuple(_SIGNALS)
@@ -520,6 +534,11 @@ def scan_lines(rel: str, lines: list[str], audit: bool) -> Finding | None:
             TAILWIND_SOUP.search(ln) or TAILWIND_MAGIC_PX.search(ln)
         ):
             found["tailwind_slop"].append(ln.strip()[:100])
+        # Bare re-export indirection: JS-family only. A line that ships nothing
+        # of its own and just re-surfaces another module's exports. Barrel files
+        # that earn their place stay; the model judges, the scanner flags.
+        if lang == "js" and BARE_REEXPORT.match(ln):
+            found["reexport_slop"].append(ln.strip()[:100])
     # Semantic opacity: low-density identifiers introduced in this file. Lazy
     # import because low_density imports scan_slop at module load (sibling
     # resolution) - a top-level import here would cycle. Only declarations
@@ -685,8 +704,36 @@ def collect_types(rel: str, lines: list[str]) -> list[Finding]:
     return out
 
 
+def _index_only_dirs(files: list[str]) -> list[Finding]:
+    """Directories whose only scanned source file is an `index.*` module.
+
+    The barrel-indirection smell a per-file scan cannot see: a single-file dir
+    whose only occupant is `index.ts` (or .tsx/.js/...) is almost always re-
+    export scaffolding rather than a real module. Only meaningful in --all (the
+    full file list); a partial scan would flag dirs whose siblings simply were
+    not in the path list.
+    """
+    by_dir: dict[str, set[str]] = defaultdict(set)
+    for f in files:
+        parts = f.rsplit("/", 1)
+        if len(parts) != 2:           # root-level file: no enclosing dir
+            continue
+        d, name = parts
+        by_dir[d].add(name)
+    out: list[Finding] = []
+    for d, names in by_dir.items():
+        if len(names) != 1:
+            continue
+        only = next(iter(names))
+        if INDEX_FILE.match(only):
+            out.append({"dir": d, "file": only, "confidence": "structural"})
+    out.sort(key=lambda x: x["dir"])
+    return out
+
+
 def analyze_duplication(defs: list[Finding], types: list[Finding],
-                        idfreq: Counter[str], full_scope: bool) -> Finding:
+                        idfreq: Counter[str], full_scope: bool,
+                        all_files: list[str] | None = None) -> Finding:
     by_name: dict[str, list[Finding]] = defaultdict(list)
     by_exact: dict[str, list[Finding]] = defaultdict(list)
     by_struct: dict[str, list[Finding]] = defaultdict(list)
@@ -769,7 +816,8 @@ def analyze_duplication(defs: list[Finding], types: list[Finding],
             "near_clones": near_clones, "single_use": single_use,
             "type_clones": type_clones, "fingerprints": dict(sorted(fp.items(), key=lambda x: -x[1])),
             "micro_count": micro, "total_defs": len(defs),
-            "truncated_defs": sum(1 for d in defs if d["truncated"])}
+            "truncated_defs": sum(1 for d in defs if d["truncated"]),
+            "index_only_dirs": (_index_only_dirs(all_files) if full_scope and all_files else [])}
 
 
 def target_files(root: str, base: str, paths: list[str], is_git: bool,
@@ -802,7 +850,7 @@ def _dup_has_findings(dup: Finding | None) -> bool:
         return False
     return bool(dup["name_clones"] or dup["body_clones"] or dup["near_clones"]
                 or dup["single_use"] or dup["type_clones"] or dup["fingerprints"]
-                or dup["micro_count"])
+                or dup["micro_count"] or dup.get("index_only_dirs"))
 
 
 def _print_capped(label: str, items: list[str]) -> None:
@@ -845,6 +893,11 @@ def _print_duplication(dup: Finding) -> bool:
     if dup["micro_count"]:
         print(f"  Micro-abstraction load: {dup['micro_count']} tiny is*/assert*/safe* "
               f"helpers of {dup['total_defs']} defs (Helper Hell risk)")
+    if dup.get("index_only_dirs"):
+        print(f"  Index-only directories - barrel indirection candidates "
+              f"({len(dup['index_only_dirs'])}):")
+        for c in dup["index_only_dirs"][:15]:
+            print(f"    {c['dir']}/{c['file']}")
     print("  -> Consolidate clones to one shared definition, inline single-use helpers,")
     print("     re-point imports, delete the rest. One source of truth per concept.\n")
     return True
@@ -923,7 +976,7 @@ def main() -> int:
                 idfreq.update(ID.findall(ln))
             defs.extend(collect_defs(f, ls))
             types.extend(collect_types(f, ls))
-        dup = analyze_duplication(defs, types, idfreq, full_scope)
+        dup = analyze_duplication(defs, types, idfreq, full_scope, files)
         if dup["truncated_defs"]:
             warnings.append(f"{dup['truncated_defs']} function bodies hit the {BODY_CAP}-line "
                             "capture cap; excluded from exact-duplicate hashing")
