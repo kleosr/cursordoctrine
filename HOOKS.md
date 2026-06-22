@@ -58,7 +58,7 @@ shell is not blocked. Set `failClosed: true` in your merged `hooks.json` only
 if you prefer deny-on-timeout over availability.
 
 ## stop — final-review (.ps1/.sh)
-10s, `loop_limit: 2`. ONE comprehensive end-of-implementation review across
+30s, `loop_limit: 2`. ONE comprehensive end-of-implementation review across
 six axes (intent trace, correctness, reliability, coverage, anti-slop,
 wiring completeness). On a clean stop where files changed this session,
 returns `{followup_message}` so Cursor auto-submits ONE review pass.
@@ -67,8 +67,9 @@ Change detection is stateless: `git diff --name-only HEAD` + untracked files
 against the resolved repo root. No per-edit marker files, no `.scope.json`
 ledger — git already knows what changed.
 
-Bounded by the per-cid `reviewed-<cid>.flag` one-shot brake (one review per
-implementation; the stop AFTER the review clears it and ends the loop).
+Bounded by the per-cid `reviewed-<cid>.flag` one-shot brake (cleared on the
+post-review stop when the last user turn was hook-generated or `loop_count > 0`;
+orphaned flags from a missed follow-up are cleared and review re-fires).
 `loop_limit: 2` is the harness-side runaway cap. Only fires on
 `status === 'completed'`.
 

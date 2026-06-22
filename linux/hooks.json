@@ -36,7 +36,7 @@
     "stop": [
       {
         "command": "bash ~/.agents/hooks/final-review.sh",
-        "timeout": 10,
+        "timeout": 30,
         "loop_limit": 2
       }
     ]

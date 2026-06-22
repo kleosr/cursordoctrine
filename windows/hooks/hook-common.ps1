@@ -131,6 +131,48 @@ function Get-EmbeddedOriginalRequest([string]$text) {
 # This is the intent-trace primitive: the final-review followup prepends it so
 # the model must tie every diff hunk to a concrete request. Anything untraceable
 # is a hallucinated requirement.
+# Last <user_query> text from the transcript, including hook-generated turns.
+# Used by final-review to detect whether the review follow-up just completed.
+function Get-LastRawUserQueryText($obj) {
+    $tp = ''
+    if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
+    if (-not $tp -or -not (Test-Path -LiteralPath $tp)) { return '' }
+    $lines = @(Get-Content -LiteralPath $tp -ErrorAction SilentlyContinue)
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i]
+        if (-not $line -or $line -notmatch '"role"\s*:\s*"user"') { continue }
+        try {
+            $rec = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+        } catch { continue }
+        if (-not $rec -or -not $rec.message) { continue }
+        $content = $rec.message.content
+        if (-not $content) { continue }
+        $text = ''
+        if ($content -is [string]) {
+            $text = $content
+        } else {
+            foreach ($part in $content) {
+                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
+            }
+        }
+        if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
+            return $Matches[1].Trim()
+        }
+    }
+    return ''
+}
+
+function Write-FinalReviewDebug([string]$reason) {
+    if ($env:FINAL_REVIEW_DEBUG -ne '1' -or -not $reason) { return }
+    $dir = Join-Path $HOME '.cursor\.hooks-pending'
+    $log = Join-Path $dir 'last-final-review.log'
+    try {
+        New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+        $ts = Get-Date -Format 'o'
+        Add-Content -LiteralPath $log -Value "$ts $reason" -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch { }
+}
+
 function Get-LastUserQuery($obj) {
     $tp = ''
     if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }

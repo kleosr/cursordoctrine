@@ -10,28 +10,42 @@
 # --exclude-standard` against the resolved repo root. Zero state on disk.
 #
 # Bounded:
-#   - per-cid reviewed-<cid>.flag: the stop AFTER the review clears it and
-#     ends the loop (one review per implementation),
+#   - per-cid reviewed-<cid>.flag: armed when a review is emitted; cleared on
+#     the post-review stop (hook-generated last turn or loop_count > 0),
 #   - loop_limit in hooks.json caps runaway follow-ups harness-side,
 #   - only on status == 'completed'.
 #
 # Always emits valid JSON ({} = no follow-up). Review prompt lives in
 # final-review.md next to this script (embedded fallback if missing).
 # Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0.
+# Debug: FINAL_REVIEW_DEBUG=1 logs exit reason to ~/.cursor/.hooks-pending/last-final-review.log
 
 set +e
 . "$(dirname "$0")/hook-common.sh"
 
-emit_none() { printf '{}'; exit 0; }
+emit_none() {
+    final_review_debug "${1:-}"
+    printf '{}'
+    exit 0
+}
 
-[ "${HOOKS_ENFORCE:-}" = "0" ] && emit_none
-[ "${FINAL_REVIEW_ENFORCE:-}" = "0" ] && emit_none
+[ "${HOOKS_ENFORCE:-}" = "0" ] && emit_none kill_switch
+[ "${FINAL_REVIEW_ENFORCE:-}" = "0" ] && emit_none kill_switch
 
 input="$(read_hook_stdin)"
-[ -n "$input" ] || emit_none
+[ -n "$input" ] || emit_none no_input
 
 status="$(json_get "$input" status)"
 cid="$(safe_conversation_id "$input")"
+
+loop_count="$(json_get "$input" loop_count)"
+case "$loop_count" in
+    ''|*[!0-9]*) loop_count=0 ;;
+esac
+loop_limit="${FINAL_REVIEW_LOOP_LIMIT:-2}"
+case "$loop_limit" in
+    ''|*[!0-9]*) loop_limit=2 ;;
+esac
 
 pending_dir="$HOME/.cursor/.hooks-pending"
 flag="$pending_dir/reviewed-$cid.flag"
@@ -39,23 +53,31 @@ flag="$pending_dir/reviewed-$cid.flag"
 # Sweep state older than 7 days from sessions that died before their stop hook.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
-# One-shot brake: the previous stop emitted the review; clear it and end the loop.
+# One-shot brake: post-review stop clears the flag and ends the loop.
+# Orphaned flags (review follow-up never ran) are cleared and we continue.
 if [ -f "$flag" ]; then
+    last_raw="$(extract_last_raw_user_query "$input")"
+    if is_hook_generated_query "$last_raw" || [ "$loop_count" -gt 0 ]; then
+        rm -f "$flag" 2>/dev/null
+        emit_none post_review_cleanup
+    fi
     rm -f "$flag" 2>/dev/null
-    emit_none
+    final_review_debug stale_flag_cleared
 fi
+
+[ "$loop_count" -ge "$loop_limit" ] && emit_none loop_limit
 
 # Review only a clean completion.
 if [ -n "$status" ] && [ "$status" != "completed" ]; then
-    emit_none
+    emit_none no_status
 fi
 
 # Resolve repo root. No root -> no audit scope -> nothing to review.
 root="$(resolve_project_root "$input")"
-[ -n "$root" ] || emit_none
+[ -n "$root" ] || emit_none no_root
 
 # Confirm git repo at root.
-git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || emit_none
+git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || emit_none no_git
 
 # --- collect changed files: tracked diff + untracked new files ----------------
 edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
@@ -64,7 +86,6 @@ $(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
 
 # Dedupe, normalize to repo-relative forward-slash paths.
 root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
-root_len="${#root_fwd}"
 edited=""
 while IFS= read -r p; do
     [ -n "$p" ] || continue
@@ -75,13 +96,13 @@ while IFS= read -r p; do
     p="${p#/}"
     [ -n "$p" ] || continue
     case "$edited" in
-        *"$p"*) ;;  # already present
+        *"$p"*) ;;
         *) edited="${edited}${p}"$'\n' ;;
     esac
 done <<EOF
 $edited_raw
 EOF
-[ -n "$edited" ] || emit_none
+[ -n "$edited" ] || emit_none no_diff
 
 # --- review prompt body (md preferred, embedded fallback) ---------------------
 body=""
@@ -109,12 +130,11 @@ fi
 body="$(expand_agent_paths "$body")"
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
-# If present, prefer its intent for axis 0 (sharper than transcript extraction)
-# and compute the blast-radius diff: declared vs touched.
 scope_path="$root/.scope.json"
 scope_block=""
 declared_note=""
 scope_intent=""
+scope_prompt=""
 if [ -f "$scope_path" ]; then
     scope_raw="$(cat "$scope_path" 2>/dev/null)"
     if [ -n "$scope_raw" ]; then
@@ -143,10 +163,7 @@ except Exception: pass' 2>/dev/null)"
 
 "
         if [ -n "$declared_json" ]; then
-            # Normalize declared paths to repo-relative forward-slash
             declared_norm="$(printf '%s\n' "$declared_json" | sed 's|\\|/|g; s|^/||' | grep -v '^$' | sort -u)"
-            # The contract file itself isn't a real edit; exclude from touched
-            # so it doesn't read as "touched but not declared".
             touched_norm="$(printf '%s\n' "$edited" | grep -v -i '^\.scope\.json$' | grep -v '^$' | sort -u)"
             missed="$(comm -23 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"
             extra="$(comm -13 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"
@@ -217,5 +234,6 @@ $body"
 mkdir -p "$pending_dir" 2>/dev/null
 touch "$flag" 2>/dev/null
 
+final_review_debug emitted
 emit_json followup_message "$msg"
 exit 0

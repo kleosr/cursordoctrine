@@ -122,6 +122,75 @@ resolve_agent_path() {
     esac
 }
 
+final_review_debug() {
+    [ "${FINAL_REVIEW_DEBUG:-}" = "1" ] || return 0
+    local reason="$1"
+    [ -n "$reason" ] || return 0
+    mkdir -p "$HOME/.cursor/.hooks-pending" 2>/dev/null
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')" "$reason" \
+        >>"$HOME/.cursor/.hooks-pending/last-final-review.log" 2>/dev/null
+}
+
+# extract_last_raw_user_query <json> -> last <user_query> text (hook turns included)
+extract_last_raw_user_query() {
+    local json="$1"
+    local tp
+    tp="$(json_get "$json" transcript_path)"
+    [ -n "$tp" ] && [ -f "$tp" ] || return 0
+
+    local reversed
+    if command -v tac >/dev/null 2>&1; then
+        reversed="$(tac "$tp" 2>/dev/null)"
+    else
+        reversed="$(awk '{a[NR]=$0} END {for(i=NR;i>=1;i--) print a[i]}' "$tp" 2>/dev/null)"
+    fi
+    [ -n "$reversed" ] || return 0
+
+    if have_py; then
+        printf '%s' "$reversed" | python3 -c '
+import json, re, sys
+try:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line or "\"role\"" not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict) or rec.get("role") != "user":
+            continue
+        msg = rec.get("message") or {}
+        content = msg.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "text" and p.get("text"):
+                    text += p["text"]
+        m = re.search(r"<user_query>\s*(.+?)\s*</user_query>", text, re.S)
+        if m:
+            print(m.group(1).strip())
+            break
+except Exception:
+    pass
+' 2>/dev/null
+        return 0
+    fi
+
+    printf '%s' "$reversed" |
+        grep -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
+        sed -E 's@</?user_query>@@g' |
+        head -n1
+}
+
+is_hook_generated_query() {
+    local text="$1"
+    [ -n "$text" ] || return 1
+    printf '%s' "$text" | grep -qE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)'
+}
+
 # extract_last_user_query <json> -> text of the last *human* <user_query> in this
 # conversation's transcript, or '' if there is none. Capped at 2000 chars.
 # Walks the JSONL backward via tac (preferred) or awk fallback; finds the first
