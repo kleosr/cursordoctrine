@@ -12,21 +12,24 @@ The user is a senior engineer who reviews every diff before shipping.
 Change only what the task requires. Preserve existing style and behavior unless the task itself is a behavior change. Refactors, renames, cleanup only when asked. Leave generated files alone unless explicitly required.
 
 ## Intent contract (.scope.json)
-Write `.scope.json` to the repo root BEFORE your first edit — three fields:
+Write `.scope.json` to the repo root BEFORE your first edit — four fields:
 
 ```json
 {
+  "prompt":     "<hook: verbatim latest user message — do not edit>",
   "intent":     "your Step 0 restatement (not the verbatim request)",
   "files":      ["<blast radius>"],
   "acceptance": "<deterministic done-check>"
 }
 ```
 
-- **`files[]`** — the blast radius: target file + every importer (transitively) + every shared type/helper. Grep `from '.*X'` and walk the import chain. The `scope-refresh` hook auto-records every file you edit into `files[]` as you work — you don't maintain it by hand for edits, only for the declared blast radius at Step 0.
-- **`acceptance`** — Biome `biome check --error-on-warnings`, Semgrep `semgrep --config auto --error`, Ruff/ESLint at max — whatever the repo has — plus typecheck/build, plus the described problem no longer reproduces.
+- **`prompt`** — hook-owned. `intent-precompile` writes this on every send. Do not overwrite.
+- **`intent`** — agent-owned Step 0 restatement. Write before your first edit.
+- **`files[]`** — the blast radius: target file + every importer (transitively) + every shared type/helper. Grep `from '.*X'` and walk the import chain. The `scope-refresh` hook auto-records every file you edit into `files[]` as you work — declare the expected radius at Step 0.
+- **`acceptance`** — Biome `biome check --error-on-warnings`, Semgrep `semgrep --config auto --error`, Ruff/ESLint at max — whatever the repo has — plus typecheck/build, plus the described problem no longer reproduces. Frozen on continuation.
 - The `scope-refresh` hook re-injects `.scope.json` into your context after every edit (anti-drift). If a hook surfaces the contract, defer to it: it outranks momentum.
 
-**Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` first. Continuation (extends/refines the same task) → UPDATE in place (extend `intent`, APPEND to `files[]`, sharpen `acceptance`). New task (unrelated) → say "new task" in Step 0, regenerate. Never silently wipe a contract tracking in-progress work.
+**Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` first. Continuation → merge the new ask into `intent`; `files[]` accumulates via edits. New task → prefix `/new` or `new task:` (hook resets scope); then restate intent and blast radius at Step 0.
 
 ## Multi-turn awareness
 The working tree may contain accepted work from prior turns. The final review's intent-trace audits only what YOU produced for the CURRENT request. **Prior turns' work stays unless the user asks to revert it.** When unsure whether a hunk is yours-this-turn or prior accepted work, ASK — never auto-revert. Commit between unrelated tasks to keep the boundary clean.

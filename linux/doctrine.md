@@ -14,21 +14,23 @@ Before any code, write `.scope.json` to the repo root:
 
 ```json
 {
+  "prompt":     "<hook: verbatim latest user message — do not edit>",
   "intent":     "your Step 0 restatement (not the verbatim request)",
   "files":      ["<blast radius>"],
   "acceptance": "<deterministic done-check>"
 }
 ```
 
-- **intent** — your Step 0 restatement, NOT the verbatim request.
-- **files** — the **blast radius**. Grep `from '.*X'` and walk the import chain: the target file + every importer (transitively) + every shared type/helper it pulls in. Update as you discover more. "Just the file I named" is a misread; the blast radius is the scope.
-- **acceptance** — the project's linters at max strictness pass clean (Biome `--error-on-warnings`, Semgrep `--error --config auto`, Ruff / ESLint — whatever the repo has), the change typechecks/builds, and the described problem no longer reproduces.
+- **prompt** — hook-owned. `intent-precompile` writes this on every send. Do not overwrite it.
+- **intent** — agent-owned Step 0 restatement, NOT the verbatim request. Write this before your first edit.
+- **files** — the **blast radius**. Grep `from '.*X'` and walk the import chain: the target file + every importer (transitively) + every shared type/helper. `scope-refresh` appends paths as you edit; declare the expected radius at Step 0.
+- **acceptance** — the project's linters at max strictness pass clean (Biome `--error-on-warnings`, Semgrep `--error --config auto`, Ruff / ESLint — whatever the repo has), the change typechecks/builds, and the described problem no longer reproduces. Frozen on continuation; reset on new task.
 
 The `stop` hook reads `.scope.json` for the final review and diffs your declared `files[]` against what git sees touched. Trivial one-liners (typo, literal) skip this — YAGNI rung 1 governs.
 
-**Cross-prompt continuity.** When a new prompt arrives mid-task, READ the existing `.scope.json` BEFORE writing. Decide:
-- **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE in place. Extend `intent` with the new ask, APPEND new files to `files[]` (the old ones are still in the blast radius — don't drop them), sharpen `acceptance`. The contract accumulates.
-- **New task** (the prompt is unrelated to the current contract): say "new task" in your Step 0 line, then regenerate `.scope.json` with fresh `intent` / `files` / `acceptance`.
+**Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` BEFORE writing. Decide:
+- **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE `intent` in place (merge the new ask into your restatement). `files[]` accumulates via edits. Sharpen `acceptance` only if the done-check changed.
+- **New task** (unrelated): start the prompt with `/new` or `new task:` — the hook resets `intent`, `files[]`, and `acceptance`. Then regenerate your Step 0 restatement and blast radius.
 
 Never silently wipe a contract that tracks in-progress work. The `afterFileEdit` hook re-injects `.scope.json` into your context after every edit — if you forget to update it, the stale contract surfaces and the mismatch becomes obvious.
 

@@ -82,11 +82,12 @@ if ($editedFile) {
 }
 
 # --- 2. STASH: reminder for scope-drain to deliver as additional_context -------
-$intent     = if ($sj.PSObject.Properties['intent']     -and $sj.intent)     { [string]$sj.intent } else { '' }
-$filesList  = if ($sj.PSObject.Properties['files']      -and $sj.files)      { (@($sj.files) -join ', ') } else { '(none yet)' }
+$userPrompt = if ($sj.PSObject.Properties['prompt'] -and $sj.prompt) { [string]$sj.prompt } else { '' }
+$intent     = if ($sj.PSObject.Properties['intent'] -and $sj.intent) { [string]$sj.intent } else { '(not set yet — restate at Step 0)' }
+$filesList  = if ($sj.PSObject.Properties['files']  -and $sj.files)  { (@($sj.files) -join ', ') } else { '(none yet)' }
 $acceptance = if ($sj.PSObject.Properties['acceptance'] -and $sj.acceptance) { [string]$sj.acceptance } else { '' }
 
-$msg = "SCOPE REMINDER (re-injected after your edit):`n  intent: $intent`n  files: $filesList"
+$msg = "SCOPE REMINDER (re-injected after your edit):`n  prompt: $userPrompt`n  intent: $intent`n  files: $filesList"
 if ($acceptance) { $msg += "`n  acceptance: $acceptance" }
 $msg += "`n`nConfirm this edit advances intent. The file you just edited was recorded into files[]."
 

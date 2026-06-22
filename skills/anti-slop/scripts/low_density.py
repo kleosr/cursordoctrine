@@ -1,13 +1,8 @@
 """low_density.py - semantic-density scorer (the anti semantic-opacity layer).
 
-Shared source of truth for the semantic-density signal. Used in two places:
-
-  1. scan_slop.py imports `score_identifiers()` to add a thirteenth signal
-     bucket (semantic_density) to its audit-of-record.
-  2. density_scan.py (the per-edit hook wrapper) imports the same functions
-     to flag only the identifiers the agent JUST introduced in the diff.
-
-One denylist, two execution points, zero drift.
+Shared source of truth for the semantic-density signal. scan_slop.py imports
+`score_identifiers()` to add a thirteenth signal bucket (semantic_density) to
+its audit-of-record. One denylist, one execution point, zero drift.
 
 THE INVARIANT
   If you cannot predict what a function/class/file does from its name alone,
@@ -38,11 +33,10 @@ import re
 import sys
 from typing import Any
 
-# Resolve sibling scan_slop.py at runtime. The hook wrapper (density_scan.py)
-# is invoked from arbitrary cwds with no package context, and scan_slop imports
-# this module via `from low_density import ...` only when both sit in the same
-# scripts/ dir. The sys.path insert makes both directions work regardless of
-# where Python was launched from.
+# Resolve sibling scan_slop.py at runtime. scan_slop imports this module via
+# `from low_density import ...` and this module imports scan_slop back; that
+# cycle resolves only when scripts/ is on sys.path. The insert makes the import
+# work regardless of the cwd Python was launched from.
 _SCRIPT_DIR = re.sub(r"[\\/][^\\/]+$", "", __file__) or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
@@ -168,8 +162,7 @@ def score_density(name: str) -> tuple[str, list[str]]:
     severity in {"ok", "warn", "fail"}. reasons is a list of short human
     strings explaining each contributing rule. Empty reasons + "ok" = clean.
 
-    The function is pure and side-effect free; density_scan.py and scan_slop.py
-    both rely on that.
+    The function is pure and side-effect free; scan_slop.py relies on that.
     """
     if not name or not name.strip():
         return "ok", []
@@ -373,7 +366,6 @@ def format_for_report(findings: list[Finding]) -> list[str]:
 if __name__ == "__main__":
     # Smoke entrypoint: score names passed as argv so a human can sanity-check
     # the scorer without writing a test harness.
-    import json
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         cases = [
             ("DataManager", "fail"), ("CoreEngine", "fail"), ("process", "warn"),
@@ -400,6 +392,3 @@ if __name__ == "__main__":
     for n in sys.argv[1:]:
         sevs, reasons = score_density(n)
         print(f"{n}: {sevs} ({'; '.join(reasons)})")
-    # JSON dump mode for the hook wrapper
-    if "--json" in sys.argv:
-        print(json.dumps({"note": "use density_scan.py for stdin->json"}))

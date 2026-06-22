@@ -35,6 +35,12 @@ function Write-HookJson($payload) {
 function Get-SafeConversationId($obj) {
     $cid = ''
     if ($obj -and $obj.PSObject.Properties['conversation_id']) { $cid = [string]$obj.conversation_id }
+    # Fall back to transcript_path basename — unique per conversation, prevents
+    # cross-session brake interference when conversation_id is absent.
+    if (-not $cid -and $obj -and $obj.PSObject.Properties['transcript_path']) {
+        $tp = [string]$obj.transcript_path
+        if ($tp) { $cid = [System.IO.Path]::GetFileNameWithoutExtension($tp) }
+    }
     $cid = $cid -replace '[^\w\-]', ''
     if (-not $cid) { return 'default' }
     return $cid
@@ -48,8 +54,11 @@ function ConvertTo-FwdPath([string]$p) {
 }
 
 # Resolve the project root for an event: cwd -> workspace_roots ->
-# CURSOR_PROJECT_DIR. NO $HOME fallback (final-review uses git against $root,
-# so a $HOME fallback would silently turn $HOME into the audited repo).
+# CURSOR_PROJECT_DIR -> $PWD (if it's a git repo). The $PWD fallback exists
+# because Cursor's beforeSubmitPrompt event does NOT include cwd in its
+# payload — the hook process's working directory IS the project root in that
+# case. The git-repo guard prevents writing .scope.json to $HOME or random dirs
+# (this was the cause of the ghost .scope.json in AppData\Local\Lemonade).
 function Resolve-ProjectRoot($obj) {
     $root = ''
     $cands = @()
@@ -62,6 +71,15 @@ function Resolve-ProjectRoot($obj) {
     if (-not $root -and $env:CURSOR_PROJECT_DIR) {
         $cpd = $env:CURSOR_PROJECT_DIR.Replace('\', '/').TrimEnd('/')
         if (Test-Path -LiteralPath $cpd) { $root = $cpd }
+    }
+    # Fallback: process working directory. Cursor launches hooks with CWD set
+    # to the project root. Only accept if it's a git repo — no ghost files.
+    if (-not $root) {
+        $pwdFwd = (Get-Location).Path.Replace('\', '/').TrimEnd('/')
+        if ($pwdFwd) {
+            & git -C $pwdFwd rev-parse --git-dir 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $root = $pwdFwd }
+        }
     }
     return $root
 }

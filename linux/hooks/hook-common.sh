@@ -67,14 +67,25 @@ print(json.dumps({os.environ["K"]: os.environ["V"]}, ensure_ascii=True, separato
 }
 
 safe_conversation_id() {
-    local cid
-    cid="$(json_get "$1" conversation_id | tr -cd 'A-Za-z0-9_-')"
+    local input="$1" cid
+    cid="$(json_get "$input" conversation_id | tr -cd 'A-Za-z0-9_-')"
+    # Fall back to transcript_path basename — unique per conversation, prevents
+    # cross-session brake interference when conversation_id is absent.
+    if [ -z "$cid" ]; then
+        local tp
+        tp="$(json_get "$input" transcript_path)"
+        if [ -n "$tp" ]; then
+            cid="$(basename "$tp" | sed 's/\.[^.]*$//' | tr -cd 'A-Za-z0-9_-')"
+        fi
+    fi
     printf '%s' "${cid:-default}"
 }
 
 # resolve_project_root <json> -> project root ('' if none resolves; NO $HOME
 # fallback — final-review runs git against $root, so a $HOME fallback would
-# silently turn the profile into the audited repo).
+# silently turn the profile into the audited repo). Falls back to $PWD if it's
+# a git repo, because Cursor's beforeSubmitPrompt event does NOT include cwd
+# in its payload — the hook process's CWD is the project root in that case.
 resolve_project_root() {
     local input="$1" root="" cand
     while IFS= read -r cand; do
@@ -85,6 +96,13 @@ $(json_get_array "$input" workspace_roots)
 EOF
     if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
         root="${CURSOR_PROJECT_DIR%/}"
+    fi
+    # Fallback: $PWD (git repo guard — no ghost .scope.json in $HOME).
+    if [ -z "$root" ]; then
+        local pwd_fwd="${PWD%/}"
+        if [ -n "$pwd_fwd" ] && git -C "$pwd_fwd" rev-parse --git-dir >/dev/null 2>&1; then
+            root="$pwd_fwd"
+        fi
     fi
     printf '%s' "$root"
 }

@@ -119,10 +119,14 @@ if [ -f "$scope_path" ]; then
     scope_raw="$(cat "$scope_path" 2>/dev/null)"
     if [ -n "$scope_raw" ]; then
         if have_jq; then
+            scope_prompt="$(printf '%s' "$scope_raw" | jq -r '.prompt // empty' 2>/dev/null)"
             scope_intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
             scope_acceptance="$(printf '%s' "$scope_raw" | jq -r '.acceptance // empty' 2>/dev/null)"
             declared_json="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
         elif have_py; then
+            scope_prompt="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("prompt") or "")
+except Exception: pass' 2>/dev/null)"
             scope_intent="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("intent") or "")
 except Exception: pass' 2>/dev/null)"
@@ -170,8 +174,11 @@ except Exception: pass' 2>/dev/null)"
     fi
 fi
 
-# --- intent trace: prefer .scope.json's intent, fall back to transcript --------
+# --- intent trace: intent primary, prompt as source, transcript fallback -------
 user_query="$scope_intent"
+if [ -z "$user_query" ]; then
+    user_query="$scope_prompt"
+fi
 if [ -z "$user_query" ]; then
     user_query="$(extract_last_user_query "$input")"
 fi
@@ -181,8 +188,15 @@ if [ -n "$user_query" ]; then
 ---
 $user_query
 ---
+"
+    if [ -n "$scope_intent" ] && [ -n "$scope_prompt" ]; then
+        intent_block="${intent_block}User prompt (source): $scope_prompt
 
 "
+    else
+        intent_block="${intent_block}
+"
+    fi
 fi
 
 # --- change-surface metric ----------------------------------------------------

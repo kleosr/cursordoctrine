@@ -64,9 +64,11 @@ if [ -n "$edited_file" ]; then
                 (.files // []) | map(ltrimstr("/") | ascii_downcase)
                 | index($f | ltrimstr("/") | ascii_downcase) // empty' 2>/dev/null)"
             if [ -z "$present" ]; then
-                # Append and write back, preserving all other fields.
+                # Append and write back, preserving all other fields. Drop any
+                # placeholder (a value whose trimmed form starts with "<TODO"),
+                # matching scope-refresh.ps1 so both platforms prune identically.
                 new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" \
-                    '.files = (((.files // []) | map(select(. != null and . != "" and . != "<TODO>"))) + [$f])' 2>/dev/null)"
+                    '.files = (((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not)))) + [$f])' 2>/dev/null)"
                 if [ -n "$new_raw" ]; then
                     printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
                     scope_raw="$new_raw"
@@ -74,11 +76,13 @@ if [ -n "$edited_file" ]; then
             fi
         elif have_py; then
             new_raw="$(printf '%s' "$scope_raw" | F="$rel" python3 -c '
-import json, os, sys
+import json, os, re, sys
 try:
     o = json.load(sys.stdin)
     f = os.environ["F"]
-    files = [x for x in (o.get("files") or []) if x and x != "<TODO>"]
+    # Drop placeholders (trimmed value starts with "<TODO"), matching the jq
+    # path above and scope-refresh.ps1 so all three prune identically.
+    files = [x for x in (o.get("files") or []) if x and not re.match(r"\s*<TODO", str(x))]
     norm = lambda s: s.replace("\\", "/").lstrip("/").lower()
     if norm(f) not in {norm(x) for x in files}:
         files.append(f)
@@ -96,10 +100,14 @@ fi
 
 # --- 2. STASH: reminder for scope-drain to deliver as additional_context -------
 if have_jq; then
+    user_prompt="$(printf '%s' "$scope_raw" | jq -r '.prompt // empty' 2>/dev/null)"
     intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
     acceptance="$(printf '%s' "$scope_raw" | jq -r '.acceptance // empty' 2>/dev/null)"
     files_list="$(printf '%s' "$scope_raw" | jq -r '.files // [] | join(", ")' 2>/dev/null)"
 elif have_py; then
+    user_prompt="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("prompt") or "")
+except Exception: pass' 2>/dev/null)"
     intent="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("intent") or "")
 except Exception: pass' 2>/dev/null)"
@@ -114,8 +122,10 @@ else
 fi
 
 [ -n "$files_list" ] || files_list="(none yet)"
+[ -n "$intent" ] || intent="(not set yet — restate at Step 0)"
 
 msg="SCOPE REMINDER (re-injected after your edit):
+  prompt: $user_prompt
   intent: $intent
   files: $files_list"
 [ -n "$acceptance" ] && msg="$msg

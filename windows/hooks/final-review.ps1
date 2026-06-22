@@ -114,10 +114,14 @@ $body = Expand-AgentPaths $body
 $scopePath = Join-Path $root '.scope.json'
 $scopeBlock = ''
 $declaredNote = ''
+$scopePrompt = ''
 $scopeIntent = ''
 if (Test-Path -LiteralPath $scopePath) {
     try {
         $sj = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json
+        if ($sj.PSObject.Properties['prompt'] -and $sj.prompt) {
+            $scopePrompt = [string]$sj.prompt
+        }
         if ($sj.PSObject.Properties['intent'] -and $sj.intent) {
             $scopeIntent = [string]$sj.intent
         }
@@ -156,12 +160,18 @@ if (Test-Path -LiteralPath $scopePath) {
     } catch { }   # malformed .scope.json -> ignore, fall back to transcript
 }
 
-# --- intent trace: prefer .scope.json's intent, fall back to transcript --------
+# --- intent trace: intent primary, prompt as source, transcript fallback -------
 $userQuery = $scopeIntent
+if ([string]::IsNullOrWhiteSpace($userQuery)) { $userQuery = $scopePrompt }
 if ([string]::IsNullOrWhiteSpace($userQuery)) { $userQuery = Get-LastUserQuery $obj }
 $intentBlock = ''
 if ($userQuery) {
-    $intentBlock = "ORIGINAL REQUEST (intent trace):`n---`n$userQuery`n---`n`n"
+    $intentBlock = "ORIGINAL REQUEST (intent trace):`n---`n$userQuery`n---`n"
+    if ($scopeIntent -and $scopePrompt) {
+        $intentBlock += "User prompt (source): $scopePrompt`n`n"
+    } else {
+        $intentBlock += "`n"
+    }
 }
 
 # --- change-surface metric ----------------------------------------------------

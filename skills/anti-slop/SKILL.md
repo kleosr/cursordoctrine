@@ -20,14 +20,15 @@ description: >-
   duplicate utilities.
 metadata:
   layer: active-cleanup
-  pairs-with: declared-editing, semantic-density-audit
+  pairs-with: final-review
 ---
 
 # Anti-Slop
 
-Active counterpart to the `afterFileEdit` anti-slop **hook**. The hook only
-*advises* after each edit; this skill does a deliberate sweep that **removes**
-the slop. Same detectors — but here you fix, you don't flag.
+Active counterpart to the `stop` hook's final-review (`final-review.ps1` /
+`.sh`). The review only *advises* — it asks the model to apply this checklist to
+the session diff; this skill does a deliberate sweep that **removes** the slop.
+Same detectors — but here you fix, you don't flag.
 
 Slop = code that runs but should not ship. Think in **failure classes**, not
 individual smells — every finding belongs to one of twelve:
@@ -160,7 +161,7 @@ Walk every row. Rows tagged *(scanner)* are seeded mechanically by
 | **Duplicated logic** | new code mirrors something already in the repo | Delete the copy; call the existing function. Grep before you keep it. |
 | **Clone proliferation / DRY / Knowledge duplication** | `--all` reports the same function name in ≥2 files, or identical bodies under different names (`isRecord` / `isObject` / `isPlainObject`) | Keep ONE canonical definition; re-point imports; delete the copies. One source of truth per concept. |
 | **Utility explosion / Helper Hell / Fingerprints** | a swarm of tiny `is*` / `assert*` / `safe*` one-liners; fingerprints (`isRecord`, `safeParse`, `sleep`, `retry`, `assertNever`) | Inline single-use micro-helpers; consolidate genuinely shared ones into one module. |
-| **Semantic opacity / low-density names** *(scanner)* | identifiers that exist but communicate no intent: `DataManager`, `CoreEngine`, `process()`, `handleThing`, `utils.ts`, `x1`, `tempFix`, `finalFinal`. FAIL = bare low-density token or generic-suffix class with no domain noun; WARN = defensible DDD with a domain noun (`PostgresUserRepository`). Shared denylist lives in `low_density.py` and fires identically in `scan_slop.py --all` and the per-edit `semantic-density-audit` hook. | Rename to state the concrete responsibility: `DataManager` → `InvoiceRepository` or `PersistUserSessions`; `process` → `GenerateMonthlyReport`; `utils.ts` → `invoice_totals.ts`. Leave WARNs that are intentional DDD. |
+| **Semantic opacity / low-density names** *(scanner)* | identifiers that exist but communicate no intent: `DataManager`, `CoreEngine`, `process()`, `handleThing`, `utils.ts`, `x1`, `tempFix`, `finalFinal`. FAIL = bare low-density token or generic-suffix class with no domain noun; WARN = defensible DDD with a domain noun (`PostgresUserRepository`). Shared denylist lives in `low_density.py`, used by `scan_slop.py` as its `semantic_density` bucket. | Rename to state the concrete responsibility: `DataManager` → `InvoiceRepository` or `PersistUserSessions`; `process` → `GenerateMonthlyReport`; `utils.ts` → `invoice_totals.ts`. Leave WARNs that are intentional DDD. |
 | **Ignored conventions** | style / naming / structure / error-handling differs from the file's neighbours | Rewrite to match the surrounding code. |
 | **Accidental complexity** | indirection / generics / config a junior can't read in 30s | Flatten to the simplest form that works. |
 | **Superficial tests / Test theater** | the test asserts "it runs", mirrors the implementation, or cannot fail; literal tautologies (`expect(true).toBe(true)`, `assert True`) *(scanner)*; snapshot-everything, mocks of mocks, assertion poverty | Rewrite to assert real outcomes and the edge cases; delete tautological tests. |
@@ -228,10 +229,11 @@ The `stop` hook (`~/.agents/hooks/final-review.ps1` on Windows,
 `~/.agents/hooks/final-review.sh` on Linux) fires after the agent finishes an
 implementation that edited files. It extracts the last `<user_query>` from the
 session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
-and auto-submits a `followup_message` so the model audits seven axes: intent,
+and auto-submits a `followup_message` so the model audits six axes: intent,
 correctness, reliability, coverage, anti-slop, wiring completeness. Axis 4 delegates to this skill's
-scanner (`scan_slop.py --all`) and the canonical checklist at
-`~/.agents/hooks/anti-slop.md` (21 items, including semantic contracts,
+scanner (run scoped to the changed files — `scan_slop.py <files>`, never `--all`
+at review time) and the canonical checklist at
+`~/.agents/hooks/anti-slop.md` (40 items, including semantic contracts,
 operational slop, and change surface). One bounded pass per implementation.
 
 ## Hard constraints
@@ -266,16 +268,13 @@ Diff: {before} → {after} lines.   Tests: {pass | n/a}
 | Invoke | `/anti-slop`, or "remove the AI slop" |
 | Scanner | `python scripts/scan_slop.py --all` |
 | Final review | automatic via `stop` hook (`final-review.ps1` / `final-review.sh`) |
-| Hook checklist | `~/.agents/hooks/anti-slop.md` (21 items; per-edit + final-review axis 4) |
+| Hook checklist | `~/.agents/hooks/anti-slop.md` (40 items; final-review axis 4) |
 
-The scanner is stdlib-only and needs Python 3.9+. Pairs with the **anti-slop
-audit hook** (`anti-slop-audit.ps1` / `.sh`, advisory per edit), the
-**semantic-density-audit hook** (`semantic-density-audit.ps1` / `.sh`, flags
-low-density identifiers per edit — shares `low_density.py` with this scanner's
-`semantic_density` bucket), the **scope-gate-audit hook**
-(`scope-gate-audit.ps1` / `.sh`, Compuerta 1 — opt-in auto-recorder that
-appends every edited file to `.scope.json` `files[]`),
-the **stop hook** (`final-review.ps1` / `.sh`,
-seven-axis session review incl. intent trace, wiring completeness, and mechanics & stack integrity), and
-**declared-editing** (YAGNI ultra ladder injected at session start).
-This skill is the active "delete it now" layer those only nudge toward.
+The scanner is stdlib-only and needs Python 3.9+. It pairs with the shipped
+hook pack: the **stop hook** (`final-review.ps1` / `.sh`) runs a six-axis
+session review whose anti-slop axis (4) points the model at this skill's
+checklist (`anti-slop.md`) and runs the scanner scoped to the changed files;
+**scope-refresh** (`afterFileEdit`) records every edited file into `.scope.json`
+`files[]` and **scope-drain** (`postToolUse`) re-injects the contract; the
+`semantic_density` bucket here shares `low_density.py` as its scorer. Those
+hooks nudge and report; this skill is the active "delete it now" layer.

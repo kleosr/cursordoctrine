@@ -9,8 +9,8 @@
 
 <div align="center">
   <h1>cursordoctrine</h1>
-  <p><strong>Three hooks for Cursor. Doctrine at start, gate on shell, review at stop.</strong></p>
-  <p>The model is the auditor. The harness does only what the model can't do for itself:<br />inject governing text, block irreversible shell, and ask for one end-of-session review.</p>
+  <p><strong>Six hooks for Cursor. Doctrine at start, scope tracked per edit, gate on shell, review at stop.</strong></p>
+  <p>The model is the auditor. The harness does only what the model can't do for itself:<br />inject governing text, keep <code>.scope.json</code> in sync, block irreversible shell, and ask for one end-of-session review.</p>
 </div>
 
 <br />
@@ -19,11 +19,13 @@
 
 ## What this is
 
-Three Cursor hooks. No state machine, no per-edit advisories, no contract files written to your repos.
+Six Cursor hooks across six events. No state machine the agent has to maintain; the only on-disk state is a one-shot brake and a scope stash under `~/.cursor/.hooks-pending/`. The single repo file is `.scope.json`, written for you so you don't have to.
 
-1. **Inject the doctrine** at `sessionStart` — every chat starts with the same short governing text (`doctrine.md`): smallest correct diff, YAGNI ultra, ask-don't-guess, conventional commits, the auditor mindset. ~80 lines, read once.
-2. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). The script fails open on internal errors; `failClosed: false` so a pwsh cold-start abort does not block all shell use. Everything else passes.
-3. **One final review** at `stop` — when an implementation finishes and `git` sees changed files, Cursor auto-submits one `FINAL REVIEW` follow-up. Six axes: intent trace (tie every diff hunk to the original request — anything untraceable is a hallucinated requirement), correctness, reliability, coverage, anti-slop, wiring completeness. The hook reads `git diff --name-only HEAD` + untracked files; zero state on disk.
+1. **Seed the contract** at `beforeSubmitPrompt` — `intent-precompile` writes your prompt into `.scope.json`'s `prompt` the moment you hit send. On continuation it preserves agent-owned `intent`, `files[]`, and `acceptance`. Prefix `/new` or `new task:` resets for a fresh task.
+2. **Inject the doctrine** at `sessionStart` — every chat starts with the same short governing text (`doctrine.md`): smallest correct diff, YAGNI ultra, ask-don't-guess, conventional commits, the auditor mindset. ~80 lines, read once.
+3. **Track the blast radius** at `afterFileEdit` (`^Write$`) + `postToolUse` — `scope-refresh` records each edited file into `files[]` and stashes a one-line reminder; `scope-drain` delivers it as `additional_context` on the next tool boundary (Cursor doesn't consume `afterFileEdit` stdout, so the stash-and-drain pair carries it). Keeps the contract visible as a turn fills with code.
+4. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). The script fails open on internal errors; `failClosed: false` so a pwsh cold-start abort does not block all shell use. Everything else passes.
+5. **One final review** at `stop` — when an implementation finishes and `git` sees changed files, Cursor auto-submits one `FINAL REVIEW` follow-up. Six axes: intent trace (tie every diff hunk to the original request — anything untraceable is a hallucinated requirement), correctness, reliability, coverage, anti-slop, wiring completeness. The hook reads `git diff --name-only HEAD` + untracked files; the only state is a per-conversation one-shot brake.
 
 The model is the auditor. A self-review done by the model in its own context is free — it has the file, the diff, the user's intent, and the ability to fix. The harness's only non-advisory lever is the permission gate's hard deny.
 
@@ -55,7 +57,7 @@ Restart Cursor after install — `hooks.json` is read at startup. `install` is i
 
 No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist.
 
-The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector the final-review follow-up points the model at. The session final-review tells the model to apply it to the session diff; `cursordoctrine sweep` is the separate on-demand pass for accumulated slop across the whole repo.
+The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 40 items) is the canonical slop detector the final-review follow-up points the model at. The session final-review tells the model to apply it to the session diff; `cursordoctrine sweep` is the separate on-demand pass for accumulated slop across the whole repo.
 
 ### Session review vs. `sweep` — two jobs, two scopes
 
@@ -66,17 +68,21 @@ The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scan
 
 | Flow | Event | What happens |
 |---|---|---|
+| Prompt | `beforeSubmitPrompt` | `intent-precompile` writes `prompt` (verbatim). Preserves `intent` + `files[]` + `acceptance` on continuation. `/new` or `new task:` resets for a new task. Skips hook-generated auto-submits. Never blocks. |
 | Session | `sessionStart` | `inject-doctrine` reads `doctrine.md` and emits it as `additional_context`. |
-| Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, **fail closed**. |
-| Stop | `stop` | `final-review` reads `git diff --name-only HEAD` + untracked files, pulls the last user `<user_query>` from the transcript for intent trace, and emits one `FINAL REVIEW` follow-up if anything changed. Bounded by a per-cid one-shot brake (`reviewed-<cid>.flag`) and `loop_limit: 2`. |
+| Edit | `afterFileEdit` (`^Write$`) | `scope-refresh` records the edited file into `files[]` and stashes a one-line scope reminder. |
+| Tool | `postToolUse` | `scope-drain` delivers the stashed reminder as `additional_context` (one-shot), then deletes it. |
+| Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, **fail open** (`failClosed: false` — an internal error or pwsh abort does not block shell). |
+| Stop | `stop` | `final-review` reads `git diff --name-only HEAD` + untracked files, pulls `intent` from `.scope.json` (with `prompt` as source), and emits one `FINAL REVIEW` follow-up if anything changed. Bounded by a per-cid one-shot brake (`reviewed-<cid>.flag`) and `loop_limit: 2`. |
 
 ## Layout
 
 ```
 windows/          PowerShell 7 hooks (pwsh) — install on Windows machines
-  hooks.json      3-event hook wiring for ~/.cursor/hooks.json
+  hooks.json      6-event hook wiring for ~/.cursor/hooks.json
   inject-doctrine.ps1, doctrine.md
-  hooks/          permission-gate.ps1, final-review.ps1, hook-common.ps1 (shared)
+  hooks/          intent-precompile.ps1, scope-refresh.ps1, scope-drain.ps1,
+                  permission-gate.ps1, final-review.ps1, hook-common.ps1 (shared)
                   + 3 prompt files: anti-slop.md, final-review.md, cleanup-doctrine.md
 linux/            bash hooks — install on Linux machines and SSH remotes
   hooks.json, inject-doctrine.sh, doctrine.md
@@ -99,14 +105,16 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 |---|---|---|
 | `HOOKS_ENFORCE=0` | on | turns off all hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
+| `INTENT_PRECOMPILE_ENFORCE=0` | on | disables the `.scope.json` auto-write on prompt |
+| `SCOPE_REFRESH_ENFORCE=0` | on | disables per-edit `files[]` recording + re-injection (scope-refresh + scope-drain) |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
 
 ## Design notes
 
-- **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id. Just one file: `reviewed-<cid>.flag` (the one-shot brake for `final-review`). Stale state older than 7 days gets swept on every stop. No repo litter.
-- **Change detection is stateless.** `final-review` asks `git` what changed. No marker file the agent has to maintain, no `.scope.json` contract written to every repo.
+- **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id: `reviewed-<cid>.flag` (the one-shot brake for `final-review`) and a transient `scope-<cid>.txt` stash (written by `scope-refresh`, deleted by `scope-drain` on the next tool boundary). Stale state older than 7 days gets swept on every stop. The only repo file is `.scope.json`.
+- **Change detection is stateless.** `final-review` asks `git` what changed — no marker file the agent maintains. It reads `.scope.json` for intent trace (`intent` primary, `prompt` as source) and diffs declared vs touched files; `intent-precompile` + `scope-refresh` keep the contract current without hand maintenance.
 - **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation.
-- **The doctrine is short on purpose.** 80 lines the agent reads at sessionStart and internalizes. No re-injection per turn, no `.scope.json` bookkeeping — the model either understood the doctrine or it didn't, and re-injecting it 50 times doesn't fix that.
+- **The doctrine is short on purpose.** 80 lines the agent reads at sessionStart and internalizes. `.scope.json` is re-injected per edit (the contract, not the doctrine) so the blast radius stays visible — but the governing text itself is read once; re-injecting it 50 times doesn't fix a model that didn't internalize it.
 
 Self-contained. No build. Open `hooks.json` and read it — that's the whole system in one file.
 

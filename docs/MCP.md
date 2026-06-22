@@ -99,7 +99,8 @@ With both wired, a real `.scope.json` for a sidebar change looks like:
 
 ```json
 {
-  "intent": "make the sidebar collapsible on mobile viewports",
+  "prompt": "make the sidebar collapsible on mobile viewports",
+  "intent": "Add mobile collapse toggle to Sidebar; wire through Dashboard layout and useSidebarState hook",
   "files": [
     "src/components/Sidebar.tsx",
     "src/components/Sidebar.module.css",

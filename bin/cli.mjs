@@ -83,13 +83,19 @@ function keyOf(command, keys) {
   return keys.find((k) => command.includes(k));
 }
 
-// Detect a STALE entry from a prior install: its command names a hook script
-// (ps1/sh, not an .md prompt) under .agents/hooks OR names inject-doctrine,
-// but that filename is NOT in the current payload. These are NOT foreign
-// entries the user added — they are leftovers from an older version of THIS
-// pack (e.g. anchor-set-nudge / minimal-edit-audit, deleted in 0.5.0). The
-// old merge preserved them as "foreign", so deleted hooks kept running on
-// every edit silently. Returning true here makes install reap them.
+// Detect a STALE entry from a prior install: its command names one of the hook
+// scripts THIS pack used to ship but no longer does (the explicit STALE_HOOK_FILES
+// roster — e.g. anchor-set-nudge / minimal-edit-audit, deleted in 0.5.0). The old
+// merge preserved them as "foreign", so deleted hooks kept running on every edit
+// silently. Returning true here makes install reap them.
+//
+// Gate on the KNOWN roster, not "any *.ps1/*.sh not in the current payload":
+// a user's own hook (~/.agents/hooks/my-custom-gate.ps1) also matches the
+// filename shape and is NOT in the payload, so the old broad check reaped it on
+// every install — dropping a genuinely foreign entry and, once it was the only
+// foreign entry, making uninstall delete hooks.json outright. STALE_HOOK_FILES
+// already lists every orphan this pack ever shipped, so the narrow check still
+// reaps all legacy hooks while leaving foreign entries untouched.
 const HOOK_FILENAME_RE = /([\w.\-]+)\.(ps1|sh)\b/;
 const INJECT_RE = /\binject-doctrine\.(ps1|sh)\b/;
 function isStaleOurs(command) {
@@ -97,19 +103,19 @@ function isStaleOurs(command) {
   const hookMatch = command.match(HOOK_FILENAME_RE);
   if (hookMatch) {
     const fname = `${hookMatch[1]}.${hookMatch[2]}`;
-    // If the script still ships, it's current ours (handled elsewhere).
-    // payloadHookFiles() lists hooks/; doctrineFiles lists the parent-dir
-    // payloads (inject-doctrine.*, doctrine.md, ...). We must check BOTH,
-    // otherwise the sessionStart entry (inject-doctrine.ps1, shipped under
-    // the parent dir, not hooks/) is misclassified as stale and dropped
-    // from the merge — leaving the user with `"sessionStart": []` and no
-    // doctrine injection at session start.
-    return !payloadHookFiles().includes(fname) && !doctrineFiles.includes(fname);
+    // Only OUR retired hooks are stale. A name we never shipped is foreign —
+    // leave it. A name still in the payload is current ours (handled elsewhere).
+    return STALE_HOOK_FILES.includes(fname);
   }
   if (INJECT_RE.test(command)) {
     return !doctrineFiles.includes(injectName) ? true : false;
   }
   return false;
+}
+
+// declared: best-effort verify fixture cleanup; EBUSY on locked temp dirs may still throw on Windows
+function rmBestEffort(path, opts = { force: true }) {
+  if (existsSync(path)) rmSync(path, opts);
 }
 
 function mergeHooks(existing, incoming, keys) {
@@ -379,40 +385,95 @@ function verify() {
     return true;
   });
 
+  // The merge must PRESERVE a hook the user added themselves and REAP one of our
+  // retired hooks, without confusing the two. A foreign entry whose command names
+  // a *.ps1/*.sh file (the common case) once tripped the stale-hook reaper and was
+  // silently dropped on every install; this check would have caught that.
+  check('merge preserves a foreign hook and reaps a retired one', () => {
+    const keys = ourKeys();
+    const foreignCmd = platform === 'windows'
+      ? 'pwsh.exe -NoProfile -File ~/.agents/hooks/my-custom-gate.ps1'
+      : 'bash ~/.agents/hooks/my-custom-gate.sh';
+    const staleName = STALE_HOOK_FILES.find((f) => f.endsWith(platform === 'windows' ? '.ps1' : '.sh'));
+    const staleCmd = platform === 'windows'
+      ? `pwsh.exe -NoProfile -File ~/.agents/hooks/${staleName}`
+      : `bash ~/.agents/hooks/${staleName}`;
+    const incoming = JSON.parse(readFileSync(join(payload, 'hooks.json'), 'utf8'));
+    const existing = {
+      version: 1,
+      hooks: { beforeShellExecution: [{ command: foreignCmd, timeout: 5 }, { command: staleCmd, timeout: 5 }] },
+    };
+    const { merged } = mergeHooks(existing, incoming, keys);
+    const cmds = [];
+    for (const entries of Object.values(merged.hooks || {})) {
+      if (Array.isArray(entries)) for (const e of entries) if (e && e.command) cmds.push(e.command);
+    }
+    if (!cmds.some((c) => c.includes('my-custom-gate'))) {
+      return { ok: false, detail: 'foreign hook was dropped by the merge' };
+    }
+    if (cmds.some((c) => c.includes(staleName))) {
+      return { ok: false, detail: `retired hook ${staleName} survived the merge` };
+    }
+    return true;
+  });
+
   check('permission gate denies `git push --force`', () =>
     /"permission"\s*:\s*"deny"/.test(runHook(hook('permission-gate'), { command: 'git push --force' })));
 
   check('intent-precompile writes .scope.json from the prompt', () => {
-    // Plant a prompt via beforeSubmitPrompt; confirm .scope.json gets the
-    // prompt as intent. Then fire a second prompt and confirm intent updates
-    // while files[] (simulated) is preserved.
     const repoDir = join(HOME, '.cd-verify-precompile');
     const scopePath = join(repoDir, '.scope.json');
+    const defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.';
     try {
       rmSync(repoDir, { recursive: true, force: true });
       mkdirSync(repoDir, { recursive: true });
-      // First prompt: creates .scope.json.
       runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'fix the sidebar' });
       if (!existsSync(scopePath)) return { ok: false, detail: '.scope.json was not created' };
       let s;
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
       catch { return { ok: false, detail: '.scope.json is not valid JSON' }; }
-      if (s.intent !== 'fix the sidebar') return { ok: false, detail: `intent mismatch: ${s.intent}` };
+      if (s.prompt !== 'fix the sidebar') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
+      if (s.intent !== '') return { ok: false, detail: `intent should start empty: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: 'files[] should start empty' };
-      // Simulate scope-refresh having recorded a file.
+      s.intent = 'Fix sidebar layout bug';
       s.files = ['src/Sidebar.tsx'];
       writeFileSync(scopePath, JSON.stringify(s), 'utf8');
-      // Second prompt: intent updates, files[] preserved.
       runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'now add dark mode' });
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
       catch { return { ok: false, detail: '.scope.json corrupted on second prompt' }; }
-      if (s.intent !== 'now add dark mode') return { ok: false, detail: `intent not updated: ${s.intent}` };
+      if (s.prompt !== 'now add dark mode') return { ok: false, detail: `prompt not updated: ${s.prompt}` };
+      if (s.intent !== 'Fix sidebar layout bug') return { ok: false, detail: `intent clobbered: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 1 || s.files[0] !== 'src/Sidebar.tsx') {
         return { ok: false, detail: `files[] not preserved: ${JSON.stringify(s.files)}` };
       }
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('intent-precompile resets scope on new-task prefix', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-new');
+    const scopePath = join(repoDir, '.scope.json');
+    const defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.';
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'fix the sidebar' });
+      let s = JSON.parse(readFileSync(scopePath, 'utf8'));
+      s.intent = 'Fix sidebar';
+      s.files = ['src/Sidebar.tsx'];
+      s.acceptance = 'custom acceptance bar';
+      writeFileSync(scopePath, JSON.stringify(s), 'utf8');
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'new task: rewrite auth module' });
+      s = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (s.prompt !== 'new task: rewrite auth module') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
+      if (s.intent !== '') return { ok: false, detail: `intent not reset: ${s.intent}` };
+      if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: `files[] not reset: ${JSON.stringify(s.files)}` };
+      if (s.acceptance !== defaultAcceptance) return { ok: false, detail: `acceptance not reset: ${s.acceptance}` };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
     }
   });
 
@@ -422,17 +483,15 @@ function verify() {
     try {
       rmSync(repoDir, { recursive: true, force: true });
       mkdirSync(repoDir, { recursive: true });
-      // Seed with a real intent.
       runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'fix the sidebar' });
       let before = JSON.parse(readFileSync(scopePath, 'utf8'));
-      if (before.intent !== 'fix the sidebar') return { ok: false, detail: 'seed failed' };
-      // Fire a hook-generated prompt (FINAL REVIEW).
+      if (before.prompt !== 'fix the sidebar') return { ok: false, detail: 'seed failed' };
       runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'FINAL REVIEW (end of implementation) - audit everything' });
       let after = JSON.parse(readFileSync(scopePath, 'utf8'));
-      if (after.intent !== 'fix the sidebar') return { ok: false, detail: 'hook-generated prompt overwrote intent' };
+      if (after.prompt !== 'fix the sidebar') return { ok: false, detail: 'hook-generated prompt overwrote prompt' };
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
     }
   });
 
@@ -451,6 +510,7 @@ function verify() {
       rmSync(repoDir, { recursive: true, force: true });
       mkdirSync(repoDir, { recursive: true });
       writeFileSync(scopePath, JSON.stringify({
+        prompt: 'user asked for sidebar fix',
         intent: 'test intent',
         files: ['a.ts', 'b.ts'],
         acceptance: 'tests pass',
@@ -466,8 +526,8 @@ function verify() {
       }
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
-      try { rmSync(join(pendingDir, `scope-${cidv}.txt`), { force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(join(pendingDir, `scope-${cidv}.txt`));
     }
   });
 
@@ -484,8 +544,8 @@ function verify() {
       }
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
-      try { rmSync(join(pendingDir, `scope-${cidv}.txt`), { force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(join(pendingDir, `scope-${cidv}.txt`));
     }
   });
 
@@ -511,7 +571,7 @@ function verify() {
       r = git(['commit', '-q', '-m', 'init']);
       if (r.status !== 0) return { ok: false, detail: `git commit failed: ${(r.stderr || '').trim()}` };
       writeFileSync(filePath, 'changed\n', 'utf8');
-      try { rmSync(flagPath, { force: true }); } catch {}
+      rmBestEffort(flagPath);
 
       const first = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
       const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
@@ -519,8 +579,8 @@ function verify() {
       if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
-      try { rmSync(flagPath, { force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
     }
   });
 
@@ -539,13 +599,13 @@ function verify() {
       git(['init', '-q']);
       git(['add', 'dummy.ts']);
       git(['commit', '-q', '-m', 'init']);
-      try { rmSync(flagPath, { force: true }); } catch {}
+      rmBestEffort(flagPath);
       const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
       if (out.includes('followup_message')) return { ok: false, detail: 'review fired on a clean repo (no diff)' };
       return true;
     } finally {
-      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
-      try { rmSync(flagPath, { force: true }); } catch {}
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
     }
   });
 
