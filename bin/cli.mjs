@@ -550,10 +550,6 @@ function verify() {
   });
 
   check('final review fires once when files changed, then goes quiet', () => {
-    // The hook keys "what changed" off `git diff --name-only HEAD` + untracked
-    // files against the resolved repo root. Seed a throwaway git repo with one
-    // committed file, modify it, point the hook at the repo via cwd. The
-    // one-shot brake (reviewed-<cid>.flag) must then make the second stop quiet.
     const cidv = 'npxvfr';
     const repoDir = join(HOME, '.cd-verify-repo');
     const filePath = join(repoDir, 'dummy.ts');
@@ -574,9 +570,36 @@ function verify() {
       rmBestEffort(flagPath);
 
       const first = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
-      const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
+      const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, loop_count: 1 });
       if (!first.includes('followup_message')) return { ok: false, detail: 'no followup_message on first stop' };
       if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
+    }
+  });
+
+  check('final review recovers from orphaned reviewed flag', () => {
+    const cidv = 'npxvfr3';
+    const repoDir = join(HOME, '.cd-verify-orphan');
+    const filePath = join(repoDir, 'dummy.ts');
+    const flagPath = join(pendingDir, `reviewed-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(filePath, 'original\n', 'utf8');
+      const git = (args) => spawnSync('git', ['-C', repoDir, ...args], {
+        encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      git(['init', '-q']);
+      git(['add', 'dummy.ts']);
+      git(['commit', '-q', '-m', 'init']);
+      writeFileSync(filePath, 'changed\n', 'utf8');
+      writeFileSync(flagPath, '', 'utf8');
+
+      const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, loop_count: 0 });
+      if (!out.includes('followup_message')) return { ok: false, detail: 'orphaned flag suppressed review' };
       return true;
     } finally {
       rmBestEffort(repoDir, { recursive: true, force: true });

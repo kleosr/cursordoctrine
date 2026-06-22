@@ -108,3 +108,16 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 Tell the user what was installed, which checks passed, and anything that failed with the exact error. Do not silently work around a failing check.
 
 Kill switches if something misbehaves: `HOOKS_ENFORCE=0` (everything off), `PERM_GATE_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`.
+
+## FINAL REVIEW didn't fire?
+
+The `stop` hook only auto-submits a review when all of these are true:
+
+1. **Git sees changes** — `git diff HEAD` plus untracked files must be non-empty. If the agent committed everything before stopping, there is nothing to review.
+2. **`status` is `completed`** — aborted or errored stops skip review.
+3. **Project root resolves** — the hook needs `cwd`, `workspace_roots`, or a git repo as the process working directory.
+4. **No orphaned brake** — stale `~/.cursor/.hooks-pending/reviewed-<cid>.flag` files from a crashed session are cleared automatically; if review still never fires, delete any `reviewed-*.flag` files and retry.
+
+**Debug trace:** set `FINAL_REVIEW_DEBUG=1` in your environment, restart Cursor, finish an implementation, then read `~/.cursor/.hooks-pending/last-final-review.log`. The last line records why the hook emitted or stayed quiet (`emitted`, `no_diff`, `loop_limit`, `stale_flag_cleared`, etc.).
+
+**After install:** restart Cursor so `~/.cursor/hooks.json` is reloaded. Re-run `npx cursordoctrine verify` to confirm the hook pack is healthy.

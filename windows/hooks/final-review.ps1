@@ -9,28 +9,41 @@
 # --exclude-standard` against the resolved repo root. Zero state on disk.
 #
 # Bounded:
-#   - per-cid reviewed-<cid>.flag: the stop AFTER the review clears it and
-#     ends the loop (one review per implementation),
+#   - per-cid reviewed-<cid>.flag: armed when a review is emitted; cleared on
+#     the post-review stop (hook-generated last turn or loop_count > 0),
 #   - loop_limit in hooks.json caps runaway follow-ups harness-side,
 #   - only on status == 'completed'.
 #
 # Always emits valid JSON ({} = no follow-up). Review prompt lives in
 # final-review.md next to this script (embedded fallback if missing).
 # Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0.
+# Debug: FINAL_REVIEW_DEBUG=1 logs exit reason to ~/.cursor/.hooks-pending/last-final-review.log
 
 $ErrorActionPreference = 'SilentlyContinue'
 . "$PSScriptRoot\hook-common.ps1"
 
-function Emit-None { '{}'; exit 0 }
+function Emit-None([string]$Reason) {
+    if ($Reason) { Write-FinalReviewDebug $Reason }
+    '{}'; exit 0
+}
 
-if ($env:HOOKS_ENFORCE -eq '0' -or $env:FINAL_REVIEW_ENFORCE -eq '0') { Emit-None }
+if ($env:HOOKS_ENFORCE -eq '0' -or $env:FINAL_REVIEW_ENFORCE -eq '0') { Emit-None 'kill_switch' }
 
 $obj = Read-HookStdinJson
-if (-not $obj) { Emit-None }
+if (-not $obj) { Emit-None 'no_input' }
 
 $status = ''
 if ($obj.PSObject.Properties['status']) { $status = [string]$obj.status }
 $cid = Get-SafeConversationId $obj
+
+$loopCount = 0
+if ($obj.PSObject.Properties['loop_count']) {
+    try { $loopCount = [int]$obj.loop_count } catch { $loopCount = 0 }
+}
+$loopLimit = 2
+if ($env:FINAL_REVIEW_LOOP_LIMIT) {
+    try { $loopLimit = [int]$env:FINAL_REVIEW_LOOP_LIMIT } catch { }
+}
 
 $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
 $flag = Join-Path $pendingDir "reviewed-$cid.flag"
@@ -42,22 +55,30 @@ try {
         Remove-Item -Force -ErrorAction SilentlyContinue
 } catch { }
 
-# One-shot brake: the previous stop emitted the review; clear it and end the loop.
+# One-shot brake: post-review stop clears the flag and ends the loop.
+# Orphaned flags (review follow-up never ran) are cleared and we continue.
 if (Test-Path $flag) {
+    $lastRaw = Get-LastRawUserQueryText $obj
+    if (($lastRaw -and (Test-IsHookGeneratedQuery $lastRaw)) -or $loopCount -gt 0) {
+        Remove-Item $flag -Force -ErrorAction SilentlyContinue
+        Emit-None 'post_review_cleanup'
+    }
     Remove-Item $flag -Force -ErrorAction SilentlyContinue
-    Emit-None
+    Write-FinalReviewDebug 'stale_flag_cleared'
 }
 
+if ($loopCount -ge $loopLimit) { Emit-None 'loop_limit' }
+
 # Review only a clean completion.
-if ($status -and $status -ne 'completed') { Emit-None }
+if ($status -and $status -ne 'completed') { Emit-None 'no_status' }
 
 # Resolve repo root. No root -> no audit scope -> nothing to review.
 $root = Resolve-ProjectRoot $obj
-if (-not $root) { Emit-None }
+if (-not $root) { Emit-None 'no_root' }
 
 # Confirm git repo at root.
 & git -C $root rev-parse --git-dir 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { Emit-None }
+if ($LASTEXITCODE -ne 0) { Emit-None 'no_git' }
 
 # --- collect changed files: tracked diff + untracked new files ----------------
 $edited = New-Object System.Collections.Generic.List[string]
@@ -67,7 +88,7 @@ foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
 foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
     if ($l) { $edited.Add($l) }
 }
-if ($edited.Count -eq 0) { Emit-None }
+if ($edited.Count -eq 0) { Emit-None 'no_diff' }
 
 # Dedupe, normalize to repo-relative forward-slash paths.
 $rel = New-Object System.Collections.Generic.List[string]
@@ -79,7 +100,7 @@ foreach ($f in $edited) {
     $rp = $rp.TrimStart('/')
     if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
 }
-if ($rel.Count -eq 0) { Emit-None }
+if ($rel.Count -eq 0) { Emit-None 'no_diff' }
 
 # --- review prompt body (md preferred, embedded fallback) ---------------------
 $body = ''
@@ -109,8 +130,6 @@ Fix now, re-run tests, then stop. If an axis is clean, say so in one line.
 $body = Expand-AgentPaths $body
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
-# If present, prefer its intent for axis 0 (sharper than transcript extraction)
-# and compute the blast-radius diff: declared vs touched.
 $scopePath = Join-Path $root '.scope.json'
 $scopeBlock = ''
 $declaredNote = ''
@@ -133,8 +152,6 @@ if (Test-Path -LiteralPath $scopePath) {
                            ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
                            Select-Object -Unique)
             if ($declared.Count -gt 0) {
-                # The contract file itself isn't a real edit; exclude from the
-                # touched set so it doesn't read as "touched but not declared".
                 $touchedSet = @{}
                 foreach ($f in ($rel | Where-Object { $_ -ieq '.scope.json' -eq $false })) {
                     $touchedSet[$f.ToLowerInvariant()] = $true
@@ -157,7 +174,7 @@ if (Test-Path -LiteralPath $scopePath) {
                 $declaredNote = ($lines -join "`n") + "`n`n"
             }
         }
-    } catch { }   # malformed .scope.json -> ignore, fall back to transcript
+    } catch { }
 }
 
 # --- intent trace: intent primary, prompt as source, transcript fallback -------
@@ -185,5 +202,6 @@ $msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability,
 New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
 New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
 
+Write-FinalReviewDebug 'emitted'
 Write-HookJson @{ followup_message = $msg }
 exit 0
