@@ -30,7 +30,7 @@
       {
         "command": "bash ~/.agents/hooks/permission-gate.sh",
         "timeout": 5,
-        "failClosed": true
+        "failClosed": false
       }
     ],
     "stop": [

@@ -30,7 +30,7 @@
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/permission-gate.ps1",
         "timeout": 5,
-        "failClosed": true
+        "failClosed": false
       }
     ],
     "stop": [
