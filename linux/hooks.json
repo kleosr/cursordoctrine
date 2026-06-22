@@ -1,6 +1,12 @@
 {
   "version": 1,
   "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "bash ~/.agents/hooks/intent-precompile.sh",
+        "timeout": 5
+      }
+    ],
     "sessionStart": [
       {
         "command": "bash ~/.cursor/inject-doctrine.sh",
