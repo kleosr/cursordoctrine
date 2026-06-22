@@ -435,8 +435,11 @@ function verify() {
       if (s.prompt !== 'fix the sidebar') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
       if (s.intent !== '') return { ok: false, detail: `intent should start empty: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: 'files[] should start empty' };
+      if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: 'decomposition[] should start empty' };
+      if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: 'verifications[] should start empty' };
       s.intent = 'Fix sidebar layout bug';
       s.files = ['src/Sidebar.tsx'];
+      s.decomposition = [{ step: 1, subtask: 'fix layout', expected_files: ['src/Sidebar.tsx'] }];
       writeFileSync(scopePath, JSON.stringify(s), 'utf8');
       runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'now add dark mode' });
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
@@ -445,6 +448,9 @@ function verify() {
       if (s.intent !== 'Fix sidebar layout bug') return { ok: false, detail: `intent clobbered: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 1 || s.files[0] !== 'src/Sidebar.tsx') {
         return { ok: false, detail: `files[] not preserved: ${JSON.stringify(s.files)}` };
+      }
+      if (!Array.isArray(s.decomposition) || s.decomposition.length !== 1) {
+        return { ok: false, detail: `decomposition[] not preserved on continuation: ${JSON.stringify(s.decomposition)}` };
       }
       return true;
     } finally {
@@ -463,6 +469,8 @@ function verify() {
       let s = JSON.parse(readFileSync(scopePath, 'utf8'));
       s.intent = 'Fix sidebar';
       s.files = ['src/Sidebar.tsx'];
+      s.decomposition = [{ step: 1, subtask: 'x', expected_files: ['a.ts'] }];
+      s.verifications = [{ step: 1, verdict: 'ACCEPT', diagnosis: '' }];
       s.acceptance = 'custom acceptance bar';
       writeFileSync(scopePath, JSON.stringify(s), 'utf8');
       runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'new task: rewrite auth module' });
@@ -470,6 +478,8 @@ function verify() {
       if (s.prompt !== 'new task: rewrite auth module') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
       if (s.intent !== '') return { ok: false, detail: `intent not reset: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: `files[] not reset: ${JSON.stringify(s.files)}` };
+      if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: `decomposition[] not reset: ${JSON.stringify(s.decomposition)}` };
+      if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: `verifications[] not reset: ${JSON.stringify(s.verifications)}` };
       if (s.acceptance !== defaultAcceptance) return { ok: false, detail: `acceptance not reset: ${s.acceptance}` };
       return true;
     } finally {
@@ -489,9 +499,109 @@ function verify() {
       runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'FINAL REVIEW (end of implementation) - audit everything' });
       let after = JSON.parse(readFileSync(scopePath, 'utf8'));
       if (after.prompt !== 'fix the sidebar') return { ok: false, detail: 'hook-generated prompt overwrote prompt' };
+      runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'VERIFY MILESTONE step 1 of 2' });
+      after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (after.prompt !== 'fix the sidebar') return { ok: false, detail: 'VERIFY MILESTONE header overwrote prompt' };
       return true;
     } finally {
       rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('milestone-verify emits reminder when step expected_files all touched', () => {
+    const cidv = 'npxvmv1';
+    const repoDir = join(HOME, '.cd-verify-mv1');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: 'Add JWT login',
+        decomposition: [
+          { step: 1, subtask: 'backend', expected_files: ['server/auth.ts', 'server/routes/login.ts'] },
+          { step: 2, subtask: 'frontend', expected_files: ['src/login.tsx'] },
+        ],
+        verifications: [],
+        files: ['server/auth.ts', 'server/routes/login.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, cwd: repoDir });
+      if (!out.includes('additional_context') || !out.includes('VERIFY MILESTONE step 1')) {
+        return { ok: false, detail: `expected reminder for step 1, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('milestone-verify silent when decomposition empty (YAGNI rung 1)', () => {
+    const cidv = 'npxvmv2';
+    const repoDir = join(HOME, '.cd-verify-mv2');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'typo fix',
+        intent: '',
+        decomposition: [],
+        verifications: [],
+        files: ['README.md'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, cwd: repoDir });
+      if (out.includes('additional_context') || out.includes('VERIFY MILESTONE')) {
+        return { ok: false, detail: `should be silent on empty decomposition, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('milestone-verify scrapes ACCEPT step N from transcript and writes verifications[N]', () => {
+    const cidv = 'npxvmv3';
+    const repoDir = join(HOME, '.cd-verify-mv3');
+    const scopePath = join(repoDir, '.scope.json');
+    const transcriptPath = join(HOME, '.cursor', '.hooks-pending', `transcript-${cidv}.jsonl`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      mkdirSync(dirname(transcriptPath), { recursive: true });
+      // Plant a transcript with one assistant turn containing the verdict.
+      // The hook walks backward looking for assistant role + verdict pattern.
+      const rec = { role: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ACCEPT step 1: backend wired correctly.' }] } };
+      writeFileSync(transcriptPath, JSON.stringify(rec) + '\n', 'utf8');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: 'Add JWT login',
+        decomposition: [
+          { step: 1, subtask: 'backend', expected_files: ['server/auth.ts'] },
+        ],
+        verifications: [],
+        files: ['server/auth.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, transcript_path: transcriptPath, cwd: repoDir });
+      // After scraping, the verdict is recorded AND no reminder should fire
+      // (the now-verified step satisfies the unverified-milestone check).
+      if (out.includes('VERIFY MILESTONE')) {
+        return { ok: false, detail: 'reminder fired after verdict was scraped' };
+      }
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (!Array.isArray(after.verifications) || after.verifications.length !== 1) {
+        return { ok: false, detail: `verdict not recorded: ${JSON.stringify(after.verifications)}` };
+      }
+      const v = after.verifications[0];
+      if (v.step !== 1 || v.verdict !== 'ACCEPT') {
+        return { ok: false, detail: `verdict mismatch: ${JSON.stringify(v)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(transcriptPath);
     }
   });
 
@@ -938,6 +1048,7 @@ Kill switches (environment variables, all hooks fail open)
   PERM_GATE_ENFORCE=0          permission gate off
   INTENT_PRECOMPILE_ENFORCE=0  .scope.json auto-write on prompt off
   SCOPE_REFRESH_ENFORCE=0      per-edit re-injection + files[] recording off
+  MILESTONE_VERIFY_ENFORCE=0   mid-session milestone verifier off (doctrine-ultra)
   FINAL_REVIEW_ENFORCE=0       final review off
 
 Docs  https://github.com/kleosr/cursordoctrine`);

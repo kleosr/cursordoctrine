@@ -24,6 +24,10 @@
       {
         "command": "bash ~/.agents/hooks/scope-drain.sh",
         "timeout": 5
+      },
+      {
+        "command": "bash ~/.agents/hooks/milestone-verify.sh",
+        "timeout": 5
       }
     ],
     "beforeShellExecution": [

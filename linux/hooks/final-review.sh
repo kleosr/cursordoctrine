@@ -133,6 +133,7 @@ body="$(expand_agent_paths "$body")"
 scope_path="$root/.scope.json"
 scope_block=""
 declared_note=""
+role_trace_block=""
 scope_intent=""
 scope_prompt=""
 if [ -f "$scope_path" ]; then
@@ -188,6 +189,62 @@ except Exception: pass' 2>/dev/null)"
 
 "
         fi
+
+        # Role-trace (axis 7): decomposition + verifications. Empty = YAGNI rung 1.
+        if have_py; then
+            role_trace_block="$(printf '%s\n' "$edited" | SCOPE_RAW="$scope_raw" python3 -c '
+import json, os, sys
+try:
+    o = json.loads(os.environ["SCOPE_RAW"])
+except Exception:
+    sys.exit(0)
+decomp = o.get("decomposition") or []
+if not decomp:
+    sys.exit(0)
+verifs = o.get("verifications") or []
+verdict_by_step = {}
+for v in verifs:
+    if isinstance(v, dict) and isinstance(v.get("step"), int):
+        verdict_by_step[v["step"]] = str(v.get("verdict") or "")
+touched = [l.strip() for l in sys.stdin if l.strip() and l.strip().lower() != ".scope.json"]
+touched_set = set(f.lower() for f in touched)
+all_expected = set()
+for step in decomp:
+    if isinstance(step, dict) and step.get("expected_files"):
+        for ef in step["expected_files"]:
+            all_expected.add(str(ef).replace("\\", "/").lstrip("/").lower())
+leakage = [f for f in touched if f.lower() not in all_expected]
+lines = [f"Decomposition: {len(decomp)} step(s); verdicts recorded: {len(verdict_by_step)}."]
+for step in decomp:
+    if not isinstance(step, dict):
+        continue
+    sn = step.get("step")
+    if not isinstance(sn, int):
+        continue
+    subtask = step.get("subtask") or "(no subtask)"
+    expected = [str(f).replace("\\", "/").lstrip("/") for f in (step.get("expected_files") or [])]
+    missing = [ef for ef in expected if ef.lower() not in touched_set]
+    verdict = verdict_by_step.get(sn, "(no verdict)")
+    if missing:
+        status = f"missing {len(missing)} expected"
+    elif verdict == "ACCEPT":
+        status = "ACCEPTED"
+    elif verdict == "REVISE":
+        status = "REVISE open"
+    else:
+        status = "touched, awaiting verdict"
+    lines.append(f"  step {sn} [{status}] - {subtask}")
+if leakage:
+    shown = ", ".join(leakage[:8])
+    lines.append(f"  Touched but NOT in any step'\''s expected_files ({len(leakage)}): {shown}")
+print("\n".join(lines))
+' 2>/dev/null)"
+            if [ -n "$role_trace_block" ]; then
+                role_trace_block="${role_trace_block}
+
+"
+            fi
+        fi
     fi
 fi
 
@@ -223,9 +280,9 @@ surface_block="Session footprint: ${unique_files} file(s) touched. If a simple r
 
 "
 
-msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.
+msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, role-trace (if decomposed).
 
-${surface_block}${scope_block}${declared_note}${intent_block}Files you changed this session:
+${surface_block}${scope_block}${declared_note}${role_trace_block}${intent_block}Files you changed this session:
 $file_list
 
 $body"

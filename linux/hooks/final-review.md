@@ -71,3 +71,17 @@ Inline `Date.now()`/`Math.random()`/`process.env` in logic (→ inject). In-plac
 mutation of shared state (→ new structures). Arrow code >2 nesting (→ guard
 clauses). Switch / 5+ if-else (→ Map dispatch). Mixed abstraction (SLAP).
 Primitive obsession. Imperative `for` where `.map`/`.filter` work.
+
+## 7. Role-trace (skip if decomposition is empty)
+
+If `.scope.json` declared `decomposition`, every step must trace cleanly:
+- Each `decomposition[i]` has a matching `verifications[i]`. Unverified steps
+  are unfinished work — either verify or remove the step from decomposition.
+- Each `verifications[i].verdict == "ACCEPT"`. Open REVISE verdicts mean you
+  moved on without resolving the diagnosis — go back and fix, or convert to
+  ACCEPT with a one-line justification.
+- Files touched this session that aren't in ANY step's `expected_files` are
+  cross-step leakage IF decomposition was honest. Justify or revert.
+
+Empty decomposition (trivial one-liner, typo, literal) → skip this axis.
+YAGNI rung 1 governs.

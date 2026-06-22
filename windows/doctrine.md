@@ -28,6 +28,8 @@ Before any code, write `.scope.json` to the repo root:
 
 The `stop` hook reads `.scope.json` for the final review and diffs your declared `files[]` against what git sees touched. Trivial one-liners (typo, literal) skip this — YAGNI rung 1 governs.
 
+**Decomposition (optional, YAGNI-gated).** For any task that touches more than one file or has more than one logical step, declare a `decomposition[]` array at Step 0. Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Trivial one-liners (YAGNI rung 1) leave it `[]`. The `verifications[]` array is hook-owned: `milestone-verify` (postToolUse) records ACCEPT/REVISE verdicts based on what you emit in chat when a step's `expected_files` are all touched. Emit `ACCEPT step N` to proceed or `REVISE step N: <one-line diagnosis>` to repair. The final review's axis 7 audits the chain: every step must trace to a verdict, and every touched file to a step.
+
 **Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` BEFORE writing. Decide:
 - **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE `intent` in place (merge the new ask into your restatement). `files[]` accumulates via edits. Sharpen `acceptance` only if the done-check changed.
 - **New task** (unrelated): start the prompt with `/new` or `new task:` — the hook resets `intent`, `files[]`, and `acceptance`. Then regenerate your Step 0 restatement and blast radius.

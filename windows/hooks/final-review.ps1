@@ -133,6 +133,7 @@ $body = Expand-AgentPaths $body
 $scopePath = Join-Path $root '.scope.json'
 $scopeBlock = ''
 $declaredNote = ''
+$roleTraceBlock = ''
 $scopePrompt = ''
 $scopeIntent = ''
 if (Test-Path -LiteralPath $scopePath) {
@@ -174,6 +175,55 @@ if (Test-Path -LiteralPath $scopePath) {
                 $declaredNote = ($lines -join "`n") + "`n`n"
             }
         }
+        # Role-trace (axis 7): decomposition + verifications. Empty = YAGNI rung 1.
+        if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) {
+            $decomp = @($sj.decomposition)
+            $verifs = @()
+            if ($sj.PSObject.Properties['verifications'] -and $sj.verifications) { $verifs = @($sj.verifications) }
+            $verdictByStep = @{}
+            foreach ($v in $verifs) {
+                if ($v -and $v.PSObject.Properties['step']) {
+                    try { $verdictByStep[[int]$v.step] = [string]$v.verdict } catch { }
+                }
+            }
+            $touchedSetRt = @{}
+            foreach ($f in $rel) { if ($f -ine '.scope.json') { $touchedSetRt[$f.ToLowerInvariant()] = $true } }
+            $allExpected = @{}
+            foreach ($step in $decomp) {
+                if (-not $step -or -not $step.PSObject.Properties['step']) { continue }
+                if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
+                    foreach ($ef in $step.expected_files) {
+                        $allExpected[([string]$ef).Replace('\', '/').TrimStart('/').ToLowerInvariant()] = $true
+                    }
+                }
+            }
+            $leakage = @()
+            foreach ($f in $rel) {
+                if ($f -ine '.scope.json' -and -not $allExpected.ContainsKey($f.ToLowerInvariant())) { $leakage += $f }
+            }
+            $rtLines = New-Object System.Collections.Generic.List[string]
+            $rtLines.Add("Decomposition: $($decomp.Count) step(s); verdicts recorded: $($verdictByStep.Count).")
+            foreach ($step in $decomp) {
+                if (-not $step -or -not $step.PSObject.Properties['step']) { continue }
+                try { $sn = [int]$step.step } catch { continue }
+                $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask)' }
+                $expected = @()
+                if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
+                    $expected = @($step.expected_files) | ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') }
+                }
+                $missing = @($expected | Where-Object { -not $touchedSetRt.ContainsKey(([string]$_).ToLowerInvariant()) })
+                $verdict = if ($verdictByStep.ContainsKey($sn)) { $verdictByStep[$sn] } else { '(no verdict)' }
+                $status = if ($missing.Count -gt 0) { "missing $($missing.Count) expected" }
+                          elseif ($verdict -eq 'ACCEPT') { 'ACCEPTED' }
+                          elseif ($verdict -eq 'REVISE') { 'REVISE open' }
+                          else { 'touched, awaiting verdict' }
+                $rtLines.Add("  step $sn [$status] - $subtask")
+            }
+            if ($leakage.Count -gt 0) {
+                $rtLines.Add("  Touched but NOT in any step's expected_files ($($leakage.Count)): " + (($leakage | Select-Object -First 8) -join ', '))
+            }
+            $roleTraceBlock = ($rtLines -join "`n") + "`n`n"
+        }
     } catch { }
 }
 
@@ -196,7 +246,7 @@ $fileList = ($rel | Select-Object -First 30) -join "`n  "
 $uniqueFiles = @($rel | Select-Object -Unique).Count
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
 
-$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop.`n`n${surfaceBlock}${scopeBlock}${declaredNote}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
+$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, role-trace (if decomposed).`n`n${surfaceBlock}${scopeBlock}${declaredNote}${roleTraceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
 
 # Arm the brake BEFORE emitting, so a crash after emit can't re-fire.
 New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null

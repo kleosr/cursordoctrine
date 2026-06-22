@@ -24,6 +24,10 @@
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-drain.ps1",
         "timeout": 5
+      },
+      {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/milestone-verify.ps1",
+        "timeout": 5
       }
     ],
     "beforeShellExecution": [

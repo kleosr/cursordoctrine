@@ -212,3 +212,46 @@ function Get-LastUserQuery($obj) {
     }
     return ''
 }
+
+# Scrape the most recent ACCEPT/REVISE verdict from assistant turns in the
+# transcript. Returns $null if none. Used by milestone-verify (postToolUse) to
+# record the agent's per-step verdict into .scope.json's verifications[] without
+# requiring the agent to write the file itself. Walks backward through assistant
+# records; the first match (most recent) wins. Pattern requires literal
+# "ACCEPT step N" or "REVISE step N[: diagnosis]" so casual chat ("I accept")
+# doesn't false-positive.
+function Get-LastVerdict($obj) {
+    $tp = ''
+    if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
+    if (-not $tp -or -not (Test-Path -LiteralPath $tp)) { return $null }
+    $lines = @(Get-Content -LiteralPath $tp -ErrorAction SilentlyContinue)
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i]
+        if (-not $line -or $line -notmatch '"role"\s*:\s*"assistant"') { continue }
+        try {
+            $rec = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+        } catch { continue }
+        if (-not $rec) { continue }
+        $msg = $rec.message
+        if (-not $msg) { $msg = $rec }
+        $content = $msg.content
+        if (-not $content) { continue }
+        $text = ''
+        if ($content -is [string]) {
+            $text = $content
+        } else {
+            foreach ($part in $content) {
+                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
+            }
+        }
+        if (-not $text) { continue }
+        if ($text -match '(?mi)\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$') {
+            $verdict = $Matches[1].ToUpperInvariant()
+            try { $stepNum = [int]$Matches[2] } catch { continue }
+            $diag = ''
+            if ($Matches.Count -ge 4 -and $Matches[3]) { $diag = ([string]$Matches[3]).Trim() }
+            return @{ verdict = $verdict; step = $stepNum; diagnosis = $diag }
+        }
+    }
+    return $null
+}

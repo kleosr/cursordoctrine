@@ -28,7 +28,7 @@ prompt="$(printf '%s' "$prompt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 [ -n "$prompt" ] || exit 0
 
 case "$prompt" in
-    "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*|"INTENT REFINEMENT REQUIRED"*|"SCOPE REMINDER"*) exit 0 ;;
+    "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*|"INTENT REFINEMENT REQUIRED"*|"SCOPE REMINDER"*|"VERIFY MILESTONE"*) exit 0 ;;
 esac
 
 root="$(resolve_project_root "$input")"
@@ -56,13 +56,15 @@ if [ -f "$scope_path" ]; then
             new_raw="$(jq -nc \
                 --arg p "$prompt" \
                 --arg a "$default_acceptance" \
-                '{prompt: $p, intent: "", files: [], acceptance: $a}' 2>/dev/null)"
+                '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' 2>/dev/null)"
         elif have_py; then
             new_raw="$(P="$prompt" A="$default_acceptance" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
     "intent": "",
+    "decomposition": [],
+    "verifications": [],
     "files": [],
     "acceptance": os.environ["A"],
 }, indent=2, ensure_ascii=False))' 2>/dev/null)"
@@ -99,13 +101,15 @@ else
         jq -nc \
             --arg p "$prompt" \
             --arg a "$default_acceptance" \
-            '{prompt: $p, intent: "", files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
+            '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
     elif have_py; then
         P="$prompt" A="$default_acceptance" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
     "intent": "",
+    "decomposition": [],
+    "verifications": [],
     "files": [],
     "acceptance": os.environ["A"],
 }, indent=2, ensure_ascii=False))' > "$scope_path" 2>/dev/null

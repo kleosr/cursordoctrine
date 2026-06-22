@@ -23,7 +23,7 @@ if ($obj.PSObject.Properties['prompt']) { $prompt = [string]$obj.prompt }
 $prompt = $prompt.Trim()
 if ([string]::IsNullOrWhiteSpace($prompt)) { exit 0 }
 
-if ($prompt -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER)') { exit 0 }
+if ($prompt -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)') { exit 0 }
 
 $root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }
@@ -46,10 +46,12 @@ if (Test-Path -LiteralPath $scopePath) {
 try {
     if (Test-NewTaskPrompt $prompt) {
         $ordered = [ordered]@{
-            prompt     = $prompt
-            intent     = ''
-            files      = @()
-            acceptance = $defaultAcceptance
+            prompt        = $prompt
+            intent        = ''
+            decomposition = @()
+            verifications = @()
+            files         = @()
+            acceptance    = $defaultAcceptance
         }
     } elseif ($existing) {
         $ordered = [ordered]@{ prompt = $prompt }
@@ -62,10 +64,12 @@ try {
         if (-not $ordered.Contains('intent')) { $ordered['intent'] = '' }
     } else {
         $ordered = [ordered]@{
-            prompt     = $prompt
-            intent     = ''
-            files      = @()
-            acceptance = $defaultAcceptance
+            prompt        = $prompt
+            intent        = ''
+            decomposition = @()
+            verifications = @()
+            files         = @()
+            acceptance    = $defaultAcceptance
         }
     }
     $json = $ordered | ConvertTo-Json -Depth 8
