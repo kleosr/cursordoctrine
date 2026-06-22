@@ -41,7 +41,7 @@ const pendingDir = join(cursorDst, '.hooks-pending');
 const hooksJsonDst = join(cursorDst, 'hooks.json');
 
 const injectName = platform === 'windows' ? 'inject-doctrine.ps1' : 'inject-doctrine.sh';
-const doctrineFiles = [injectName, 'doctrine.md', 'USER-RULES.md', 'declared-editing.md', 'pre-compile.md'];
+const doctrineFiles = [injectName, 'doctrine.md'];
 
 function payloadHookFiles() {
   return readdirSync(join(payload, 'hooks'));
@@ -127,6 +127,16 @@ function mergeHooks(existing, incoming, keys) {
       if (isOurs(x?.command, keys) && k && !used.has(k)) reordered.push(x);
     }
     out.hooks[event] = [...reordered, ...foreign];
+  }
+  // Final sweep: reap stale-ours entries from ALL events, including those that
+  // exist only in the prior config (e.g. afterFileEdit / postToolUse /
+  // subagentStop when the new pack no longer ships hooks for those events).
+  // The main loop above only touches events present in `incoming`, so without
+  // this pass deleted hooks from a prior install would survive the merge.
+  for (const event of Object.keys(out.hooks)) {
+    if (!Array.isArray(out.hooks[event])) continue;
+    out.hooks[event] = out.hooks[event].filter((x) => x && !isStaleOurs(x.command));
+    if (out.hooks[event].length === 0) delete out.hooks[event];
   }
   let preserved = 0;
   for (const entries of Object.values(out.hooks)) {
@@ -332,224 +342,114 @@ function verify() {
   check('permission gate allows `git status`', () =>
     /"permission"\s*:\s*"allow"/.test(runHook(hook('permission-gate'), { command: 'git status' })));
 
-  check('self-review trigger stashes + post-tool-use drains', () => {
-    runHook(hook('self-review-trigger'), { conversation_id: 'npxv1', file_path: join(HOME, 'x.py') });
-    return runHook(hook('post-tool-use'), { conversation_id: 'npxv1' }).includes('additional_context');
-  });
-
-  check('final review fires once, then goes quiet', () => {
-    runHook(hook('self-review-trigger'), { conversation_id: 'npxv1', file_path: join(HOME, 'x.py') });
-    const first = runHook(hook('final-review'), { conversation_id: 'npxv1', status: 'completed' });
-    const second = runHook(hook('final-review'), { conversation_id: 'npxv1', status: 'completed' });
-    if (!first.includes('followup_message')) return { ok: false, detail: 'no followup_message on first stop' };
-    if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
-    return true;
-  });
-
-  check('subagent review fires once, then goes quiet', () => {
-    runHook(hook('self-review-trigger'), { conversation_id: 'npxv2', file_path: join(HOME, 'x.py') });
-    const first = runHook(hook('subagent-stop-review'), { conversation_id: 'npxv2', status: 'completed' });
-    const second = runHook(hook('subagent-stop-review'), { conversation_id: 'npxv2', status: 'completed' });
-    if (!first.includes('SUBAGENT FINAL REVIEW')) return { ok: false, detail: 'no SUBAGENT FINAL REVIEW on first stop' };
-    if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
-    return true;
-  });
-
-  check('intent-anchor scaffolds .scope.json per-prompt, never to $HOME', () => {
-    // The user-requested behavior: every NEW prompt -> a fresh .scope.json
-    // in the repo root, intent locked from the query. Same prompt -> re-inject
-    // without rewriting. Never writes to $HOME (the 0.4.4 ghost-file bug).
-    // We drive it with a synthetic transcript so Get-LastUserQuery can read
-    // the <user_query>; the hook resolves cwd -> HOME (the repo root here).
-    const drainedOf = (cidv) => runHook(hook('post-tool-use'), { conversation_id: cidv });
-    const anchorCid = 'npxv4';
-    const repoDir = HOME;   // verify() runs under a pinned HOME; treat it as the repo
+  check('scope refresh stashes + scope drain delivers .scope.json', () => {
+    // Plant a .scope.json in a fake repo root, fire scope-refresh with an edit
+    // payload, then fire scope-drain and confirm the contract is delivered as
+    // additional_context. Then fire scope-drain again and confirm it's quiet
+    // (one-shot).
+    const cidv = 'npxvscope';
+    const repoDir = join(HOME, '.cd-verify-scope');
     const scopePath = join(repoDir, '.scope.json');
-    const transcriptPath = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv4.jsonl');
-    const q1 = 'fix grid symmetry and color tokens';
-    const q2 = 'now add dark mode support';
-
-    const cleanup = () => {
-      try { rmSync(scopePath, { force: true }); } catch {}
-      try { rmSync(transcriptPath, { force: true }); } catch {}
-    };
-    cleanup();
-    const writeTranscript = (q) =>
-      writeFileSync(transcriptPath,
-        JSON.stringify({ role: 'user', message: { content: `<user_query>${q}</user_query>` } }) + '\n',
-        'utf8');
-
-    // --- Case 0: no .scope.json + NO transcript -> do NOT write hollow scaffold
-    // 0.6.1: never persist intent=<TODO> when the request is unreadable. Emit the
-    // pre-compile demand so the agent authors a real contract from the chat.
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir });
-    let d0 = drainedOf(anchorCid);
-    if (existsSync(scopePath)) {
-      cleanup(); return { ok: false, detail: 'hollow scaffold written without transcript (0.6.1 regression)' };
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        intent: 'test intent',
+        files: ['a.ts', 'b.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      runHook(hook('scope-refresh'), { conversation_id: cidv, cwd: repoDir, file_path: join(repoDir, 'a.ts') });
+      const delivered = runHook(hook('scope-drain'), { conversation_id: cidv });
+      const secondDrain = runHook(hook('scope-drain'), { conversation_id: cidv });
+      if (!delivered.includes('additional_context') || !delivered.includes('test intent')) {
+        return { ok: false, detail: 'scope-drain did not deliver the contract' };
+      }
+      if (secondDrain.includes('additional_context')) {
+        return { ok: false, detail: 'scope-drain delivered twice (not one-shot)' };
+      }
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      try { rmSync(join(pendingDir, `scope-${cidv}.txt`), { force: true }); } catch {}
     }
-    if (!d0.includes('INTENT ANCHOR (pre-compile)')) {
-      cleanup(); return { ok: false, detail: 'no-transcript turn did not emit pre-compile demand' };
-    }
-    // Clear the latch so Case A starts fresh (with a real query this time).
-    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
-    cleanup();
-
-    // --- Case A: no .scope.json + prompt q1 -> WRITE scaffold with q1 as intent -
-    writeTranscript(q1);
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
-    let d = drainedOf(anchorCid);
-    if (!existsSync(scopePath)) {
-      cleanup(); return { ok: false, detail: 'scaffold was NOT written on first prompt' };
-    }
-    let scope;
-    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
-    catch { cleanup(); return { ok: false, detail: '.scope.json is not valid JSON' }; }
-    if (scope.intent !== q1) {
-      cleanup(); return { ok: false, detail: `intent mismatch (want "${q1}"): ${scope.intent}` };
-    }
-    if (!d.includes('scope regenerated')) {
-      cleanup(); return { ok: false, detail: 'regenerated branch did not fire' };
-    }
-
-    // --- Stop clears the latch -> next turn can act again --------------------
-    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
-
-    // --- Case B: same prompt q1 again -> re-INJECT, do NOT rewrite ----------
-    const sizeBefore = statSync(scopePath).size;
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
-    d = drainedOf(anchorCid);
-    if (!d.includes('re-injected')) {
-      cleanup(); return { ok: false, detail: 'same-prompt turn did not re-inject' };
-    }
-    // _intent_hash matches -> file must not have been regenerated. Intent still q1.
-    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
-    catch { cleanup(); return { ok: false, detail: '.scope.json corrupted on same-prompt turn' }; }
-    if (scope.intent !== q1) {
-      cleanup(); return { ok: false, detail: `same-prompt turn rewrote intent (should stay "${q1}"): ${scope.intent}` };
-    }
-
-    // --- Stop; new prompt q2 -> REGENERATE with q2 as intent ----------------
-    runHook(hook('final-review'), { conversation_id: anchorCid, status: 'completed' });
-    writeTranscript(q2);
-    runHook(hook('intent-anchor'), { conversation_id: anchorCid, cwd: repoDir, transcript_path: transcriptPath });
-    d = drainedOf(anchorCid);
-    try { scope = JSON.parse(readFileSync(scopePath, 'utf8')); }
-    catch { cleanup(); return { ok: false, detail: '.scope.json corrupted on prompt-change turn' }; }
-    if (scope.intent !== q2) {
-      cleanup(); return { ok: false, detail: `prompt-change did not regenerate intent (want "${q2}"): ${scope.intent}` };
-    }
-    if (!d.includes('scope regenerated')) {
-      cleanup(); return { ok: false, detail: 'prompt-change turn did not report regeneration' };
-    }
-
-    // --- The anti-ghost-file guard: no .scope.json should ever exist at $HOME
-    //     level OUTSIDE the resolved repo. Here repo == HOME so this is moot,
-    //     but assert the file has the _generated_by marker (proof the hook wrote
-    //     it, and that it carries _intent_hash for self-contained staleness).
-    if (!scope._generated_by || !scope._intent_hash) {
-      cleanup(); return { ok: false, detail: 'scaffold missing _generated_by / _intent_hash fields' };
-    }
-
-    // --- Case C: MODEL-written scope (no _intent_hash) + a NEW prompt --------
-    // Reproduces the shipped bug (chiquipuesto/WAVE): the model wrote .scope.json
-    // per the legacy 4-field schema, so the hook could never detect staleness and
-    // scope-gate kept appending files across features. A new prompt (fresh cid =>
-    // promptChanged) must now REGENERATE and RESET files[].
-    const mkT = (p, q) => writeFileSync(p,
-      JSON.stringify({ role: 'user', message: { content: `<user_query>${q}</user_query>` } }) + '\n', 'utf8');
-    const cidC = 'npxv5';
-    const transcriptC = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv5.jsonl');
-    const failC = (detail) => { try { rmSync(transcriptC, { force: true }); } catch {} cleanup(); return { ok: false, detail }; };
-    try { rmSync(scopePath, { force: true }); } catch {}
-    writeFileSync(scopePath, JSON.stringify({ intent: q1, files: ['a.ts', 'b.ts'], acceptance: 'keep', allow_growth: false }, null, 2), 'utf8');
-    mkT(transcriptC, q2);
-    runHook(hook('intent-anchor'), { conversation_id: cidC, cwd: repoDir, transcript_path: transcriptC });
-    drainedOf(cidC);
-    let sc;
-    try { sc = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return failC('model-written scope corrupted after new prompt'); }
-    if (sc.intent !== q2) return failC(`carryover not regenerated (want "${q2}"): ${sc.intent}`);
-    if (!Array.isArray(sc.files) || sc.files.length !== 0) return failC(`files[] not reset on regen: ${JSON.stringify(sc.files)}`);
-    if (!sc._intent_hash) return failC('regen did not install _intent_hash');
-    if (!sc.trace || sc.trace.query !== q2) return failC('regen did not record trace.query');
-    runHook(hook('final-review'), { conversation_id: cidC, status: 'completed' });
-    rmSync(transcriptC, { force: true });
-
-    // --- Case D: MODEL-written scope (no _intent_hash) + the SAME prompt ------
-    // The model wrote the contract for THIS request this session. The hook must
-    // HEAL in place (backfill _intent_hash + trace) WITHOUT resetting files[] or
-    // acceptance, so the NEXT prompt change is detectable by hash.
-    const cidD = 'npxv6';
-    const transcriptD = join(HOME, '.cursor', '.hooks-pending', 'verify-transcript-npxv6.jsonl');
-    const failD = (detail) => { try { rmSync(transcriptD, { force: true }); } catch {} cleanup(); return { ok: false, detail }; };
-    try { rmSync(scopePath, { force: true }); } catch {}
-    mkT(transcriptD, q1);
-    // prime last-query-<cidD>.hash with q1 (a hook-written scaffold), clear the
-    // latch, then overwrite with a model-style scope for the SAME prompt.
-    runHook(hook('intent-anchor'), { conversation_id: cidD, cwd: repoDir, transcript_path: transcriptD });
-    runHook(hook('final-review'), { conversation_id: cidD, status: 'completed' });
-    writeFileSync(scopePath, JSON.stringify({ intent: q1, files: ['a.ts', 'b.ts'], acceptance: 'keep me', allow_growth: false }, null, 2), 'utf8');
-    runHook(hook('intent-anchor'), { conversation_id: cidD, cwd: repoDir, transcript_path: transcriptD });
-    drainedOf(cidD);
-    let sd;
-    try { sd = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return failD('healed scope corrupted'); }
-    if (!sd._intent_hash) return failD('heal did not backfill _intent_hash');
-    if (!sd.trace) return failD('heal did not add trace');
-    if (!Array.isArray(sd.files) || sd.files.join(',') !== 'a.ts,b.ts') return failD(`heal reset files[] (should preserve): ${JSON.stringify(sd.files)}`);
-    if (sd.acceptance !== 'keep me') return failD(`heal clobbered acceptance: ${sd.acceptance}`);
-    runHook(hook('final-review'), { conversation_id: cidD, status: 'completed' });
-    rmSync(transcriptD, { force: true });
-
-    cleanup();
-    return true;
   });
 
-  check('intent-precompile writes .scope.json before first token (no <TODO>)', () => {
-    // THE contract-first guarantee: beforeSubmitPrompt materializes .scope.json
-    // with intent locked from `prompt` and a SEEDED acceptance (never a bare
-    // <TODO>), hash-gated so the agent's refinements survive a same-prompt turn
-    // and a new prompt regenerates. If this regresses, the scope appears late
-    // (via intent-anchor) and/or ships a <TODO> - the exact complaints.
-    const preCid = 'npxv7';
-    const repoDir = HOME;
-    const scopePath = join(repoDir, '.scope.json');
-    const promptPath = join(pendingDir, `current-prompt-${preCid}.txt`);
-    const q1 = 'fix the dashboard bug in individual accounts';
-    const q2 = 'now wire the spend chart to the new endpoint';
-    const cleanup = () => {
-      try { rmSync(scopePath, { force: true }); } catch {}
-      try { rmSync(promptPath, { force: true }); } catch {}
-    };
-    const fail = (detail) => { cleanup(); return { ok: false, detail }; };
-    cleanup();
+  check('scope refresh stays silent when no .scope.json exists', () => {
+    const cidv = 'npxvscope2';
+    const repoDir = join(HOME, '.cd-verify-noscope');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      runHook(hook('scope-refresh'), { conversation_id: cidv, cwd: repoDir, file_path: join(repoDir, 'a.ts') });
+      const drain = runHook(hook('scope-drain'), { conversation_id: cidv });
+      if (drain.includes('additional_context')) {
+        return { ok: false, detail: 'scope-drain emitted without a .scope.json' };
+      }
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      try { rmSync(join(pendingDir, `scope-${cidv}.txt`), { force: true }); } catch {}
+    }
+  });
 
-    // Case A: new prompt -> WRITE .scope.json with intent=q1, real acceptance, hash.
-    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q1 });
-    if (!existsSync(scopePath)) return fail('intent-precompile did not write .scope.json');
-    let s;
-    try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
-    catch { return fail('.scope.json is not valid JSON'); }
-    if (s.intent !== q1) return fail(`intent mismatch (want q1): ${s.intent}`);
-    if (!s.acceptance || /<TODO/i.test(s.acceptance)) return fail('acceptance is a bare <TODO> (the regression)');
-    if (!s._generated_by || !/intent-precompile/i.test(s._generated_by)) return fail(`not written by intent-precompile: ${s._generated_by}`);
-    if (!s._intent_hash) return fail('missing _intent_hash (per-prompt regeneration breaks)');
+  check('final review fires once when files changed, then goes quiet', () => {
+    // The hook keys "what changed" off `git diff --name-only HEAD` + untracked
+    // files against the resolved repo root. Seed a throwaway git repo with one
+    // committed file, modify it, point the hook at the repo via cwd. The
+    // one-shot brake (reviewed-<cid>.flag) must then make the second stop quiet.
+    const cidv = 'npxvfr';
+    const repoDir = join(HOME, '.cd-verify-repo');
+    const filePath = join(repoDir, 'dummy.ts');
+    const flagPath = join(pendingDir, `reviewed-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(filePath, 'original\n', 'utf8');
+      const git = (args) => spawnSync('git', ['-C', repoDir, ...args], {
+        encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      let r = git(['init', '-q']);
+      if (r.status !== 0) return { ok: false, detail: `git init failed: ${(r.stderr || '').trim()}` };
+      git(['add', 'dummy.ts']);
+      r = git(['commit', '-q', '-m', 'init']);
+      if (r.status !== 0) return { ok: false, detail: `git commit failed: ${(r.stderr || '').trim()}` };
+      writeFileSync(filePath, 'changed\n', 'utf8');
+      try { rmSync(flagPath, { force: true }); } catch {}
 
-    // Case B: same prompt -> NOT rewritten (hash-gated; agent refinements survive).
-    writeFileSync(scopePath, JSON.stringify({ ...s, acceptance: 'AGENT-SENTINEL' }, null, 2), 'utf8');
-    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q1 });
-    let sb;
-    try { sb = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return fail('same-prompt run corrupted the file'); }
-    if (sb.acceptance !== 'AGENT-SENTINEL') return fail('same-prompt run overwrote the agent refinement (must be left intact)');
+      const first = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
+      const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
+      if (!first.includes('followup_message')) return { ok: false, detail: 'no followup_message on first stop' };
+      if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      try { rmSync(flagPath, { force: true }); } catch {}
+    }
+  });
 
-    // Case C: new prompt -> REGENERATE with intent=q2, and stash the verbatim prompt
-    // so intent-anchor gets ground truth even when beforeSubmitPrompt lacks cwd.
-    runHook(hook('intent-precompile'), { conversation_id: preCid, cwd: repoDir, prompt: q2 });
-    let sc;
-    try { sc = JSON.parse(readFileSync(scopePath, 'utf8')); } catch { return fail('new-prompt run corrupted the file'); }
-    if (sc.intent !== q2) return fail(`new prompt did not regenerate (want q2): ${sc.intent}`);
-    if (!existsSync(promptPath) || readFileSync(promptPath, 'utf8') !== q2) return fail('verbatim prompt not stashed for intent-anchor');
-
-    cleanup();
-    return true;
+  check('final review stays quiet when no files changed', () => {
+    const cidv = 'npxvfr2';
+    const repoDir = join(HOME, '.cd-verify-clean');
+    const filePath = join(repoDir, 'dummy.ts');
+    const flagPath = join(pendingDir, `reviewed-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(filePath, 'original\n', 'utf8');
+      const git = (args) => spawnSync('git', ['-C', repoDir, ...args], {
+        encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      git(['init', '-q']);
+      git(['add', 'dummy.ts']);
+      git(['commit', '-q', '-m', 'init']);
+      try { rmSync(flagPath, { force: true }); } catch {}
+      const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
+      if (out.includes('followup_message')) return { ok: false, detail: 'review fired on a clean repo (no diff)' };
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+      try { rmSync(flagPath, { force: true }); } catch {}
+    }
   });
 
   check('doctrine injection emits additional_context', () =>
@@ -681,6 +581,7 @@ function sweep() {
     ['boolean_traps', 'BOOLEAN TRAPS', 'flag-flip call sites: fn(x, true)'],
     ['select_star', 'SELECT *', 'SELECT * in .sql'],
     ['tailwind_slop', 'TAILWIND SLOP', 'class soup / magic px / z-[9999] / hardcoded hex'],
+    ['reexport_slop', 'BARE RE-EXPORTS', 'export ... from lines that ship nothing of their own'],
     ['redundant_comments', 'REDUNDANT COMMENTS', 'restates the code // WHAT not WHY'],
     ['ai_residue', 'AI RESIDUE', 'placeholder phrases / banner comments / emoji'],
     ['semantic_density', 'SEMANTIC OPACITY', 'DataManager / process() / utils.ts / Pt'],
@@ -828,7 +729,7 @@ function uninstall() {
 }
 
 function help() {
-  console.log(`cursordoctrine ${pkg.version} — thin self-review hooks for Cursor; the model is the auditor
+  console.log(`cursordoctrine ${pkg.version} — hooks for Cursor: doctrine at start, scope re-injected per edit, gate on shell, review at stop
 
 Usage
   npx cursordoctrine <command>
@@ -855,12 +756,8 @@ Examples
 Kill switches (environment variables, all hooks fail open)
   HOOKS_ENFORCE=0              everything advisory off
   PERM_GATE_ENFORCE=0          permission gate off
-  INTENT_ANCHOR_ENFORCE=0      thin-intent scaffold/re-injection off
-  SEMANTIC_DENSITY_ENFORCE=0   semantic-opacity advisory off
-  SCOPE_GATE_ENFORCE=0         declared-scope advisory off
-  ANTI_SLOP_ENFORCE=0          slop advisory off
+  SCOPE_REFRESH_ENFORCE=0      .scope.json per-edit re-injection off
   FINAL_REVIEW_ENFORCE=0       final review off
-  SUBAGENT_REVIEW_ENFORCE=0    in-subagent review off
 
 Docs  https://github.com/kleosr/cursordoctrine`);
 }

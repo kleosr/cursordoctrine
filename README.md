@@ -9,8 +9,8 @@
 
 <div align="center">
   <h1>cursordoctrine</h1>
-  <p><strong>Self-review hooks for Cursor — proactive and reactive.</strong></p>
-  <p>Six hook events, one message bus.<br />The model compiles its intent, audits its own work, and stays on the rails. Cursor carries context and gates blast radius.</p>
+  <p><strong>Three hooks for Cursor. Doctrine at start, gate on shell, review at stop.</strong></p>
+  <p>The model is the auditor. The harness does only what the model can't do for itself:<br />inject governing text, block irreversible shell, and ask for one end-of-session review.</p>
 </div>
 
 <br />
@@ -19,18 +19,13 @@
 
 ## What this is
 
-Cursor hooks that make the agent review its own edits without bolting a static-analysis pipeline onto every keystroke. No regex army, no scoring engine. Four jobs:
+Three Cursor hooks. No state machine, no per-edit advisories, no contract files written to your repos.
 
-1. **Compile intent before coding** (proactive) — at session start the agent gets the doctrine plus the **Anchor Set** discipline (`pre-compile.md`): before writing code it must emit *Objective / Constraints / Scope / Deterministic success*. `intent-precompile` (`beforeSubmitPrompt`) materializes that as `.scope.json` the moment you hit send — **before the agent's first token** — with `intent` locked from the request and `acceptance` seeded (never a bare `<TODO>`), so the contract is the first artifact of the turn. `intent-anchor` then re-injects it into context every turn (regenerated when the prompt changes), so it stays in focus against Salience Dilution.
-2. **Inject the doctrine** at session start — every chat starts with the same short governing text (`doctrine.md`, `USER-RULES.md`, `declared-editing.md` the YAGNI ultra ladder, and `pre-compile.md` the thin intent-compilation phase).
-3. **Hand the model its own edits back** (reactive) — after each agent edit, a self-review prompt goes into a pending file (plus semantic-density, scope-gate, and anti-slop advisories when they trip). Next turn the model reads its diff, fixes real bugs, stays quiet otherwise.
-4. **Gate blast radius** — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). Everything else passes.
+1. **Inject the doctrine** at `sessionStart` — every chat starts with the same short governing text (`doctrine.md`): smallest correct diff, YAGNI ultra, ask-don't-guess, conventional commits, the auditor mindset. ~80 lines, read once.
+2. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). `failClosed: true` so a slow cold-start denies by default. Everything else passes.
+3. **One final review** at `stop` — when an implementation finishes and `git` sees changed files, Cursor auto-submits one `FINAL REVIEW` follow-up. Six axes: intent trace (tie every diff hunk to the original request — anything untraceable is a hallucinated requirement), correctness, reliability, coverage, anti-slop, wiring completeness. The hook reads `git diff --name-only HEAD` + untracked files; zero state on disk.
 
-When an implementation finishes, the stop hook runs one final review over everything that changed, then stops. Seven axes. The first is **intent trace**: the hook pulls your last user message from the transcript and prepends it to the review so the model has to tie every diff hunk to a concrete request. Anything it can't trace is a hallucinated requirement and gets reverted. The last is **mechanics & stack integrity** (N+1, idempotency, transactions, boundary validation, zombie listeners, god components, determinism) — patterns the regex scanner can't catch because they need semantic judgement. That's the only check that catches "clean code, wrong feature" — linters and later axes miss it.
-
-Subagents get the same treatment. If a delegated run edited files, it reviews its own work before the result goes back to the parent. Those edits fold into the parent's final review. Every bound is enforced twice: in the script and in `hooks.json`.
-
-Cursor only. Installs into `~/.cursor` and `~/.agents/hooks`. Doesn't touch your projects.
+The model is the auditor. A self-review done by the model in its own context is free — it has the file, the diff, the user's intent, and the ability to fix. The harness's only non-advisory lever is the permission gate's hard deny.
 
 ## Prerequisites
 
@@ -38,15 +33,13 @@ Cursor only. Installs into `~/.cursor` and `~/.agents/hooks`. Doesn't touch your
 
 | Platform | Required | Optional (recommended) |
 |---|---|---|
-| **Windows** | `git`, **PowerShell 7 (`pwsh`) on PATH** | Python 3.9+ (powers the anti-slop scanner; hooks work without it) |
-| **Linux / SSH remotes** | `bash`, `git`, and `jq` **or** `python3` | Python 3.9+ (anti-slop scanner) |
+| **Windows** | `git`, **PowerShell 7 (`pwsh`) on PATH** | Python 3.9+ (powers the sweep scanner) |
+| **Linux / SSH remotes** | `bash`, `git`, and `jq` **or** `python3` | Python 3.9+ (sweep scanner) |
 
 Install PowerShell 7:
 
 - **Windows**: `winget install --id Microsoft.PowerShell --source winget` (or grab the MSI from the [PowerShell GitHub releases](https://github.com/PowerShell/PowerShell/releases)). Confirm with `pwsh -Version`.
 - **Linux**: follow the [official package instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-linux) — only needed if you run the `windows/` pack on a Linux box (unusual); normal Linux installs use the `linux/` bash pack.
-
-`npx cursordoctrine install` warns at the end if `pwsh` (Windows) or `bash`+`jq`/`python3` (Linux) or Python are missing, so you'll know up front.
 
 ## Install
 
@@ -55,94 +48,42 @@ Node 18+:
 ```bash
 npx cursordoctrine@latest install   # copies the hook pack into ~/.agents/hooks + ~/.cursor, merges hooks.json
 npx cursordoctrine verify           # smoke-tests every hook with fake payloads, no restart needed
-npx cursordoctrine sweep            # whole-codebase anti-slop audit + fix-handoff (see below)
+npx cursordoctrine sweep            # whole-codebase anti-slop audit + fix-handoff (on demand)
 ```
 
-Restart Cursor after install — `hooks.json` is read at startup. `install` is idempotent; re-run to update. Entries you added to `~/.cursor/hooks.json` yourself are kept. `npx cursordoctrine uninstall` removes the pack the same way.
+Restart Cursor after install — `hooks.json` is read at startup. `install` is idempotent; re-run to update. Entries you added to `~/.cursor/hooks.json` yourself are kept. `npx cursordoctrine uninstall` removes the pack the same way. **Re-running `install` after upgrading to 1.0 also reaps the old hooks** (intent-precompile, intent-anchor, self-review-trigger, etc.) from your existing `hooks.json` automatically.
 
-No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist. Copy commands are in the same file if you prefer doing it by hand.
+No Node? Open `INSTALL.md`, paste it into a Cursor agent chat on the target machine, and let the agent copy files and run the checklist.
 
-The anti-slop skill (`skills/anti-slop/` — SKILL.md and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector for per-edit advisories and final-review axis 4. The session final-review runs a **session-scoped** scan (only the files changed this session) — never `--all`, which audits the entire pre-existing codebase and is out of scope for a bounded review.
+The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scanner) installs to `~/.cursor/skills/anti-slop/`. The hook checklist (`~/.agents/hooks/anti-slop.md`, 21 items) is the canonical slop detector the final-review follow-up points the model at. The session final-review tells the model to apply it to the session diff; `cursordoctrine sweep` is the separate on-demand pass for accumulated slop across the whole repo.
 
 ### Session review vs. `sweep` — two jobs, two scopes
 
-The bounded session final-review and the whole-codebase `sweep` solve different problems and must not be mixed:
-
-- **Session final-review** (`stop` / `subagentStop`): scans only the files the agent changed this session. Fixes are limited to lines the agent added. Pre-existing slop is out of scope (axis 0 intent-trace; touching it is scope creep, and 100+ files won't fit in one bounded pass).
+- **Session final-review** (`stop`): scans only the files `git` sees as changed this session. Fixes are limited to lines the agent added. Pre-existing slop is out of scope (axis 0 intent-trace; touching it is scope creep, and 100+ files won't fit in one bounded pass).
 - **`npx cursordoctrine sweep`**: whole-repo cleanup. Runs the scanner in `--all` mode across every tracked file, prints a category-by-category breakdown, and hands off to the agent under a cleanup doctrine that authorizes fixing pre-existing slop, category by category, with a re-scan after each. Use it when you want a codebase cleanup, not on every session.
-
-Session review stays bounded so it can finish. Sweep is the on-demand pass for accumulated slop across the repo.
-
-## The proactive phase: the Anchor Set
-
-The reactive stack (self-review, anti-slop, final-review) only fires *after* code exists. If the agent drifted from the request on its first token, a clean final review of the wrong feature is still the wrong feature. The pre-compile phase puts the right feature on the rails first.
-
-`pre-compile.md` (injected at session start alongside the doctrine) asks the agent to emit, terse, before any code:
-
-1. **OBJECTIVE** — one operational sentence. Not "improve X" but "make X return Y when Z".
-2. **CONSTRAINTS** — local negations: what it will NOT do (no schema migration, no new dep, no refactor of the surrounding function).
-3. **SCOPE** — files to touch (exact, derived from the objective) and files untouchable.
-4. **DETERMINISTIC SUCCESS** — the one command, test, or observable check that decides done.
-
-It then writes that contract to `.scope.json` in the repo root:
-
-```json
-{
-  "intent": "make /api/login return 401 instead of 500 on a bad password",
-  "files": ["src/api/login.ts", "tests/login.test.ts"],
-  "acceptance": "tests/login.test.ts passes; curl /api/login with wrong password returns 401",
-  "allow_growth": false
-}
-```
-
-Two machine-checkable consequences:
-
-- **`scope-gate-audit`** (afterFileEdit, opt-in via `.scope.json` existing) auto-records every edited file into `.scope.json`'s `files[]`. The contract's footprint is always an accurate ledger of what the session touched — the agent never maintains it by hand. `final-review` audits that footprint against `intent` (the "you touched 8 files for a 1-line request — justify" axis).
-- **final-review axis 0** (intent trace) traces every diff hunk back to `intent`. Anything untraceable is a hallucinated requirement.
-
-**Before the agent's first token**, `intent-precompile` (`beforeSubmitPrompt`) materializes the Anchor Set: the moment you hit send it writes `.scope.json` to the repo root with `intent` locked from the prompt (which is in the event payload directly) and `acceptance` seeded with a real default — so the contract is the first artifact of the turn. `intent-anchor` (`postToolUse`) then re-injects it into context on the first tool boundary. One contract per prompt, re-injection per turn. The intent-anchor latch is armed on first fire and cleared **unconditionally** by the stop hook on every turn boundary, so the next turn re-fires and can never get stranded silenced mid-session.
-
-The Anchor Set is skipped for trivial one-liners (typo, literal) — the `declared-editing.md` ladder's rung 1 governs when it's overkill.
-
-### Contract first, then kept alive: `intent-precompile` + `intent-anchor`
-
-The contract has to exist *before* the agent edits and stay in focus *as* it edits. Two hooks, two jobs:
-
-**`intent-precompile` (`beforeSubmitPrompt`) — write it first.** This event fires right after the user hits send, before the backend request, with the user's `prompt` in the payload directly — no `<user_query>` extraction, no transcript dependency, no contamination from auto-submitted review followups. When the prompt is new (its `_intent_hash` differs from the contract on disk) it writes a fresh `.scope.json`: `intent` locked from the prompt, `files: []`, `acceptance` seeded with a real default (never a bare `<TODO>` — a placeholder that looks owned and never gets filled was the old failure mode), `_intent_hash` for change detection. It also stashes the verbatim prompt so `intent-anchor` reads the *same* ground-truth text. Same prompt on disk → left intact, preserving the agent's refined `intent`/`acceptance`/`files`. Hook-generated submits are skipped.
-
-**`intent-anchor` (`postToolUse`, registered first so it runs before `post-tool-use` drains the bus) — keep it alive.** As a conversation fills with code, logs and errors, the token of the original request shrinks to a rounding error against recent history — *Salience Dilution* — and the agent stops checking the contract. So on the first tool boundary of every turn (per-turn latch, cleared unconditionally at each stop) it reads `.scope.json` and stashes `intent` + `files` + `acceptance` into the feedback bus, which `post-tool-use` delivers as `additional_context` — the contract back in attentional focus before edits pile up. It also **falls back to creating the contract** if `beforeSubmitPrompt` didn't run (older Cursor), and re-injects a loud demand each turn until the agent sharpens the seeded `acceptance` to the one deterministic check.
-
-> **The hooks write `.scope.json` deliberately.** The contract must exist before the agent edits and track the request. Safeguards: (a) **never writes to `$HOME`** — if the repo root can't be resolved the hook stays silent rather than drop a ghost file; (b) **regenerates on prompt CHANGE, not every turn** — staleness is tracked via `_intent_hash` in the file, and `intent-precompile`/`intent-anchor` share one hashing helper so a same-prompt turn re-injects without rewriting; (c) **`trace.query` stays verbatim** as the audit anchor even when the agent normalizes `intent`.
-
-`intent-anchor` carries the **semantic** contract (`intent`/`acceptance`) into context every turn. `scope-gate-audit` only tracks file paths. That difference is why "the agent forgot about grid symmetry while editing the right file" is catchable: the symmetry requirement goes back in front of the model before each edit, instead of only checking the file list afterward.
 
 ## The flows
 
 | Flow | Event | What happens |
 |---|---|---|
-| Submit | `beforeSubmitPrompt` | **`intent-precompile`** writes `.scope.json` to the repo root from the prompt in the payload — **before the agent's first token** — with `intent` locked and `acceptance` seeded, and stashes the verbatim prompt for `intent-anchor`. Skips hook-generated auto-submits; hash-gated so the agent's refinements survive. |
-| Session | `sessionStart` | `inject-doctrine` reads doctrine + user rules + declared-editing + **pre-compile** and emits them as `additional_context`. |
-| Every turn | `postToolUse` | **`intent-anchor`** (registered first) re-injects `.scope.json` into `additional_context` at the first tool boundary of each turn — the anti-Salience-Dilution move that keeps `intent` + `acceptance` in the model's attentional focus before edits pile up, and demands the seeded `acceptance` be sharpened. Then `post-tool-use` folds subagent markers and drains the feedback file. |
-| Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, fail open. |
-| Edit | `afterFileEdit` + `stop` | **Proactive:** `intent-precompile` writes the contract per prompt; `intent-anchor` re-injects it each turn. **Reactive:** `self-review-trigger` stashes the review prompt per edit; `semantic-density-audit`, `scope-gate-audit` (opt-in, audits `.scope.json`), and `anti-slop-audit` append advisories when they trip; `final-review` fires one end-of-implementation seven-axis pass. |
-| Subagent | `subagentStop` | `subagent-stop-review` fires one in-subagent final review when a delegated run edited files, before the result returns to the parent. Marker-gated and flag-braked like `final-review`. |
+| Session | `sessionStart` | `inject-doctrine` reads `doctrine.md` and emits it as `additional_context`. |
+| Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, **fail closed**. |
+| Stop | `stop` | `final-review` reads `git diff --name-only HEAD` + untracked files, pulls the last user `<user_query>` from the transcript for intent trace, and emits one `FINAL REVIEW` follow-up if anything changed. Bounded by a per-cid one-shot brake (`reviewed-<cid>.flag`) and `loop_limit: 2`. |
 
 ## Layout
 
 ```
 windows/          PowerShell 7 hooks (pwsh) — install on Windows machines
-  hooks.json      hook wiring for ~/.cursor/hooks.json
-  inject-doctrine.ps1, doctrine.md, USER-RULES.md,
-  declared-editing.md, pre-compile.md
-  hooks/          the ten hook scripts + hook-common.ps1 (shared) + 3 prompt files
-                  (anti-slop.md, self-review.md, final-review.md)
+  hooks.json      3-event hook wiring for ~/.cursor/hooks.json
+  inject-doctrine.ps1, doctrine.md
+  hooks/          permission-gate.ps1, final-review.ps1, hook-common.ps1 (shared)
+                  + 3 prompt files: anti-slop.md, final-review.md, cleanup-doctrine.md
 linux/            bash hooks — install on Linux machines and SSH remotes
-  hooks.json, inject-doctrine.sh, doctrine.md, USER-RULES.md,
-  declared-editing.md, pre-compile.md
+  hooks.json, inject-doctrine.sh, doctrine.md
   hooks/          same hooks, ported to bash (jq preferred, python3 fallback)
 skills/           Cursor agent skills shipped with the package
-  anti-slop/      SKILL.md + the duplication scanner (final review runs it)
-                  scripts/scan_slop.py, low_density.py, density_scan.py
+  anti-slop/      SKILL.md + the duplication scanner (`cursordoctrine sweep` runs it)
+                  scripts/scan_slop.py, low_density.py
 bin/              the npm CLI (npx cursordoctrine install / verify / sweep / uninstall)
 INSTALL.md        ready-to-paste prompt that tells a Cursor agent to
                   install the right folder and verify every hook
@@ -156,23 +97,16 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `HOOKS_ENFORCE=0` | on | turns off all advisory hooks at once |
+| `HOOKS_ENFORCE=0` | on | turns off all hooks at once |
 | `PERM_GATE_ENFORCE=0` | on | disables the permission gate |
-| `INTENT_ANCHOR_ENFORCE=0` | on | disables the thin-intent `.scope.json` scaffold + re-injection |
-| `SCOPE_GATE_ENFORCE=0` | on | disables the declared-scope advisory (opt-in: only fires when `.scope.json` exists) |
-| `SEMANTIC_DENSITY_ENFORCE=0` | on | disables the semantic-opacity advisory |
-| `ANTI_SLOP_ENFORCE=0` | on | disables the slop advisory |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
-| `SUBAGENT_REVIEW_ENFORCE=0` | on | disables the in-subagent review pass |
-| `ANTI_SLOP_CHECKLIST_LINES` | 40 | added-lines threshold for the checklist |
 
 ## Design notes
 
-- **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id. No repo litter. Concurrent sessions can't drain each other's prompts. Stale state older than 7 days gets swept on every stop.
-- **`afterFileEdit` output isn't consumed by Cursor**, so edit hooks write to a pending file and `post-tool-use` re-emits it at the next tool boundary. That's the whole message bus.
-- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation. The `intent-anchor` per-turn latch is separate and simpler: it's cleared **unconditionally** on every stop, so the scaffold/re-inject re-fires on the first tool of each new turn and can never get stranded silenced mid-session.
-- **The `.scope.json` contract is opt-in.** No `.scope.json` in the repo root → `scope-gate-audit` stays silent and the system falls back to the `declared-editing` ladder plus the final-review footprint check. Writing the file is how the agent opts into a machine-checked scope.
-- **Subagents are first-class.** `afterFileEdit` fires inside subagents keyed by the subagent's conversation id. The harness normalizes agent edits (incl. `StrReplace`) to tool type `Write`, and `postToolUse` never fires for the `Task` tool — verified by payload capture. Matchers cover `Write|StrReplace|EditNotebook` defensively. `subagentStop` reviews the subagent in its own context. The parent folds orphaned subagent markers (from the `subagents/` transcript directory) into its own at every tool boundary and at stop.
+- **State lives under `$HOME`**, in `~/.cursor/.hooks-pending/`, keyed by conversation id. Just one file: `reviewed-<cid>.flag` (the one-shot brake for `final-review`). Stale state older than 7 days gets swept on every stop. No repo litter.
+- **Change detection is stateless.** `final-review` asks `git` what changed. No marker file the agent has to maintain, no `.scope.json` contract written to every repo.
+- **One review per implementation.** The stop hook arms a per-conversation flag before emitting its follow-up, so a crash can't re-fire it and a long chat still gets a review after each implementation.
+- **The doctrine is short on purpose.** 80 lines the agent reads at sessionStart and internalizes. No re-injection per turn, no `.scope.json` bookkeeping — the model either understood the doctrine or it didn't, and re-injecting it 50 times doesn't fix that.
 
 Self-contained. No build. Open `hooks.json` and read it — that's the whole system in one file.
 
