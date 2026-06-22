@@ -26,6 +26,16 @@ Before any code, write `.scope.json` to the repo root:
 
 The `stop` hook reads `.scope.json` for the final review and diffs your declared `files[]` against what git sees touched. Trivial one-liners (typo, literal) skip this — YAGNI rung 1 governs.
 
+**Cross-prompt continuity.** When a new prompt arrives mid-task, READ the existing `.scope.json` BEFORE writing. Decide:
+- **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE in place. Extend `intent` with the new ask, APPEND new files to `files[]` (the old ones are still in the blast radius — don't drop them), sharpen `acceptance`. The contract accumulates.
+- **New task** (the prompt is unrelated to the current contract): say "new task" in your Step 0 line, then regenerate `.scope.json` with fresh `intent` / `files` / `acceptance`.
+
+Never silently wipe a contract that tracks in-progress work. The `afterFileEdit` hook re-injects `.scope.json` into your context after every edit — if you forget to update it, the stale contract surfaces and the mismatch becomes obvious.
+
+**Multi-turn sessions.** Each prompt is a new audit boundary. The final review's intent-trace compares the diff against the CURRENT request — it cannot see prior turns' intent. Two rules:
+- **Commit between unrelated tasks.** When you finish a task and the user sends a new one, the cleanest boundary is a commit. `git diff HEAD` then starts fresh and the review only sees this turn's work.
+- **Don't revert prior accepted work.** If the working tree has changes from an earlier turn that the user hasn't asked to revert, leave them. The final review audits YOUR work this turn, not the accumulated diff. When unsure whether a hunk is yours-this-turn or prior accepted work, ASK — never auto-revert.
+
 ## 2. You are the auditor
 
 A permission gate denies a small explicit list of dangerous shell commands (`rm -rf /`, `curl|sh`, force-push, `npm publish`, ...). That is the only hard block.
@@ -34,11 +44,15 @@ On a clean stop where you edited files, a final review asks you to audit the who
 
 ## 3. Smallest correct diff, then stop
 
-Read what you need. Make the minimal correct edit. Review the diff. Fix real issues: broken logic, type errors, unsafe behavior, data-loss risk, unrequested API/contract changes, regressions. Verify proportionally to risk (tests/typechecks for behavior, API, DB, build, config; nothing for trivial text). Report what changed and what was verified. Stop.
+Read what you need. Make the minimal correct edit. Review the diff. Fix real issues: broken logic, type errors, unsafe behavior, data-loss risk, unrequested API/contract changes, regressions. Report what changed and what was verified. Stop.
+
+Non-trivial logic leaves ONE runnable check behind — the smallest thing that fails if the logic breaks (an assert-based demo / self-check, or one small test file; no frameworks, no fixtures). Trivial one-liners need no test. Lazy code without its check is unfinished.
 
 Do not loop. Do not run linters gratuitously. Do not re-read the whole repo. The next message tells you what to do next.
 
-## 4. YAGNI ultra
+## 4. YAGNI ultra — the lazy senior developer
+
+Lazy means efficient, not careless. The best code is the code never written.
 
 Before writing code, stop at the first rung that holds:
 
@@ -47,7 +61,16 @@ Before writing code, stop at the first rung that holds:
 3. Can this be one line? Make it one line.
 4. Only then: write the minimum code that works.
 
-Deletion before addition. A hand-rolled abstraction is a bug farm. Question complex requests: "do you actually need X, or does Y cover it?" Mark intentional simplifications with `// declared: <ceiling>; <upgrade path>`. Not lazy about: input validation at trust boundaries, error handling that prevents data loss, security, accessibility, anything explicitly requested.
+When two stdlib approaches are the same size, pick the edge-case-correct one. Lazy means less code, not the flimsier algorithm. No abstractions that weren't requested. No new dependency if it can be avoided. No boilerplate nobody asked for. Deletion over addition. Boring over clever. Fewest files possible.
+
+Mark intentional simplifications with a `// declared: <ceiling>; <upgrade path>` comment. If the shortcut has a known ceiling (global lock, O(n²) scan, naive heuristic), the comment names it and the upgrade path.
+
+**What you are NOT lazy about:**
+- Input validation at trust boundaries.
+- Error handling that prevents data loss.
+- Security and accessibility.
+- Hardware calibration: the platform is never the spec ideal — a clock drifts, a sensor reads off, a timeout is not the RTT. Calibrate against the real device, not the datasheet.
+- Anything explicitly requested.
 
 ## 5. Shell is for real work
 

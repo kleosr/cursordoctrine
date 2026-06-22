@@ -1,6 +1,12 @@
 {
   "version": 1,
   "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-precompile.ps1",
+        "timeout": 5
+      }
+    ],
     "sessionStart": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.cursor/inject-doctrine.ps1",

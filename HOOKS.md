@@ -5,9 +5,21 @@ spec-clean: only the documented Cursor options (`command`, `timeout`,
 `loop_limit`, `failClosed`). Aligns with https://cursor.com/docs/hooks.
 
 Kill switches: any hook no-ops when `HOOKS_ENFORCE=0`; each also has its own
-(`PERM_GATE_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`). The final-review brake
-state lives under `~/.cursor/.hooks-pending/`, keyed by `conversation_id`.
-Never committed.
+(`PERM_GATE_ENFORCE=0`, `INTENT_PRECOMPILE_ENFORCE=0`, `SCOPE_REFRESH_ENFORCE=0`,
+`FINAL_REVIEW_ENFORCE=0`). The final-review brake state lives under
+`~/.cursor/.hooks-pending/`, keyed by `conversation_id`. Never committed.
+
+## beforeSubmitPrompt — intent-precompile (.ps1/.sh)
+5s. Fires right after the user hits send, BEFORE the agent's first token, with
+the prompt in the payload directly. Writes the prompt as `.scope.json`'s
+`intent` field. If `.scope.json` already exists, **preserves `files[]` and
+`acceptance`** (cross-prompt continuity — the blast radius accumulates). If it
+doesn't exist, creates it fresh with a default acceptance.
+
+This is the hook that makes `.scope.json` track the conversation without
+relying on the agent to write it. Skips hook-generated auto-submits (FINAL
+REVIEW / SCOPE REMINDER / etc.). Never blocks. No repo root → silent. Disable:
+`INTENT_PRECOMPILE_ENFORCE=0`.
 
 ## sessionStart — inject-doctrine (.ps1/.sh)
 5s. Reads `~/.cursor/doctrine.md` and emits it as `{"additional_context": ...}`

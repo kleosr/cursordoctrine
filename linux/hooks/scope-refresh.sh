@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# scope-refresh.sh - afterFileEdit: re-stash .scope.json for scope-drain to deliver.
+# scope-refresh.sh - afterFileEdit: record the edit into .scope.json files[], then stash for re-injection.
 #
-# Per-edit re-injection against Salience Dilution: as a turn fills with code,
-# logs and errors, the intent declared at Step 0 shrinks to a rounding error
-# and the agent drifts. afterFileEdit fires right after every Write; this hook
-# reads the contract and stashes a one-line reminder to the per-cid pending
-# file. scope-drain.sh (postToolUse, fires next) delivers it as
-# additional_context. Cursor does not consume afterFileEdit output directly,
-# which is why the stash-and-drain pair exists.
+# Two jobs on every edit, both deterministic:
+#   1. RECORD: append the edited file to .scope.json's files[] (dedup, preserve
+#      order, never touch .scope.json itself). The agent is unreliable at
+#      maintaining files[] by hand; this hook keeps it an accurate session
+#      footprint without relying on the model. Other fields (intent, acceptance)
+#      are preserved verbatim.
+#   2. STASH: write a one-line reminder (intent / files / acceptance) to the
+#      per-cid pending file. scope-drain.sh (postToolUse, fires next) delivers
+#      it as additional_context. Per-edit re-injection against Salience
+#      Dilution: keeps the contract visible as a turn fills with code.
 #
-# One state file (scope-<cid>.txt), no hashes, no latches, no per-prompt
-# detection. The agent owns .scope.json; this hook only re-surfaces it.
-# Disable: HOOKS_ENFORCE=0 or SCOPE_REFRESH_ENFORCE=0.
+# Cursor does not consume afterFileEdit output directly, which is why the
+# stash-and-drain pair exists. Writing .scope.json via shell redirection is
+# NOT a tool invocation, so it does not re-trigger afterFileEdit.
+#
+# One state file (scope-<cid>.txt), no hashes, no latches. Silent when no
+# .scope.json exists (trivial edits, fresh repos). Disable: HOOKS_ENFORCE=0
+# or SCOPE_REFRESH_ENFORCE=0.
 
 set +e
 . "$(dirname "$0")/hook-common.sh"
@@ -32,6 +39,62 @@ scope_path="$root/.scope.json"
 scope_raw="$(cat "$scope_path" 2>/dev/null)"
 [ -n "$scope_raw" ] || exit 0
 
+# --- 1. RECORD: append the edited file to files[] if not already present --------
+edited_file=""
+for k in file_path path filename absolute_path abs_path; do
+    v="$(json_get "$input" "$k")"
+    if [ -n "$v" ]; then edited_file="$v"; break; fi
+done
+
+if [ -n "$edited_file" ]; then
+    # Repo-relative forward-slash path
+    rel="$(printf '%s' "$edited_file" | tr '\\' '/' )"
+    root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+    case "$rel" in
+        "$root_fwd"/*) rel="${rel#"$root_fwd"/}" ;;
+        "$root_fwd") rel="" ;;
+    esac
+    rel="${rel#/}"
+
+    # Never record the contract file itself.
+    if [ -n "$rel" ] && [ "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" != ".scope.json" ]; then
+        if have_jq; then
+            # Check if already present (case-insensitive, slash-normalized)
+            present="$(printf '%s' "$scope_raw" | jq -r --arg f "$rel" '
+                (.files // []) | map(ltrimstr("/") | ascii_downcase)
+                | index($f | ltrimstr("/") | ascii_downcase) // empty' 2>/dev/null)"
+            if [ -z "$present" ]; then
+                # Append and write back, preserving all other fields.
+                new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" \
+                    '.files = (((.files // []) | map(select(. != null and . != "" and . != "<TODO>"))) + [$f])' 2>/dev/null)"
+                if [ -n "$new_raw" ]; then
+                    printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                    scope_raw="$new_raw"
+                fi
+            fi
+        elif have_py; then
+            new_raw="$(printf '%s' "$scope_raw" | F="$rel" python3 -c '
+import json, os, sys
+try:
+    o = json.load(sys.stdin)
+    f = os.environ["F"]
+    files = [x for x in (o.get("files") or []) if x and x != "<TODO>"]
+    norm = lambda s: s.replace("\\", "/").lstrip("/").lower()
+    if norm(f) not in {norm(x) for x in files}:
+        files.append(f)
+    o["files"] = files
+    print(json.dumps(o, indent=2, ensure_ascii=False))
+except Exception:
+    pass' 2>/dev/null)"
+            if [ -n "$new_raw" ]; then
+                printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                scope_raw="$new_raw"
+            fi
+        fi
+    fi
+fi
+
+# --- 2. STASH: reminder for scope-drain to deliver as additional_context -------
 if have_jq; then
     intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
     acceptance="$(printf '%s' "$scope_raw" | jq -r '.acceptance // empty' 2>/dev/null)"
@@ -59,7 +122,7 @@ msg="SCOPE REMINDER (re-injected after your edit):
   acceptance: $acceptance"
 msg="$msg
 
-Confirm this edit advances intent and stays inside files[]. If not, reconcile .scope.json or revert."
+Confirm this edit advances intent. The file you just edited was recorded into files[]."
 
 pending="$HOME/.cursor/.hooks-pending/scope-$cid.txt"
 mkdir -p "$(dirname "$pending")" 2>/dev/null

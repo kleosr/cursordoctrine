@@ -1,16 +1,23 @@
-# scope-refresh.ps1 - afterFileEdit: re-stash .scope.json for scope-drain to deliver.
+# scope-refresh.ps1 - afterFileEdit: record the edit into .scope.json files[], then stash for re-injection.
 #
-# Per-edit re-injection against Salience Dilution: as a turn fills with code,
-# logs and errors, the intent declared at Step 0 shrinks to a rounding error
-# and the agent drifts. afterFileEdit fires right after every Write; this hook
-# reads the contract and stashes a one-line reminder to the per-cid pending
-# file. scope-drain.ps1 (postToolUse, fires next) delivers it as
-# additional_context. Cursor does not consume afterFileEdit output directly,
-# which is why the stash-and-drain pair exists.
+# Two jobs on every edit, both deterministic:
+#   1. RECORD: append the edited file to .scope.json's files[] (dedup, preserve
+#      order, never touch .scope.json itself). The agent is unreliable at
+#      maintaining files[] by hand; this hook keeps it an accurate session
+#      footprint without relying on the model. Other fields (intent, acceptance)
+#      are preserved verbatim.
+#   2. STASH: write a one-line reminder (intent / files / acceptance) to the
+#      per-cid pending file. scope-drain.ps1 (postToolUse, fires next) delivers
+#      it as additional_context. Per-edit re-injection against Salience
+#      Dilution: keeps the contract visible as a turn fills with code.
 #
-# One state file (scope-<cid>.txt), no hashes, no latches, no per-prompt
-# detection. The agent owns .scope.json; this hook only re-surfaces it.
-# Disable: HOOKS_ENFORCE=0 or SCOPE_REFRESH_ENFORCE=0.
+# Cursor does not consume afterFileEdit output directly, which is why the
+# stash-and-drain pair exists. Writing .scope.json via [IO.File]::WriteAllText
+# is NOT a tool invocation, so it does not re-trigger afterFileEdit.
+#
+# One state file (scope-<cid>.txt), no hashes, no latches. Silent when no
+# .scope.json exists (trivial edits, fresh repos). Disable: HOOKS_ENFORCE=0
+# or SCOPE_REFRESH_ENFORCE=0.
 
 $ErrorActionPreference = 'SilentlyContinue'
 . "$PSScriptRoot\hook-common.ps1"
@@ -32,13 +39,56 @@ try {
 } catch { exit 0 }
 if (-not $sj) { exit 0 }
 
-$intent    = if ($sj.PSObject.Properties['intent']    -and $sj.intent)    { [string]$sj.intent } else { '' }
-$files     = if ($sj.PSObject.Properties['files']     -and $sj.files)     { (@($sj.files) -join ', ') } else { '(none yet)' }
+# --- 1. RECORD: append the edited file to files[] if not already present --------
+$editedFile = ''
+foreach ($k in 'file_path', 'path', 'filename', 'absolute_path', 'abs_path') {
+    if ($obj.PSObject.Properties[$k] -and $obj.$k) { $editedFile = [string]$obj.$k; break }
+}
+if ($editedFile) {
+    $rel = ConvertTo-FwdPath $editedFile
+    if ($rel.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
+        $rel = $rel.Substring($root.Length + 1)
+    }
+    $rel = $rel.TrimStart('/')
+    # Never record the contract file itself, and skip empty paths.
+    if ($rel -and $rel -ine '.scope.json') {
+        $existing = @()
+        if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
+        # Drop placeholder / blank entries, normalize for comparison.
+        $kept = New-Object System.Collections.Generic.List[string]
+        foreach ($e in $existing) {
+            $s = [string]$e
+            if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s)) { continue }
+            $kept.Add($s) | Out-Null
+        }
+        $already = $false
+        foreach ($f in $kept) {
+            if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }
+        }
+        if (-not $already) {
+            $kept.Add($rel) | Out-Null
+            try {
+                # Preserve field order; only replace files[].
+                $ordered = [ordered]@{}
+                foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
+                $ordered['files'] = @($kept.ToArray())
+                $json = $ordered | ConvertTo-Json -Depth 8
+                [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+                # Refresh $sj so the stash reflects the updated files[].
+                $sj = $json | ConvertFrom-Json
+            } catch { }
+        }
+    }
+}
+
+# --- 2. STASH: reminder for scope-drain to deliver as additional_context -------
+$intent     = if ($sj.PSObject.Properties['intent']     -and $sj.intent)     { [string]$sj.intent } else { '' }
+$filesList  = if ($sj.PSObject.Properties['files']      -and $sj.files)      { (@($sj.files) -join ', ') } else { '(none yet)' }
 $acceptance = if ($sj.PSObject.Properties['acceptance'] -and $sj.acceptance) { [string]$sj.acceptance } else { '' }
 
-$msg = "SCOPE REMINDER (re-injected after your edit):`n  intent: $intent`n  files: $files"
+$msg = "SCOPE REMINDER (re-injected after your edit):`n  intent: $intent`n  files: $filesList"
 if ($acceptance) { $msg += "`n  acceptance: $acceptance" }
-$msg += "`n`nConfirm this edit advances intent and stays inside files[]. If not, reconcile .scope.json or revert."
+$msg += "`n`nConfirm this edit advances intent. The file you just edited was recorded into files[]."
 
 $pending = Join-Path $HOME ".cursor\.hooks-pending\scope-$cid.txt"
 try {

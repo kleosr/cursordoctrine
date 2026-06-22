@@ -339,6 +339,60 @@ function verify() {
   check('permission gate denies `git push --force`', () =>
     /"permission"\s*:\s*"deny"/.test(runHook(hook('permission-gate'), { command: 'git push --force' })));
 
+  check('intent-precompile writes .scope.json from the prompt', () => {
+    // Plant a prompt via beforeSubmitPrompt; confirm .scope.json gets the
+    // prompt as intent. Then fire a second prompt and confirm intent updates
+    // while files[] (simulated) is preserved.
+    const repoDir = join(HOME, '.cd-verify-precompile');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      // First prompt: creates .scope.json.
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'fix the sidebar' });
+      if (!existsSync(scopePath)) return { ok: false, detail: '.scope.json was not created' };
+      let s;
+      try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
+      catch { return { ok: false, detail: '.scope.json is not valid JSON' }; }
+      if (s.intent !== 'fix the sidebar') return { ok: false, detail: `intent mismatch: ${s.intent}` };
+      if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: 'files[] should start empty' };
+      // Simulate scope-refresh having recorded a file.
+      s.files = ['src/Sidebar.tsx'];
+      writeFileSync(scopePath, JSON.stringify(s), 'utf8');
+      // Second prompt: intent updates, files[] preserved.
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'now add dark mode' });
+      try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
+      catch { return { ok: false, detail: '.scope.json corrupted on second prompt' }; }
+      if (s.intent !== 'now add dark mode') return { ok: false, detail: `intent not updated: ${s.intent}` };
+      if (!Array.isArray(s.files) || s.files.length !== 1 || s.files[0] !== 'src/Sidebar.tsx') {
+        return { ok: false, detail: `files[] not preserved: ${JSON.stringify(s.files)}` };
+      }
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  check('intent-precompile skips hook-generated prompts', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-skip');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      // Seed with a real intent.
+      runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'fix the sidebar' });
+      let before = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (before.intent !== 'fix the sidebar') return { ok: false, detail: 'seed failed' };
+      // Fire a hook-generated prompt (FINAL REVIEW).
+      runHook(hook('intent-precompile'), { conversation_id: 'pc2', cwd: repoDir, prompt: 'FINAL REVIEW (end of implementation) - audit everything' });
+      let after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (after.intent !== 'fix the sidebar') return { ok: false, detail: 'hook-generated prompt overwrote intent' };
+      return true;
+    } finally {
+      try { rmSync(repoDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   check('permission gate allows `git status`', () =>
     /"permission"\s*:\s*"allow"/.test(runHook(hook('permission-gate'), { command: 'git status' })));
 
@@ -756,7 +810,8 @@ Examples
 Kill switches (environment variables, all hooks fail open)
   HOOKS_ENFORCE=0              everything advisory off
   PERM_GATE_ENFORCE=0          permission gate off
-  SCOPE_REFRESH_ENFORCE=0      .scope.json per-edit re-injection off
+  INTENT_PRECOMPILE_ENFORCE=0  .scope.json auto-write on prompt off
+  SCOPE_REFRESH_ENFORCE=0      per-edit re-injection + files[] recording off
   FINAL_REVIEW_ENFORCE=0       final review off
 
 Docs  https://github.com/kleosr/cursordoctrine`);

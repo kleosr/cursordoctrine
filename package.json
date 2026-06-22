@@ -1,7 +1,7 @@
 {
   "name": "cursordoctrine",
-  "version": "1.0.0",
-  "description": "Minimal Cursor hooks: doctrine at session start, a permission gate on shell, and one final review at stop. Three hooks, zero state.",
+  "version": "1.1.0",
+  "description": "Cursor hooks: doctrine at session start, intent-precompile (.scope.json), scope refresh/drain, permission gate, final review at stop.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
   },
@@ -15,6 +15,7 @@
     "linux/",
     "skills/",
     "docs/MCP.md",
+    "docs/USER-RULES.md",
     "INSTALL.md",
     "!**/__pycache__",
     "!**/*.pyc",

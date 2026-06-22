@@ -3,15 +3,18 @@ Untraceable or hallucinated work reverts; everything else gets fixed in place.
 If an axis is clean, one line — don't manufacture work.
 
 ## 0. Intent trace (run first — outranks all)
-Every diff hunk traces to the ORIGINAL REQUEST above. Anything that doesn't is
-a HALLUCINATED REQUIREMENT — feature, flag, refactor, abstraction, dep, or
-"nice to have" nobody asked for. Revert each. "Clean code, wrong feature" is
-the worst failure; no later axis catches it. (No ORIGINAL REQUEST → sandboxed
-run → skip.) If `.scope.json` exists, the header also carries a **Declared
-scope** block: every file in the blast radius you declared at Step 0 vs what
-git sees touched. Files you declared but didn't touch — did you miss them, or
-did they not need changes? Files you touched but didn't declare — that's scope
-creep, justify or revert.
+Every diff hunk traces to the ORIGINAL REQUEST above. "Clean code, wrong feature"
+is the worst failure; no later axis catches it. **BUT**: the working tree may
+contain accepted work from prior turns. Distinguish before you revert:
+- **Hunks YOU produced this turn** that don't trace to the current request →
+  hallucinated. Revert each.
+- **Hunks from prior turns** (already in the working tree when this turn
+  started) → prior accepted work. Do NOT revert. Flag and ASK if unclear.
+
+If `.scope.json` exists, the Declared scope block shows declared vs touched.
+Files you touched but didn't declare — scope creep IF you added them this turn;
+prior work IF they were already changed. When unsure whether a hunk is yours or
+prior, ASK — never auto-revert. (No ORIGINAL REQUEST → sandboxed run → skip.)
 
 ## 1. Correctness
 Logic does what the task requires. Edge cases: null / empty / zero / negative /
