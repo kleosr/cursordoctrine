@@ -110,22 +110,21 @@ prompt_file="$HOME/.agents/hooks/final-review.md"
 [ -f "$prompt_file" ] && body="$(cat "$prompt_file")"
 if [ -z "$body" ]; then
     body='FINAL REVIEW - audit everything you changed this session and FIX what fails
-(do NOT revert the behaviour the user asked for):
-  0. Intent trace - tie every diff hunk back to the ORIGINAL REQUEST above.
-     Anything untraceable is a hallucinated requirement: revert it. Runs FIRST.
+(do NOT revert the behaviour the user asked for). Run the axes in order.
+Emit ONE verdict line per axis, then any fixes:
+  axis N <name>: PASS | FIX (<what>) -> <what you did>
+Skip axes marked "(skip if ...)". Then stop. No summary paragraph.
+  0. Intent trace (run first, outranks all) - tie every diff hunk to ORIGINAL REQUEST.
+     Untraceable = hallucinated = revert. Prior-turn hunks stay.
   1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
   2. Reliability - error paths handled (no empty catch), timeouts/retries, resources
      released on every path, no races, input validated at the boundary.
-  3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present;
-     no tautological tests.
-  4. Anti-slop - read ~/.agents/hooks/anti-slop.md (single source of truth) and apply
-     all items to the session diff.
-  5. Wiring completeness - for every user-visible behavior you added/changed,
-     trace its execution path to a REAL EFFECT (persist, mutate, call, render).
-     A dead end is slop: handleSubmit that does not persist, an endpoint no caller
-     invokes, a stub/TODO/console.log standing in for the effect. Wire it now or
-     remove the dead half; mark later-stubs with TODO(wire):.
-Fix now, re-run tests, then stop. If an axis is clean, say so in one line.'
+  3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
+  4. Anti-slop - apply ~/.agents/hooks/anti-slop.md to the session diff.
+  5. Wiring completeness - trace user-visible changes to a REAL EFFECT (persist/mutate/render).
+  6. Mechanics - N+1, idempotency, txn/rollback, guard clauses, no primitive obsession.
+  7. Role-trace (skip if decomposition empty) - every step has verdict, no leakage.
+Fix now, re-run tests, then stop.'
 fi
 body="$(expand_agent_paths "$body")"
 
@@ -280,7 +279,7 @@ surface_block="Session footprint: ${unique_files} file(s) touched. If a simple r
 
 "
 
-msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, role-trace (if decomposed).
+msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, wiring, mechanics, role-trace (if decomposed). Emit one verdict line per axis (PASS | FIX).
 
 ${surface_block}${scope_block}${declared_note}${role_trace_block}${intent_block}Files you changed this session:
 $file_list
