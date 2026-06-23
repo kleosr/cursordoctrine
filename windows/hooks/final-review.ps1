@@ -250,7 +250,10 @@ if (Test-Path -LiteralPath $scopePath) {
                 $declaredNote = ($lines -join "`n") + "`n`n"
             }
         }
-        # Role-trace (axis 7): decomposition + verifications. Empty = YAGNI rung 1.
+        # Role-trace (axis 7): decomposition + verifications. Empty
+        # decomposition is YAGNI rung 1 ONLY for a trivial one-liner (<=1 file);
+        # for a multi-file task an empty decomposition is a CONTRACT GAP that
+        # FAILs axis 7 (the doctrine requires a plan for multi-step work).
         if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) {
             $decomp = @($sj.decomposition)
             $verifs = @()
@@ -298,6 +301,16 @@ if (Test-Path -LiteralPath $scopePath) {
                 $rtLines.Add("  Touched but NOT in any step's expected_files ($($leakage.Count)): " + (($leakage | Select-Object -First 8) -join ', '))
             }
             $roleTraceBlock = ($rtLines -join "`n") + "`n`n"
+        } elseif ($rel.Count -ge 2) {
+            # CONTRACT GAP: multi-file task with NO decomposition declared.
+            # Axis 7 FAILs (not SKIP) — the doctrine requires decomposition for
+            # any multi-step / multi-file change. $rel.Count is the real
+            # session-edit surface (excludes .scope.json + placeholders).
+            $gapLines = New-Object System.Collections.Generic.List[string]
+            $gapLines.Add("Decomposition: EMPTY for a $($rel.Count)-file task. The doctrine requires a decomposition[] for any multi-step / multi-file change.")
+            $gapLines.Add("  Declare it now: each entry { step (int), subtask (one-line), expected_files (array of paths) }.")
+            $gapLines.Add("  Axis 7 (role-trace) will FAIL until decomposition is declared. Trivial one-liners (<=1 file) are the only SKIP.")
+            $roleTraceBlock = ($gapLines -join "`n") + "`n`n"
         }
     } catch { }
 }
@@ -314,6 +327,13 @@ if ($userQuery) {
     } else {
         $intentBlock += "`n"
     }
+}
+# CONTRACT GAP: intent never written (empty or stale [DRAFT] from a legacy
+# install). Axis 0 FAILs until the agent writes a one-line Step 0 restatement
+# of THIS task in its own words (clearer than the verbatim prompt).
+if ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\[DRAFT\]') {
+    $intentGap = "CONTRACT GAP: .scope.json intent is empty/[DRAFT] - the agent never wrote its Step 0 restatement. Axis 0 (intent trace) will FAIL until you write a one-line restatement of THIS task in your own words (clearer/better than the verbatim prompt, NOT a copy).`n`n"
+    $intentBlock = $intentGap + $intentBlock
 }
 
 # --- change-surface metric ----------------------------------------------------

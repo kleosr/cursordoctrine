@@ -23,7 +23,7 @@ Rules:
 - **PASS** = axis is clean, no action needed.
 - **FAIL** = a real issue exists. Fix it NOW, then the line becomes `PASS — fixed: <what>`.
 - **N/A** = axis doesn't apply (e.g. no UI = wiring N/A, no tests exist = coverage N/A).
-- **SKIP** = axis 7 only, when decomposition is empty (trivial one-liner).
+- **SKIP** = axis 7 only, when decomposition is empty on a TRIVIAL one-liner (<=1 file).
 - **ACCEPT** = all axes PASS, N/A, or SKIP. Stop immediately after the report.
 - **REVISE** = any axis FAIL. Fix every FAIL, re-run tests, emit the report again
   with those lines now showing PASS. Then ACCEPT and stop.
@@ -37,7 +37,7 @@ No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 - [ ] Touched but not in `.scope.json` `files[]` → scope creep IF added this turn → revert.
 - [ ] Unsure if hunk is yours-this-turn → ASK, never auto-revert.
 - [ ] No ORIGINAL REQUEST (sandboxed run) → skip this axis.
-- [ ] `.scope.json` `intent` field is non-empty AND does NOT start with `[DRAFT]` AND reflects THIS turn's task. `[DRAFT]` or empty → rewrite it now (one-line restatement in your own words, remove the prefix).
+- [ ] `.scope.json` `intent` field is non-empty AND reflects THIS turn's task. It must be YOUR restatement — clearer/better than the verbatim prompt, NOT a copy of it. Empty (or a stale `[DRAFT]` from a legacy install) → rewrite it now (one-line, your own words). This axis FAILs on empty intent — do not ACCEPT until it's written.
 
 ## 1. Correctness
 - [ ] Logic does what the task requires (re-read the request, not the diff).
@@ -86,8 +86,8 @@ Fix by name (don't explain — delete and write the correct pattern).
 - [ ] Styling: Tailwind soup / magic tokens / hardcoded hex / `z-[9999]`.
 - [ ] Types: primitive obsession. Imperative `for` where `.map` / `.filter` work.
 
-## 7. Role-trace (SKIP if decomposition is empty)
+## 7. Role-trace (FAIL if decomposition is empty on a multi-file task)
 - [ ] Each `decomposition[i]` has a matching `verifications[i]` (else unfinished work — verify or remove the step).
 - [ ] Each `verifications[i].verdict == "ACCEPT"` (open REVISE → fix or convert with one-line justification).
 - [ ] No files touched this session outside any step's `expected_files` (else cross-step leakage — justify or revert).
-- [ ] Empty decomposition (trivial one-liner, typo) → SKIP this axis. YAGNI rung 1 governs.
+- [ ] Multi-file task (Session footprint >= 2) with empty decomposition → FAIL. Declare `decomposition[]` now: each entry `{ step, subtask, expected_files }`. This axis only SKIPs for a genuine trivial one-liner (<=1 file). YAGNI rung 1 governs only that case.

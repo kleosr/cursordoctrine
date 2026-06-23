@@ -32,8 +32,14 @@ if (-not $root) { exit 0 }
 
 # Per-cid throttle: the flag stores "filesCount:nudgeCount". Re-fire only when
 # files[] has grown since the last nudge AND we haven't exceeded the nudge cap
-# (default 3). After 3 nudges the hook stays silent — the agent clearly isn't
-# responding, and more noise just wastes context.
+# (default 8). The cap was 3 — too low: a 10-file task went permanently silent
+# after 3 ignored nudges and the contract stayed broken for the whole session.
+# 8 keeps the gap visible across most real multi-file tasks. After the cap the
+# hook stays silent (the final-review axis 0 FAIL is the backstop at stop time).
+$nudgeCap = 8
+if ($env:INTENT_ANCHOR_NUDGE_CAP) {
+    try { $nudgeCap = [int]$env:INTENT_ANCHOR_NUDGE_CAP } catch { }
+}
 $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
 $flag = Join-Path $pendingDir "intent-anchored-$cid.flag"
 
@@ -80,7 +86,7 @@ if (-not ($intentEmpty -or $intentDraft -or $acceptanceDefault)) {
 if ($lastCount -ge 0 -and $filesCount -le $lastCount) { exit 0 }
 
 # Contract incomplete but nudge cap exceeded → stay silent (stop pestering).
-if ($nudgeCount -ge 3) { exit 0 }
+if ($nudgeCount -ge $nudgeCap) { exit 0 }
 
 # Contract incomplete AND new files since last nudge AND under cap → emit.
 $nudgeCount++
@@ -104,7 +110,7 @@ if ($acceptanceDefault) {
 } else {
     $msg += "`n  - acceptance: OK"
 }
-$msg += "`n`nCurrent prompt: $prompt`nThis nudge re-fires on each new file edit until the contract is filled (nudge $nudgeCount of 3)."
+$msg += "`n`nCurrent prompt: $prompt`nThis nudge re-fires on each new file edit until the contract is filled (nudge $nudgeCount of $nudgeCap)."
 
 Write-HookJson @{ additional_context = $msg }
 exit 0
