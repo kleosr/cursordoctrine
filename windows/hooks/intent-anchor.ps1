@@ -32,11 +32,15 @@ if (-not $root) { exit 0 }
 
 # Per-cid throttle: the flag stores "filesCount:nudgeCount". Re-fire only when
 # files[] has grown since the last nudge AND we haven't exceeded the nudge cap
-# (default 8). The cap was 3 — too low: a 10-file task went permanently silent
-# after 3 ignored nudges and the contract stayed broken for the whole session.
-# 8 keeps the gap visible across most real multi-file tasks. After the cap the
-# hook stays silent (the final-review axis 0 FAIL is the backstop at stop time).
-$nudgeCap = 8
+# (default 99999 — effectively unlimited). History: the cap was 3 (too low: a
+# 10-file task went permanently silent after 3 ignored nudges and the contract
+# stayed broken for the whole session), then 8 (still exhausted mid-session on
+# a 30-file audit, leaving intent empty with zero further signal). A contract
+# that can be emptied by an ignoring agent is worse than a noisy one, so the cap
+# is now effectively unbounded. Re-nudges still only fire on NEW file edits
+# (avoids spamming when nothing changes); the final-review axis 0 FAIL is the
+# hard backstop at stop time. Override: INTENT_ANCHOR_NUDGE_CAP.
+$nudgeCap = 99999
 if ($env:INTENT_ANCHOR_NUDGE_CAP) {
     try { $nudgeCap = [int]$env:INTENT_ANCHOR_NUDGE_CAP } catch { }
 }

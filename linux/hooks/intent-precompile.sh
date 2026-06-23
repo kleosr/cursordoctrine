@@ -175,6 +175,18 @@ except Exception: pass' 2>/dev/null)"
     fi
     if [ "$(topic_changed "$prompt" "$old_prompt")" = "true" ]; then
         write_reset_scope "$prompt"
+        # Clear per-cid nudge throttle flags so the new task gets FRESH nudges.
+        # Without this, a topic change within the same conversation leaves stale
+        # throttle state from the OLD task (lastCount from the old, larger
+        # files[]) that permanently silences intent-anchor and milestone-verify
+        # for the new task whenever the new task's file count <= the old task's.
+        # This was the root cause of intent staying empty across task switches:
+        # the agent got ZERO nudges, not ignored ones.
+        _cid="$(safe_conversation_id "$input")"
+        if [ -n "$_cid" ]; then
+            _pdir="$HOME/.cursor/.hooks-pending"
+            rm -f "$_pdir/intent-anchored-$_cid.flag" "$_pdir/decompose-$_cid.flag" 2>/dev/null
+        fi
     else
         write_continuation_scope "$prompt" "$scope_raw"
     fi

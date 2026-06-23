@@ -94,6 +94,24 @@ try {
         if ($existing.PSObject.Properties['prompt']) { $oldPrompt = [string]$existing.prompt }
         if (Test-TopicChanged $prompt $oldPrompt) {
             $ordered = New-ResetScope $prompt
+            # Clear per-cid nudge throttle flags so the new task gets FRESH
+            # nudges. Without this, a topic change within the same conversation
+            # leaves stale throttle state from the OLD task (lastCount from the
+            # old, larger files[]) that permanently silences intent-anchor and
+            # milestone-verify for the new task whenever the new task's file
+            # count <= the old task's. This was the root cause of intent staying
+            # empty across task switches: the agent got ZERO nudges, not ignored
+            # ones. (intent-anchor/milestone-verify derive the same cid via
+            # Get-SafeConversationId, so deleting these flags resets their
+            # throttle for the new task.)
+            $cid = Get-SafeConversationId $obj
+            if ($cid) {
+                $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
+                foreach ($n in @("intent-anchored-$cid.flag", "decompose-$cid.flag")) {
+                    $fp = Join-Path $pendingDir $n
+                    if (Test-Path -LiteralPath $fp) { Remove-Item -LiteralPath $fp -Force -ErrorAction SilentlyContinue }
+                }
+            }
         } else {
             $ordered = [ordered]@{ prompt = $prompt }
             foreach ($p in $existing.PSObject.Properties) {

@@ -77,8 +77,13 @@ if [ "$_dl" -eq 0 ] 2>/dev/null; then
             _nc="$(cut -d: -f2 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _nc="${_nc:-0}"
         fi
         _fc="$_rfc"
-        _decompose_cap="${DECOMPOSE_NUDGE_CAP:-8}"
-        case "$_decompose_cap" in ''|*[!0-9]*) _decompose_cap=8 ;; esac
+        # Effectively unlimited (was 8 — exhausted mid-session on a 30-file
+        # task, leaving decomposition empty with no further signal). A contract
+        # that can be emptied by an ignoring agent is worse than a noisy one.
+        # Re-nudges still only fire when files[] grows (avoids spam). Override:
+        # DECOMPOSE_NUDGE_CAP.
+        _decompose_cap="${DECOMPOSE_NUDGE_CAP:-99999}"
+        case "$_decompose_cap" in ''|*[!0-9]*) _decompose_cap=99999 ;; esac
         # Re-nudge only when files[] grew since last nudge AND under the cap.
         _fire=false
         if [ "$_lc" -lt 0 ] 2>/dev/null; then _fire=true; fi

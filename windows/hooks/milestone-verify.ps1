@@ -69,7 +69,12 @@ if ($decomp.Count -eq 0) {
             } catch { }
         }
         $fc = $realFiles.Count
-        $decomposeCap = 8
+        # Effectively unlimited (was 8 — exhausted mid-session on a 30-file
+        # task, leaving decomposition empty with no further signal). A contract
+        # that can be emptied by an ignoring agent is worse than a noisy one.
+        # Re-nudges still only fire when files[] grows (avoids spam). Override:
+        # DECOMPOSE_NUDGE_CAP.
+        $decomposeCap = 99999
         if ($env:DECOMPOSE_NUDGE_CAP) {
             try { $decomposeCap = [int]$env:DECOMPOSE_NUDGE_CAP } catch { }
         }
