@@ -28,6 +28,10 @@
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/milestone-verify.ps1",
         "timeout": 5
+      },
+      {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/intent-anchor.ps1",
+        "timeout": 5
       }
     ],
     "beforeShellExecution": [

@@ -58,21 +58,21 @@ if [ -n "$edited_file" ]; then
 
     # Never record the contract file itself.
     if [ -n "$rel" ] && [ "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" != ".scope.json" ]; then
+        # Filter placeholders and append in one pass. The filter MUST run even
+        # when the edited file is already in files[] — otherwise garbage the
+        # agent seeded at Step 0 (<TODO:...>, blanks) stays forever, because
+        # re-edits never trigger the write-back path. The python version
+        # already did this correctly; the jq version now matches.
         if have_jq; then
-            # Check if already present (case-insensitive, slash-normalized)
-            present="$(printf '%s' "$scope_raw" | jq -r --arg f "$rel" '
-                (.files // []) | map(ltrimstr("/") | ascii_downcase)
-                | index($f | ltrimstr("/") | ascii_downcase) // empty' 2>/dev/null)"
-            if [ -z "$present" ]; then
-                # Append and write back, preserving all other fields. Drop any
-                # placeholder (a value whose trimmed form starts with "<TODO"),
-                # matching scope-refresh.ps1 so both platforms prune identically.
-                new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" \
-                    '.files = (((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not)))) + [$f])' 2>/dev/null)"
-                if [ -n "$new_raw" ]; then
-                    printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
-                    scope_raw="$new_raw"
-                fi
+            new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" '
+                .files = (
+                    ((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not))))
+                    + ([(.files // []) | map(ltrimstr("/") | ascii_downcase) | index($f | ltrimstr("/") | ascii_downcase)] | map(select(. != null)) | length as $present
+                       | if $present == 0 then [$f] else [] end)
+                )' 2>/dev/null)"
+            if [ -n "$new_raw" ] && [ "$new_raw" != "$scope_raw" ]; then
+                printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                scope_raw="$new_raw"
             fi
         elif have_py; then
             new_raw="$(printf '%s' "$scope_raw" | F="$rel" python3 -c '
@@ -90,7 +90,7 @@ try:
     print(json.dumps(o, indent=2, ensure_ascii=False))
 except Exception:
     pass' 2>/dev/null)"
-            if [ -n "$new_raw" ]; then
+            if [ -n "$new_raw" ] && [ "$new_raw" != "$scope_raw" ]; then
                 printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
                 scope_raw="$new_raw"
             fi

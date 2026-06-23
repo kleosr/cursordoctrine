@@ -1,14 +1,14 @@
 # Hooks — operational reference
 
-Seven hooks, six events. The `hooks.json` files (`windows/`, `linux/`) are
+Eight hooks, six events. The `hooks.json` files (`windows/`, `linux/`) are
 spec-clean: only the documented Cursor options (`command`, `timeout`,
 `loop_limit`, `failClosed`, `matcher`). Aligns with https://cursor.com/docs/hooks.
 
 Kill switches: any hook no-ops when `HOOKS_ENFORCE=0`; each also has its own
 (`PERM_GATE_ENFORCE=0`, `INTENT_PRECOMPILE_ENFORCE=0`, `SCOPE_REFRESH_ENFORCE=0`,
-`MILESTONE_VERIFY_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`). The final-review brake
-state lives under `~/.cursor/.hooks-pending/`, keyed by `conversation_id`.
-Never committed.
+`MILESTONE_VERIFY_ENFORCE=0`, `INTENT_ANCHOR_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`).
+The final-review brake state lives under `~/.cursor/.hooks-pending/`, keyed by
+`conversation_id`. Never committed.
 
 ## beforeSubmitPrompt — intent-precompile (.ps1/.sh)
 5s. Fires right after the user hits send, BEFORE the agent's first token, with
@@ -46,8 +46,8 @@ keeps the contract visible as a turn fills with code. Silent when no
 `.scope.json` exists (trivial edits, fresh repos). One state file, no hashes,
 no latches. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
-## postToolUse — scope-drain (.ps1/.sh) + milestone-verify (.ps1/.sh)
-5s each. Two entries run in array order.
+## postToolUse — scope-drain (.ps1/.sh) + milestone-verify (.ps1/.sh) + intent-anchor (.ps1/.sh)
+5s each. Three entries run in array order.
 
 **scope-drain:** Drains the per-cid `scope-<cid>.txt` stash (written by
 `scope-refresh`) into `additional_context`. One-shot: the stash is deleted on
@@ -66,6 +66,17 @@ Silent when: `.scope.json` missing; `decomposition[]` empty (YAGNI rung 1 —
 trivial one-liners); all steps already verified; no expected_files completed;
 kill switch set; (Linux) no python3 available (verdict-scrape needs regex on
 transcript text). Never blocks. Disable: `MILESTONE_VERIFY_ENFORCE=0`.
+
+**intent-anchor (one-shot contract nudge):** Fires at most once per
+conversation_id. On the first postToolUse where `.scope.json` exists and
+either `intent` is empty or `acceptance` is still the default seed, emits an
+`INTENT ANCHOR` reminder listing which agent-owned field is missing. Arms a
+per-cid flag (`intent-anchored-<cid>.flag`) BEFORE emitting, so a crash can't
+re-fire and the agent won't see the nudge twice in one session. If both fields
+are already filled/customized on first run, the flag is armed silently (no
+emission). The hook never writes those fields — it just surfaces the gap so
+final-review's axis 0 intent trace has something better than the raw prompt to
+work with. Disable: `INTENT_ANCHOR_ENFORCE=0`.
 
 ## beforeShellExecution — permission-gate (.ps1/.sh)
 5s, `failClosed: false`. Deny a small explicit list of dangerous commands

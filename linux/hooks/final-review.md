@@ -23,6 +23,8 @@ summary paragraph, no "in conclusion." Example:
 - [ ] Touched but not in `.scope.json` `files[]` → scope creep IF added this turn → revert.
 - [ ] Unsure if hunk is yours-this-turn → ASK, never auto-revert.
 - [ ] No ORIGINAL REQUEST (sandboxed run) → skip this axis.
+- [ ] `.scope.json` `intent` field is non-empty AND reflects THIS turn's task (not the raw prompt, not stale from a prior turn). Empty → write it now (one-line restatement).
+- [ ] `.scope.json` `acceptance` field is NOT the default seed (`Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.`). Default → sharpen it now to this task's real done-check.
 
 ## 1. Correctness
 - [ ] Logic does what the task requires (re-read the request, not the diff).

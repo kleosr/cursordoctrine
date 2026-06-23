@@ -55,6 +55,10 @@ if ($editedFile) {
         $existing = @()
         if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
         # Drop placeholder / blank entries, normalize for comparison.
+        # The filter runs unconditionally so re-edits of an already-recorded
+        # file still prune `<TODO:...>` and blank entries the agent may have
+        # seeded at Step 0. Without this, garbage stayed in files[] forever
+        # because the write-back was gated on "adding a new file."
         $kept = New-Object System.Collections.Generic.List[string]
         foreach ($e in $existing) {
             $s = [string]$e
@@ -67,6 +71,17 @@ if ($editedFile) {
         }
         if (-not $already) {
             $kept.Add($rel) | Out-Null
+        }
+        # Write back if the pruned list differs from the original (count or
+        # content), OR we just appended. This is what makes re-edits clean up
+        # placeholders instead of preserving them indefinitely.
+        $changed = (-not $already) -or ($kept.Count -ne $existing.Count)
+        if (-not $changed) {
+            for ($i = 0; $i -lt $kept.Count; $i++) {
+                if ([string]$kept[$i] -ne [string]$existing[$i]) { $changed = $true; break }
+            }
+        }
+        if ($changed) {
             try {
                 # Preserve field order; only replace files[].
                 $ordered = [ordered]@{}

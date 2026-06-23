@@ -48,7 +48,6 @@ const doctrineFiles = [injectName, 'doctrine.md'];
 // functions removed from hook-common. Only explicit basenames — never wildcards.
 const STALE_HOOK_FILES = [
   'anti-slop-audit.ps1', 'anti-slop-audit.sh',
-  'intent-anchor.ps1', 'intent-anchor.sh',
   'post-tool-use.ps1', 'post-tool-use.sh',
   'scope-gate-audit.ps1', 'scope-gate-audit.sh',
   'self-review-trigger.ps1', 'self-review-trigger.sh',
@@ -605,6 +604,114 @@ function verify() {
     }
   });
 
+  check('intent-anchor fires once when intent empty, then stays silent', () => {
+    const cidv = 'npxvia';
+    const repoDir = join(HOME, '.cd-verify-ia');
+    const scopePath = join(repoDir, '.scope.json');
+    const flagPath = join(pendingDir, `intent-anchored-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      rmBestEffort(flagPath);
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: '',
+        decomposition: [],
+        verifications: [],
+        files: ['src/login.tsx'],
+        acceptance: 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.',
+      }), 'utf8');
+      const first = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
+      if (!first.includes('additional_context') || !first.includes('INTENT ANCHOR')) {
+        return { ok: false, detail: `should fire on empty intent, got: ${first.slice(0, 200)}` };
+      }
+      if (!existsSync(flagPath)) {
+        return { ok: false, detail: 'flag was not armed after first fire' };
+      }
+      const second = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
+      if (second.includes('additional_context') || second.includes('INTENT ANCHOR')) {
+        return { ok: false, detail: 'should stay silent on second fire (flag armed)' };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
+    }
+  });
+
+  check('intent-anchor silent when intent and acceptance already filled', () => {
+    const cidv = 'npxvia2';
+    const repoDir = join(HOME, '.cd-verify-ia2');
+    const scopePath = join(repoDir, '.scope.json');
+    const flagPath = join(pendingDir, `intent-anchored-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      rmBestEffort(flagPath);
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: 'Add JWT login form with rate limit',
+        decomposition: [],
+        verifications: [],
+        files: ['src/login.tsx'],
+        acceptance: 'npm run test:e2e passes; rate limit holds at 5/min',
+      }), 'utf8');
+      const out = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
+      if (out.includes('additional_context') || out.includes('INTENT ANCHOR')) {
+        return { ok: false, detail: `should stay silent when contract is filled, got: ${out.slice(0, 200)}` };
+      }
+      if (!existsSync(flagPath)) {
+        return { ok: false, detail: 'flag should still be armed (so we never bug this cid again)' };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
+    }
+  });
+
+  check('scope-refresh prunes <TODO> entries on re-edit of already-recorded file', () => {
+    const cidv = 'npxvprune';
+    const repoDir = join(HOME, '.cd-verify-prune');
+    const scopePath = join(repoDir, '.scope.json');
+    const stashPath = join(pendingDir, `scope-${cidv}.txt`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      rmBestEffort(stashPath);
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix sidebar',
+        intent: 'fix layout',
+        decomposition: [],
+        verifications: [],
+        // Sidebar.tsx is real and will be re-edited below. <TODO: fill> and
+        // the empty string are placeholders the agent may have seeded at
+        // Step 0 — these MUST be pruned even when the edited file is already
+        // present, because pre-fix the write-back was gated on "adding a new
+        // file" and the garbage survived forever. The third bogus entry is an
+        // absolute path that the hook does NOT prune (agent-owned declaration).
+        files: ['src/Sidebar.tsx', '<TODO: fill>', '', 'src/other.tsx'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      // Re-edit src/Sidebar.tsx (already in the list). Pre-fix, the placeholder
+      // entries stayed forever because write-back was gated on "adding a new file."
+      runHook(hook('scope-refresh'), { conversation_id: cidv, cwd: repoDir, file_path: join(repoDir, 'src/Sidebar.tsx') });
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (!Array.isArray(after.files)) return { ok: false, detail: 'files[] missing' };
+      // Sidebar.tsx (kept) + other.tsx (kept, agent declaration) = 2. <TODO> and '' pruned.
+      if (after.files.length !== 2) {
+        return { ok: false, detail: `expected 2 entries (Sidebar + other), got ${after.files.length}: ${JSON.stringify(after.files)}` };
+      }
+      if (after.files.some((f) => typeof f === 'string' && (f.trim() === '' || /^\s*<TODO/.test(f)))) {
+        return { ok: false, detail: `placeholder/blank survived: ${JSON.stringify(after.files)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(stashPath);
+    }
+  });
+
   check('permission gate allows `git status`', () =>
     /"permission"\s*:\s*"allow"/.test(runHook(hook('permission-gate'), { command: 'git status' })));
 
@@ -1049,6 +1156,7 @@ Kill switches (environment variables, all hooks fail open)
   INTENT_PRECOMPILE_ENFORCE=0  .scope.json auto-write on prompt off
   SCOPE_REFRESH_ENFORCE=0      per-edit re-injection + files[] recording off
   MILESTONE_VERIFY_ENFORCE=0   mid-session milestone verifier off (doctrine-ultra)
+  INTENT_ANCHOR_ENFORCE=0      one-shot contract nudge off
   FINAL_REVIEW_ENFORCE=0       final review off
 
 Docs  https://github.com/kleosr/cursordoctrine`);
