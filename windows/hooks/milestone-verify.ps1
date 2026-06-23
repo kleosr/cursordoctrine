@@ -16,9 +16,11 @@
 # Doctrine-ultra: the harness adds structure; the model fills it. The hook
 # never decides correctness — only the model does.
 #
-# Silent exits (YAGNI rung 1): .scope.json missing; decomposition empty/missing;
-# all steps already verified; no expected_files completed; kill switch set.
-# Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
+# Silent exits (YAGNI rung 1): .scope.json missing; all steps already verified;
+# no expected_files completed; kill switch set. When decomposition is empty BUT
+# the session has touched >= 2 files, a DECOMPOSE nudge fires instead (per-cid
+# throttle, mirrors intent-anchor) — the doctrine requires decomposition for
+# multi-file tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
 
 $ErrorActionPreference = 'SilentlyContinue'
 . "$PSScriptRoot\hook-common.ps1"
@@ -39,10 +41,46 @@ try {
 } catch { exit 0 }
 if (-not $sj) { exit 0 }
 
-# Need a decomposition array; empty/missing = YAGNI rung 1, silent exit.
-if (-not $sj.PSObject.Properties['decomposition'] -or -not $sj.decomposition) { exit 0 }
-$decomp = @($sj.decomposition)
-if ($decomp.Count -eq 0) { exit 0 }
+# Need a decomposition array. Empty/missing = YAGNI rung 1 — BUT if the
+# session has touched >= 2 files, the task is likely multi-step and the
+# doctrine REQUIRES decomposition. Nudge the agent (per-cid throttle mirrors
+# intent-anchor), then silent. Closes the gap where a session touches many
+# files with zero steps declared (the doctrine's multi-file rule unenforced).
+$decomp = @()
+if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) { $decomp = @($sj.decomposition) }
+
+if ($decomp.Count -eq 0) {
+    # Count real session files (exclude .scope.json + placeholders).
+    $realFiles = @()
+    if ($sj.PSObject.Properties['files'] -and $sj.files) {
+        $realFiles = @($sj.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and ("$_".Trim()) -ine '.scope.json' })
+    }
+    if ($realFiles.Count -ge 2) {
+        $cid = Get-SafeConversationId $obj
+        $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
+        $dflag = Join-Path $pendingDir "decompose-$cid.flag"
+        $lastCount = -1
+        $nudgeCount = 0
+        if (Test-Path $dflag) {
+            try {
+                $parts = (Get-Content $dflag -Raw -ErrorAction SilentlyContinue).Trim() -split ':'
+                if ($parts.Count -ge 1) { $lastCount = [int]$parts[0] }
+                if ($parts.Count -ge 2) { $nudgeCount = [int]$parts[1] }
+            } catch { }
+        }
+        $fc = $realFiles.Count
+        # Re-nudge only when files[] grew since last nudge AND under the cap.
+        if (($lastCount -lt 0 -or $fc -gt $lastCount) -and $nudgeCount -lt 3) {
+            $nudgeCount++
+            New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
+            Set-Content -LiteralPath $dflag -Value "${fc}:${nudgeCount}" -ErrorAction SilentlyContinue
+            $sample = (($realFiles | Select-Object -First 5) -join ', ')
+            $msg = "DECOMPOSE: this session has touched $fc file(s) ($sample) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $nudgeCount of 3)."
+            Write-HookJson @{ additional_context = $msg }
+        }
+    }
+    exit 0
+}
 
 # Files touched so far (hook-owned by scope-refresh).
 $files = @()

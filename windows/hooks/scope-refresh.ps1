@@ -54,15 +54,18 @@ if ($editedFile) {
     if ($rel -and $rel -ine '.scope.json') {
         $existing = @()
         if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
-        # Drop placeholder / blank entries, normalize for comparison.
+        # Drop placeholder / blank entries and the contract file itself,
+        # normalize for comparison.
         # The filter runs unconditionally so re-edits of an already-recorded
-        # file still prune `<TODO:...>` and blank entries the agent may have
-        # seeded at Step 0. Without this, garbage stayed in files[] forever
-        # because the write-back was gated on "adding a new file."
+        # file still prune `<TODO:...>`, blank, and `.scope.json` entries the
+        # agent may have seeded at Step 0. Without this, garbage stayed in
+        # files[] forever because the write-back was gated on "adding a new
+        # file." The `.scope.json` prune is symmetric with the append guard
+        # below — the contract file must never appear in its own blast radius.
         $kept = New-Object System.Collections.Generic.List[string]
         foreach ($e in $existing) {
             $s = [string]$e
-            if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s)) { continue }
+            if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s) -or ($s.Trim() -ieq '.scope.json')) { continue }
             $kept.Add($s) | Out-Null
         }
         $already = $false

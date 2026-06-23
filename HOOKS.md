@@ -63,10 +63,15 @@ emit `VERIFY MILESTONE step N of M` as `additional_context`. The agent emits
 scrapes the transcript backward through assistant turns for the most recent
 verdict and writes it into `verifications[]` (hook-owned).
 
-Silent when: `.scope.json` missing; `decomposition[]` empty (YAGNI rung 1 —
-trivial one-liners); all steps already verified; no expected_files completed;
-kill switch set; (Linux) no python3 available (verdict-scrape needs regex on
-transcript text). Never blocks. Disable: `MILESTONE_VERIFY_ENFORCE=0`.
+Silent when: `.scope.json` missing; all steps already verified; no
+expected_files completed; kill switch set; (Linux) no python3 available
+(verdict-scrape needs regex on transcript text). When `decomposition[]` is
+empty BUT the session has touched >= 2 files, a `DECOMPOSE` nudge fires
+instead of going silent: the doctrine requires decomposition for multi-file
+tasks, and this closes the gap where an agent touches many files with zero
+steps declared. Per-cid flag throttle (mirrors intent-anchor) re-nudges only
+when `files[]` grows, capped at 3. Never blocks. Disable:
+`MILESTONE_VERIFY_ENFORCE=0`.
 
 **intent-anchor (persistent contract nudge):** Re-fires whenever NEW files
 have been edited since the last nudge and `.scope.json`'s `intent` is empty

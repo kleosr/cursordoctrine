@@ -58,15 +58,16 @@ if [ -n "$edited_file" ]; then
 
     # Never record the contract file itself.
     if [ -n "$rel" ] && [ "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" != ".scope.json" ]; then
-        # Filter placeholders and append in one pass. The filter MUST run even
-        # when the edited file is already in files[] — otherwise garbage the
-        # agent seeded at Step 0 (<TODO:...>, blanks) stays forever, because
-        # re-edits never trigger the write-back path. The python version
-        # already did this correctly; the jq version now matches.
+        # Filter placeholders and the contract file itself, and append in one
+        # pass. The filter MUST run even when the edited file is already in
+        # files[] — otherwise garbage the agent seeded at Step 0 (<TODO:...>,
+        # blanks, .scope.json) stays forever, because re-edits never trigger
+        # the write-back path. The python version already did this correctly;
+        # the jq version now matches.
         if have_jq; then
             new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" '
                 .files = (
-                    ((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not))))
+                    ((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not) and ((. | ltrimstr("/") | ascii_downcase) != ".scope.json"))))
                     + ([(.files // []) | map(ltrimstr("/") | ascii_downcase) | index($f | ltrimstr("/") | ascii_downcase)] | map(select(. != null)) | length as $present
                        | if $present == 0 then [$f] else [] end)
                 )' 2>/dev/null)"
@@ -80,9 +81,10 @@ import json, os, re, sys
 try:
     o = json.load(sys.stdin)
     f = os.environ["F"]
-    # Drop placeholders (trimmed value starts with "<TODO"), matching the jq
-    # path above and scope-refresh.ps1 so all three prune identically.
-    files = [x for x in (o.get("files") or []) if x and not re.match(r"\s*<TODO", str(x))]
+    # Drop placeholders (trimmed value starts with "<TODO") and the contract
+    # file itself, matching the jq path above and scope-refresh.ps1 so all
+    # three prune identically.
+    files = [x for x in (o.get("files") or []) if x and not re.match(r"\s*<TODO", str(x)) and str(x).strip().lstrip("/").lower() != ".scope.json"]
     norm = lambda s: s.replace("\\", "/").lstrip("/").lower()
     if norm(f) not in {norm(x) for x in files}:
         files.append(f)

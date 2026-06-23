@@ -69,6 +69,9 @@ try {
             $ordered[$p.Name] = $p.Value
         }
         if (-not $ordered.Contains('intent')) { $ordered['intent'] = "[DRAFT] $prompt" }
+        if (-not $ordered.Contains('decomposition') -or $null -eq $ordered['decomposition']) { $ordered['decomposition'] = @() }
+        if (-not $ordered.Contains('verifications') -or $null -eq $ordered['verifications']) { $ordered['verifications'] = @() }
+        if (-not $ordered.Contains('files') -or $null -eq $ordered['files']) { $ordered['files'] = @() }
     } else {
         $ordered = [ordered]@{
             prompt        = $prompt
