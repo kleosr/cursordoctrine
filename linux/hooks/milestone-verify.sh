@@ -18,11 +18,13 @@
 # Doctrine-ultra: the harness adds structure; the model fills it. The hook
 # never decides correctness — only the model does.
 #
-# Silent exits (YAGNI rung 1): .scope.json missing; decomposition empty;
-# all steps verified; no expected_files completed; kill switch set; no
-# python3 (verdict-scrape needs regex on transcript text; jq alone is not
-# enough — fail open silently, the doctrine still applies).
-# Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
+# Silent exits (YAGNI rung 1): .scope.json missing; all steps verified; no
+# expected_files completed; kill switch set; no python3 (verdict-scrape needs
+# regex on transcript text; jq alone is not enough — fail open silently, the
+# doctrine still applies). When decomposition is empty BUT the session has
+# touched >= 2 files, a DECOMPOSE nudge fires instead (per-cid throttle,
+# mirrors intent-anchor) — the doctrine requires decomposition for multi-file
+# tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
 
 set +e
 . "$(dirname "$0")/hook-common.sh"
@@ -44,6 +46,52 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 
 # Need jq or python3 for JSON work. Without either, fail open silently.
 have_jq || have_py || exit 0
+
+# --- decomposition nudge: empty decomposition + >=2 real files --------------
+# Doctrine requires decomposition for multi-step/multi-file tasks. When the
+# agent skips it (many files touched, zero steps declared), nudge once per
+# file-count growth. Per-cid flag mirrors intent-anchor's throttle. Silent
+# when files[] hasn't grown since last nudge or the nudge cap (3) is hit.
+if have_jq; then
+    _dl="$(printf '%s' "$scope_raw" | jq -r '(.decomposition // []) | length' 2>/dev/null)"
+    _rfc="$(printf '%s' "$scope_raw" | jq -r '[.files[]? // empty | select(. != "" and (test("^\\s*<")|not) and ((. | ltrimstr("/") | ascii_downcase) != ".scope.json"))] | length' 2>/dev/null)"
+elif have_py; then
+    _dl="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin).get("decomposition") or []))
+except Exception: print(0)' 2>/dev/null)"
+    _rfc="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try:
+    f=json.load(sys.stdin).get("files") or []
+    print(len([x for x in f if x and str(x).strip() and not str(x).strip().startswith("<") and str(x).strip().lstrip("/").lower()!=".scope.json"]))
+except Exception: print(0)' 2>/dev/null)"
+fi
+_dl="${_dl:-0}"; _rfc="${_rfc:-0}"
+if [ "$_dl" -eq 0 ] 2>/dev/null; then
+    if [ "$_rfc" -ge 2 ] 2>/dev/null; then
+        _cid="$(safe_conversation_id "$input")"
+        _pdir="$HOME/.cursor/.hooks-pending"
+        _dflag="$_pdir/decompose-$_cid.flag"
+        _lc=-1; _nc=0
+        if [ -f "$_dflag" ]; then
+            _lc="$(cut -d: -f1 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _lc="${_lc:--1}"
+            _nc="$(cut -d: -f2 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _nc="${_nc:-0}"
+        fi
+        # Re-nudge only when files[] grew since last nudge AND under the cap.
+        _fire=false
+        if [ "$_lc" -lt 0 ] 2>/dev/null; then _fire=true; fi
+        if [ "$_rfc" -gt "$_lc" ] 2>/dev/null; then _fire=true; fi
+        if [ "$_nc" -ge 3 ] 2>/dev/null; then _fire=false; fi
+        if [ "$_fire" = true ]; then
+            _nc=$((_nc + 1))
+            mkdir -p "$_pdir" 2>/dev/null
+            printf '%s:%s' "$_rfc" "$_nc" > "$_dflag" 2>/dev/null
+            emit_json additional_context "DECOMPOSE: this session has touched $_rfc file(s) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $_nc of 3)."
+            exit 0
+        fi
+    fi
+    # Empty decomposition, trivial or throttled → silent.
+    exit 0
+fi
 
 # --- jq-only path (no python3): verdict scrape + milestone detect -----------
 # When python3 is missing, use jq for JSON + grep for transcript scraping.

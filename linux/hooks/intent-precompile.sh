@@ -81,6 +81,9 @@ print(json.dumps({
         new_raw="$(printf '%s' "$scope_raw" | jq --arg p "$prompt" '
             .prompt = $p
             | if (.intent | type) != "string" then .intent = ("[DRAFT] " + $p) else . end
+            | if (.decomposition | type) != "array" then .decomposition = [] else . end
+            | if (.verifications | type) != "array" then .verifications = [] else . end
+            | if (.files | type) != "array" then .files = [] else . end
             | del(.trace, .allow_growth)
             | with_entries(select(.key | startswith("_") | not))
         ' 2>/dev/null)"
@@ -92,6 +95,12 @@ try:
     o["prompt"] = os.environ["P"]
     if not isinstance(o.get("intent"), str):
         o["intent"] = "[DRAFT] " + os.environ["P"]
+    if not isinstance(o.get("decomposition"), list):
+        o["decomposition"] = []
+    if not isinstance(o.get("verifications"), list):
+        o["verifications"] = []
+    if not isinstance(o.get("files"), list):
+        o["files"] = []
     for k in list(o.keys()):
         if k.startswith("_") or k in ("trace", "allow_growth"):
             del o[k]

@@ -457,6 +457,32 @@ function verify() {
     }
   });
 
+  check('intent-precompile normalizes legacy scope missing decomposition/verifications', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-legacy');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'old prompt',
+        intent: 'Old intent',
+        files: ['src/a.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1l', cwd: repoDir, prompt: 'follow up question' });
+      const s = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (s.prompt !== 'follow up question') return { ok: false, detail: `prompt not updated: ${s.prompt}` };
+      if (!Array.isArray(s.decomposition)) return { ok: false, detail: 'decomposition[] not normalized' };
+      if (!Array.isArray(s.verifications)) return { ok: false, detail: 'verifications[] not normalized' };
+      if (s.decomposition.length !== 0 || s.verifications.length !== 0) {
+        return { ok: false, detail: 'normalized arrays should be empty' };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
   check('intent-precompile resets scope on new-task prefix', () => {
     const repoDir = join(HOME, '.cd-verify-precompile-new');
     const scopePath = join(repoDir, '.scope.json');
