@@ -20,7 +20,7 @@ designed hook chain or fail-open safety model**.
    collapsing, reordering, or removing steps without proving Cursor supports it:
    - `beforeSubmitPrompt` → `intent-precompile` (writes `.scope.json`)
    - `sessionStart` → `inject-doctrine` (governing text)
-   - `afterFileEdit` (`^Write$`) → `scope-refresh` (record + stash)
+   - `afterFileEdit` → `scope-refresh` (record + stash; fires on ALL edits)
    - `postToolUse` → `scope-drain` (deliver stash as `additional_context`)
    - `beforeShellExecution` → `permission-gate` (deny list)
    - `stop` → `final-review` (`followup_message` + one-shot brake)
@@ -54,9 +54,9 @@ Source: https://cursor.com/docs/agent/hooks
 | **stdout JSON** | Valid JSON on stdout when emitting; `{}` when no-op |
 | **exit codes** | `0` = success; `2` = block (only if intentionally used); other non-zero = fail-open unless `failClosed: true` |
 | **Event output fields** | Only fields documented for that event (see table below) |
-| **Matchers** | JavaScript-style regex, not POSIX (`^Write$` not `[[:word:]]` in JSON) |
-| **timeout** | Set and reasonable (this pack: 5s except `stop` 10s) |
-| **loop_limit** | Only on `stop` / `subagentStop`; this pack uses `2` on `stop` |
+| **Matchers** | JavaScript-style regex, not POSIX (`^Write$` or omitted in JSON) |
+| **timeout** | Set and reasonable (this pack: 5s except `stop` 30s) |
+| **loop_limit** | Only on `stop` / `subagentStop`; this pack uses `3` on `stop` |
 | **failClosed** | Explicit where set; matches script fail-open/fail-closed intent |
 | **User hook paths** | Commands reference `~/.agents/hooks/*` and `~/.cursor/inject-doctrine.*`; Windows install must expand `~/` to real profile path |
 | **Executable** | Linux `.sh` files executable after install (`chmod +x`) |
@@ -83,32 +83,34 @@ Read every file below. For each, produce: **Status** (PASS / WARN / FAIL),
 
 | File | Audit focus |
 |------|-------------|
-| `linux/hooks.json` | All 6 events wired; timeouts; `matcher: "^Write$"` on afterFileEdit; `failClosed: false` on beforeShellExecution; `loop_limit: 2` on stop; commands point to `~/.agents/hooks/` and `~/.cursor/inject-doctrine.sh` |
+| `linux/hooks.json` | All 6 events wired; timeouts; no matcher on afterFileEdit (fires on ALL edits); `failClosed: false` on beforeShellExecution; `loop_limit: 3` on stop; commands point to `~/.agents/hooks/` and `~/.cursor/inject-doctrine.sh` |
 | `windows/hooks.json` | Same events/options as linux; `pwsh.exe -NoProfile -File` prefix; paths use expanded `$HOME` after install (template uses `~/`) |
 
 ### B. Shared helpers
 
 | File | Audit focus |
 |------|-------------|
-| `linux/hooks/hook-common.sh` | `read_hook_stdin` BOM strip; jq/python3 fallback; `resolve_project_root` (cwd → workspace_roots → CURSOR_PROJECT_DIR → $PWD git guard); `safe_conversation_id` transcript fallback; `extract_last_user_query` skips hook-generated turns + redacts secrets; `emit_json` ASCII-safe |
-| `windows/hooks/hook-common.ps1` | Parity with bash helpers: `Read-HookStdin`, `Write-HookJson` pure-ASCII stdout, `Resolve-ProjectRoot`, `Get-SafeConversationId`, `Get-LastUserQuery`, `Redact-SecretsFromIntent`, `Expand-AgentPaths` |
+| `linux/hooks/hook-common.sh` | `read_hook_stdin` BOM strip; jq/python3 fallback; `resolve_project_root` (cwd → workspace_roots → CURSOR_PROJECT_DIR → $PWD project-marker guard); `safe_conversation_id` transcript fallback; `extract_last_user_query` skips hook-generated turns + redacts secrets; `emit_json` ASCII-safe |
+| `windows/hooks/hook-common.ps1` | Parity with bash helpers: `Read-HookStdin`, `Write-HookJson` pure-ASCII stdout, `Resolve-ProjectRoot` (project-marker fallback for non-git repos), `Get-SafeConversationId`, `Get-LastUserQuery`, `Redact-SecretsFromIntent`, `Expand-AgentPaths` |
 
 ### C. Hook scripts (pair audit linux + windows)
 
 | Hook | Files | Audit focus |
 |------|-------|-------------|
-| **intent-precompile** | `intent-precompile.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `INTENT_PRECOMPILE_ENFORCE`; reads `prompt` from stdin; skips hook-generated prefixes (`FINAL REVIEW`, `SCOPE REMINDER`, etc.); no repo root → silent exit; writes `prompt` (hook-owned), preserves agent `intent` + `files[]` + `acceptance` on continuation; `/new` or `new task:` resets scope; strips `_` metadata keys; never blocks |
+| **intent-precompile** | `intent-precompile.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `INTENT_PRECOMPILE_ENFORCE`; reads `prompt` from stdin; skips hook-generated prefixes (`FINAL REVIEW`, `SCOPE REMINDER`, etc.); no repo root → silent exit; writes `prompt` (hook-owned), seeds `intent = "[DRAFT] <prompt>"` on new/fresh; preserves agent `intent` + `files[]` + `acceptance` on continuation; `/new` or `new task:` resets scope and reseeds [DRAFT]; strips `_` metadata keys; never blocks |
 | **inject-doctrine** | `../inject-doctrine.sh`, `../inject-doctrine.ps1` | Kill switch N/A; drains stdin; reads `doctrine.md` from install dir (`$HOME/.cursor/` when installed); emits `additional_context`; fail-open `{}`; ps1 ASCII-escapes non-ASCII; sh sources `$HOME/.agents/hooks/hook-common.sh` |
 | **scope-refresh** | `scope-refresh.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `SCOPE_REFRESH_ENFORCE`; requires `.scope.json`; records edited path into `files[]` (dedup, never `.scope.json`); stashes reminder to `~/.cursor/.hooks-pending/scope-<cid>.txt`; silent without contract |
 | **scope-drain** | `scope-drain.sh`, `.ps1` | One-shot: read stash, delete, emit `additional_context`; silent when no stash; shares kill switch with scope-refresh |
+| **milestone-verify** | `milestone-verify.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `MILESTONE_VERIFY_ENFORCE`; requires `.scope.json` with non-empty `decomposition[]`; emits `VERIFY MILESTONE step N` when step's `expected_files` all touched; scrapes `ACCEPT/REVISE step N` from assistant transcript turns into `verifications[]`; silent on empty decomposition (YAGNI rung 1); (Linux) requires python3 |
+| **intent-anchor** | `intent-anchor.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `INTENT_ANCHOR_ENFORCE`; re-fires when new files edited AND `intent` is empty/`[DRAFT]` OR `acceptance` is default seed; per-cid flag stores `files[]` count at last nudge; silent when no new files since last nudge; silent permanently once both fields filled |
 | **permission-gate** | `permission-gate.sh`, `.ps1` | Kill switch `PERM_GATE_ENFORCE`; deny list parity (rm -rf absolute, fork bomb, curl\|sh, wget\|sh, git push --force, reset --hard, clean -f, dd/mkfs to devices, chmod/chown -R on /, npm/pnpm/yarn publish); anchored patterns avoid false positives (`git rm`, echo); internal error → allow; exit 0 always |
-| **final-review** | `final-review.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `FINAL_REVIEW_ENFORCE`; only `status === completed`; `reviewed-<cid>.flag` one-shot brake; 7-day stale sweep; git diff HEAD + untracked; `.scope.json` declared vs touched diff; intent from scope then transcript; arms flag before emit; `loop_limit: 2` compatible |
+| **final-review** | `final-review.sh`, `.ps1` | Kill switches `HOOKS_ENFORCE`, `FINAL_REVIEW_ENFORCE`; only `status === completed`; `reviewed-<cid>.flag` verify-revise brake (stores changed-file count; re-reviews if diff changed, ends if same); 7-day stale sweep; git diff HEAD + untracked (falls back to `.scope.json` `files[]` for non-git projects); `.scope.json` declared vs touched diff; intent from scope then transcript; arms flag with count before emit; `loop_limit: 3`; `.md` REQUIRED (no stale fallback — emits install error if missing) |
 
 ### D. Prompt bodies (must stay in sync: linux/hooks/ mirrors windows/hooks/)
 
 | File | Audit focus |
 |------|-------------|
-| `hooks/final-review.md` | Six axes + mechanics; intent trace rules; prior-turn work guard; `.scope.json` declared scope; scanner scoped not `--all` |
+| `hooks/final-review.md` | Eight axes (0-7); structured bullet report with ACCEPT/REVISE verdict; intent trace rules; [DRAFT] detection; prior-turn work guard; `.scope.json` declared scope; scanner scoped not `--all` |
 | `hooks/anti-slop.md` | 40-item checklist; pairs with `skills/anti-slop/scripts/scan_slop.py` |
 | `hooks/cleanup-doctrine.md` | Whole-repo sweep doctrine for `cursordoctrine sweep` only; distinct from session final-review |
 

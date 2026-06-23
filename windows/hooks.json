@@ -16,8 +16,7 @@
     "afterFileEdit": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-refresh.ps1",
-        "timeout": 5,
-        "matcher": "^Write$"
+        "timeout": 5
       }
     ],
     "postToolUse": [
@@ -45,7 +44,7 @@
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/final-review.ps1",
         "timeout": 30,
-        "loop_limit": 2
+        "loop_limit": 3
       }
     ]
   }

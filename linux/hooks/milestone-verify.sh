@@ -42,9 +42,74 @@ scope_path="$root/.scope.json"
 scope_raw="$(cat "$scope_path" 2>/dev/null)"
 [ -n "$scope_raw" ] || exit 0
 
-# Need python3 for verdict-scrape + milestone-detect. jq-only is not enough.
-have_py || exit 0
+# Need jq or python3 for JSON work. Without either, fail open silently.
+have_jq || have_py || exit 0
 
+# --- jq-only path (no python3): verdict scrape + milestone detect -----------
+# When python3 is missing, use jq for JSON + grep for transcript scraping.
+# This is less robust (no multiline content extraction from JSONL) but catches
+# the common case where the verdict appears as a plain string in the transcript.
+if ! have_py; then
+    # Parse decomposition + files + verifications from .scope.json via jq.
+    decomp_len="$(printf '%s' "$scope_raw" | jq -r '.decomposition | length' 2>/dev/null)"
+    [ "$decomp_len" -gt 0 ] 2>/dev/null || exit 0
+
+    files_list="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
+    [ -n "$files_list" ] || exit 0
+
+    # Build verified-steps set from existing verifications.
+    verified_steps="$(printf '%s' "$scope_raw" | jq -r '.verifications[]? | .step' 2>/dev/null)"
+
+    # Phase 1: grep-based verdict scrape from transcript.
+    tp="$(json_get "$input" transcript_path)"
+    if [ -n "$tp" ] && [ -f "$tp" ]; then
+        # Read transcript backward, find last ACCEPT/REVISE step N in assistant turns.
+        if command -v tac >/dev/null 2>&1; then
+            reversed="$(tac "$tp" 2>/dev/null)"
+        else
+            reversed="$(awk '{a[NR]=$0} END {for(i=NR;i>=1;i--) print a[i]}' "$tp" 2>/dev/null)"
+        fi
+        scraped_verdict="$(printf '%s' "$reversed" | grep -oE '(ACCEPT|REVISE)[[:space:]]+step[[:space:]]+[0-9]+' | head -1 2>/dev/null)"
+        if [ -n "$scraped_verdict" ]; then
+            sv_verb="$(printf '%s' "$scraped_verdict" | grep -oE '^(ACCEPT|REVISE)')"
+            sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+')"
+            # Only record if not already verified.
+            if [ -n "$sv_step" ] && ! printf '%s\n' "$verified_steps" | grep -qx "$sv_step"; then
+                # Update .scope.json verifications via jq.
+                new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$sv_step" --arg verb "$sv_verb" '
+                    .verifications = ((.verifications // []) | map(select(.step != $sn)))
+                    + [{"step": $sn, "verdict": $verb, "diagnosis": ""}]
+                ' 2>/dev/null)"
+                if [ -n "$new_raw" ]; then
+                    printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                    scope_raw="$new_raw"
+                    verified_steps="$(printf '%s' "$verified_steps""$'\n'"$sv_step")"
+                fi
+            fi
+        fi
+    fi
+
+    # Phase 2: detect unverified completed milestone via jq.
+    msg="$(printf '%s' "$scope_raw" | jq -r --argjson verified ("[$(printf '%s\n' "$verified_steps" | grep -v '^$' | paste -sd,)]") '
+        (.files // []) as $files |
+        ($files | map(ltrimstr("/") | ascii_downcase)) as $files_lc |
+        ([.decomposition[]?] as $decomp |
+        ($decomp | length) as $total |
+        first(
+            $decomp[] |
+            select(.step as $sn | $verified | index($sn) | not) |
+            select((.expected_files // []) | length > 0) |
+            select(all((.expected_files // [])[]; (. | ltrimstr("/") | ascii_downcase) as $ef | $files_lc | index($ef))) |
+            "VERIFY MILESTONE step \(.step) of \($total)\n  subtask: \(.subtask // "(no subtask declared)")\n  expected_files: \((.expected_files // []) | join(", ")) (all touched)\n  Emit \"ACCEPT step \(.step)\" to proceed, or \"REVISE step \(.step): <one-line diagnosis>\" to repair."
+        ) // empty
+    ' 2>/dev/null)"
+    if [ -n "$msg" ]; then
+        emit_json additional_context "$msg"
+    fi
+    exit 0
+fi
+
+# --- python3 path (preferred): full verdict scrape + milestone detect --------
 # Single python3 pass: phase 1 (scrape verdict, write to .scope.json) +
 # phase 2 (detect unverified completed milestone, emit reminder to stdout).
 msg="$(SCOPE_RAW="$scope_raw" SCOPE_PATH="$scope_path" INPUT="$input" python3 -c '

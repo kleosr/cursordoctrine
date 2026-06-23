@@ -432,7 +432,7 @@ function verify() {
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
       catch { return { ok: false, detail: '.scope.json is not valid JSON' }; }
       if (s.prompt !== 'fix the sidebar') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
-      if (s.intent !== '') return { ok: false, detail: `intent should start empty: ${s.intent}` };
+      if (s.intent !== '[DRAFT] fix the sidebar') return { ok: false, detail: `intent should be [DRAFT] seed: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: 'files[] should start empty' };
       if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: 'decomposition[] should start empty' };
       if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: 'verifications[] should start empty' };
@@ -475,7 +475,7 @@ function verify() {
       runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'new task: rewrite auth module' });
       s = JSON.parse(readFileSync(scopePath, 'utf8'));
       if (s.prompt !== 'new task: rewrite auth module') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
-      if (s.intent !== '') return { ok: false, detail: `intent not reset: ${s.intent}` };
+      if (s.intent !== '[DRAFT] new task: rewrite auth module') return { ok: false, detail: `intent not reset to [DRAFT]: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: `files[] not reset: ${JSON.stringify(s.files)}` };
       if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: `decomposition[] not reset: ${JSON.stringify(s.decomposition)}` };
       if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: `verifications[] not reset: ${JSON.stringify(s.verifications)}` };
@@ -604,7 +604,7 @@ function verify() {
     }
   });
 
-  check('intent-anchor fires once when intent empty, then stays silent', () => {
+  check('intent-anchor fires on empty intent, silent when no new files, re-fires on new files', () => {
     const cidv = 'npxvia';
     const repoDir = join(HOME, '.cd-verify-ia');
     const scopePath = join(repoDir, '.scope.json');
@@ -621,6 +621,7 @@ function verify() {
         files: ['src/login.tsx'],
         acceptance: 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.',
       }), 'utf8');
+      // First fire: 1 file, intent empty → should nudge.
       const first = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
       if (!first.includes('additional_context') || !first.includes('INTENT ANCHOR')) {
         return { ok: false, detail: `should fire on empty intent, got: ${first.slice(0, 200)}` };
@@ -628,9 +629,18 @@ function verify() {
       if (!existsSync(flagPath)) {
         return { ok: false, detail: 'flag was not armed after first fire' };
       }
+      // Second fire: same file count, intent still empty → should stay silent.
       const second = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
       if (second.includes('additional_context') || second.includes('INTENT ANCHOR')) {
-        return { ok: false, detail: 'should stay silent on second fire (flag armed)' };
+        return { ok: false, detail: 'should stay silent when no new files since last nudge' };
+      }
+      // Third fire: a NEW file was added to files[], intent still empty → re-fire.
+      const sj = JSON.parse(readFileSync(scopePath, 'utf8'));
+      sj.files.push('src/auth.ts');
+      writeFileSync(scopePath, JSON.stringify(sj), 'utf8');
+      const third = runHook(hook('intent-anchor'), { conversation_id: cidv, cwd: repoDir });
+      if (!third.includes('additional_context') || !third.includes('INTENT ANCHOR')) {
+        return { ok: false, detail: 'should re-fire when new file added since last nudge' };
       }
       return true;
     } finally {
@@ -766,7 +776,7 @@ function verify() {
     }
   });
 
-  check('final review fires once when files changed, then goes quiet', () => {
+  check('final review fires once when files changed, then goes quiet (no further edits)', () => {
     const cidv = 'npxvfr';
     const repoDir = join(HOME, '.cd-verify-repo');
     const filePath = join(repoDir, 'dummy.ts');
@@ -787,9 +797,10 @@ function verify() {
       rmBestEffort(flagPath);
 
       const first = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
-      const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, loop_count: 1 });
       if (!first.includes('followup_message')) return { ok: false, detail: 'no followup_message on first stop' };
-      if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired on second stop' };
+      // No further edits → diff count unchanged → second stop should be quiet (accept).
+      const second = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, loop_count: 1 });
+      if (second.includes('followup_message')) return { ok: false, detail: 'review re-fired when diff unchanged (should be accept)' };
       return true;
     } finally {
       rmBestEffort(repoDir, { recursive: true, force: true });
@@ -813,7 +824,8 @@ function verify() {
       git(['add', 'dummy.ts']);
       git(['commit', '-q', '-m', 'init']);
       writeFileSync(filePath, 'changed\n', 'utf8');
-      writeFileSync(flagPath, '', 'utf8');
+      // Plant an orphaned flag (stale count from a session that died).
+      writeFileSync(flagPath, '0', 'utf8');
 
       const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, loop_count: 0 });
       if (!out.includes('followup_message')) return { ok: false, detail: 'orphaned flag suppressed review' };
@@ -851,6 +863,34 @@ function verify() {
 
   check('doctrine injection emits additional_context', () =>
     runHook(join(cursorDst, injectName), {}).includes('additional_context'));
+
+  check('final review fires for non-git project via .scope.json fallback', () => {
+    const cidv = 'npxvfrng';
+    const repoDir = join(HOME, '.cd-verify-nogit');
+    const scopePath = join(repoDir, '.scope.json');
+    const flagPath = join(pendingDir, `reviewed-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      // NO git init — this is a non-git project. Plant a .scope.json with files.
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix the bug',
+        intent: 'Fix null pointer in auth',
+        decomposition: [],
+        verifications: [],
+        files: ['src/auth.ts', 'src/utils.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      rmBestEffort(flagPath);
+      const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
+      if (!out.includes('followup_message')) return { ok: false, detail: 'review did not fire for non-git project' };
+      if (!out.includes('src/auth.ts')) return { ok: false, detail: 'files[] from scope.json not in review' };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
+    }
+  });
 
   const py = pythonCmd();
   const scanner = join(skillDst, 'scripts', 'scan_slop.py');
@@ -1156,7 +1196,7 @@ Kill switches (environment variables, all hooks fail open)
   INTENT_PRECOMPILE_ENFORCE=0  .scope.json auto-write on prompt off
   SCOPE_REFRESH_ENFORCE=0      per-edit re-injection + files[] recording off
   MILESTONE_VERIFY_ENFORCE=0   mid-session milestone verifier off (doctrine-ultra)
-  INTENT_ANCHOR_ENFORCE=0      one-shot contract nudge off
+  INTENT_ANCHOR_ENFORCE=0      contract nudge off
   FINAL_REVIEW_ENFORCE=0       final review off
 
 Docs  https://github.com/kleosr/cursordoctrine`);

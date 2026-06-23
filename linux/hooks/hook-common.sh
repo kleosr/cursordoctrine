@@ -83,9 +83,24 @@ safe_conversation_id() {
 
 # resolve_project_root <json> -> project root ('' if none resolves; NO $HOME
 # fallback — final-review runs git against $root, so a $HOME fallback would
-# silently turn the profile into the audited repo). Falls back to $PWD if it's
-# a git repo, because Cursor's beforeSubmitPrompt event does NOT include cwd
-# in its payload — the hook process's CWD is the project root in that case.
+# silently turn the profile into the audited repo). Falls back to $PWD if it
+# looks like a project root, because Cursor's beforeSubmitPrompt event does
+# NOT include cwd in its payload — the hook process's CWD is the project root
+# in that case. Any git repo OR any dir with a recognized project marker file
+# is accepted, so this works for non-git repos too.
+is_project_root() {
+    local dir="$1"
+    [ -d "$dir" ] || return 1
+    local markers=(
+        .git .hg .svn package.json Cargo.toml go.mod pyproject.toml setup.py
+        pom.xml build.gradle build.gradle.kts Gemfile composer.json
+        Makefile CMakeLists.txt .project tsconfig.json
+    )
+    for m in "${markers[@]}"; do
+        [ -e "$dir/$m" ] && return 0
+    done
+    return 1
+}
 resolve_project_root() {
     local input="$1" root="" cand
     while IFS= read -r cand; do
@@ -97,10 +112,10 @@ EOF
     if [ -z "$root" ] && [ -n "$CURSOR_PROJECT_DIR" ] && [ -d "$CURSOR_PROJECT_DIR" ]; then
         root="${CURSOR_PROJECT_DIR%/}"
     fi
-    # Fallback: $PWD (git repo guard — no ghost .scope.json in $HOME).
+    # Fallback: $PWD (project-marker guard — no ghost .scope.json in $HOME).
     if [ -z "$root" ]; then
         local pwd_fwd="${PWD%/}"
-        if [ -n "$pwd_fwd" ] && git -C "$pwd_fwd" rev-parse --git-dir >/dev/null 2>&1; then
+        if [ -n "$pwd_fwd" ] && is_project_root "$pwd_fwd"; then
             root="$pwd_fwd"
         fi
     fi

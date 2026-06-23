@@ -22,15 +22,15 @@ Before any code, write `.scope.json` to the repo root:
 ```
 
 - **prompt** — hook-owned. `intent-precompile` writes this on every send. Do not overwrite it.
-- **intent** — agent-owned Step 0 restatement, NOT the verbatim request. Write this before your first edit.
+- **intent** — agent-owned Step 0 restatement, NOT the verbatim request. The hook seeds this as `[DRAFT] <prompt>` so it is never blank — your first job is to REWRITE it in your own words (remove the `[DRAFT]` prefix). `intent-anchor` re-nudges you on every new file edit until you do.
 - **files** — the **blast radius**. Grep `from '.*X'` and walk the import chain: the target file + every importer (transitively) + every shared type/helper. `scope-refresh` appends paths as you edit; declare the expected radius at Step 0.
 - **acceptance** — the project's linters at max strictness pass clean (Biome `--error-on-warnings`, Semgrep `--error --config auto`, Ruff / ESLint — whatever the repo has), the change typechecks/builds, and the described problem no longer reproduces. Frozen on continuation; reset on new task.
 
 The `stop` hook reads `.scope.json` for the final review and diffs your declared `files[]` against what git sees touched. Trivial one-liners (typo, literal) skip this — YAGNI rung 1 governs.
 
-**Decomposition (optional, YAGNI-gated).** For any task that touches more than one file or has more than one logical step, declare a `decomposition[]` array at Step 0. Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Trivial one-liners (YAGNI rung 1) leave it `[]`. The `verifications[]` array is hook-owned: `milestone-verify` (postToolUse) records ACCEPT/REVISE verdicts based on what you emit in chat when a step's `expected_files` are all touched. Emit `ACCEPT step N` to proceed or `REVISE step N: <one-line diagnosis>` to repair. The final review's axis 7 audits the chain: every step must trace to a verdict, and every touched file to a step.
+**Decomposition (required for multi-step, skip only for trivial one-liners).** For any task that touches more than one file or has more than one logical step, you MUST declare a `decomposition[]` array at Step 0. Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Only trivial one-liners (typo, literal) leave it `[]` (YAGNI rung 1). The `verifications[]` array is hook-owned: `milestone-verify` (postToolUse) records ACCEPT/REVISE verdicts based on what you emit in chat when a step's `expected_files` are all touched. Emit `ACCEPT step N` to proceed or `REVISE step N: <one-line diagnosis>` to repair. The final review's axis 7 audits the chain: every step must trace to a verdict, and every touched file to a step.
 
-**Contract enforcement.** `intent-anchor` (postToolUse, one-shot per session) emits an `INTENT ANCHOR` reminder the first time it sees `.scope.json` with empty `intent` or default-seed `acceptance`. Fill them at Step 0 and the nudge stays silent. The harness never writes these fields — they're agent-owned by design.
+**Contract enforcement.** `intent-anchor` (postToolUse) emits an `INTENT ANCHOR` reminder whenever new files are edited and `.scope.json` has `[DRAFT]`/empty `intent` or default-seed `acceptance`. Rewrite the `[DRAFT]` intent and sharpen acceptance, and the nudge stays silent. The harness never writes those fields — they're agent-owned by design.
 
 **Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` BEFORE writing. Decide:
 - **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE `intent` in place (merge the new ask into your restatement). `files[]` accumulates via edits. Sharpen `acceptance` only if the done-check changed.

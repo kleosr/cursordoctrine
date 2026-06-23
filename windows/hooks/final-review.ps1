@@ -1,21 +1,25 @@
 # final-review.ps1 - stop hook (Cursor).
 #
-# ONE end-of-implementation review across six axes (intent, correctness,
-# reliability, coverage, anti-slop, wiring). On a clean stop where files
-# changed this session, Cursor auto-submits this hook's `followup_message` as
-# the next user turn so the model re-audits its whole session diff.
+# ONE end-of-implementation review across eight axes (0 intent, 1 correctness,
+# 2 reliability, 3 coverage, 4 anti-slop, 5 wiring, 6 mechanics, 7 role-trace).
+# On a clean stop where files changed this session, Cursor auto-submits this
+# hook's `followup_message` as the next user turn so the model re-audits its
+# whole session diff.
 #
-# Change detection: `git diff --name-only HEAD` + `git ls-files --others
-# --exclude-standard` against the resolved repo root. Zero state on disk.
+# Change detection (two paths):
+#   git repo:   `git diff --name-only HEAD` + `git ls-files --others --exclude-standard`
+#   non-git:    falls back to `.scope.json` `files[]` (hook-maintained by scope-refresh)
+# This ensures the review fires for ANY project, not just git repos.
 #
-# Bounded:
-#   - per-cid reviewed-<cid>.flag: armed when a review is emitted; cleared on
-#     the post-review stop (hook-generated last turn or loop_count > 0),
-#   - loop_limit in hooks.json caps runaway follow-ups harness-side,
-#   - only on status == 'completed'.
+# Verify-revise loop: the brake flag stores the changed-file COUNT at review
+# time. On the post-review stop, if the count CHANGED (the agent revised based
+# on the review), the review RE-FIRES with the new diff. If the count is the
+# SAME (the agent accepted, no fixes), the flag clears and the loop ends.
+# This implements the Trinity verify-revise-reverify cycle: review → fix →
+# re-review until the diff stabilizes. Bounded by loop_limit (default 3).
 #
-# Always emits valid JSON ({} = no follow-up). Review prompt lives in
-# final-review.md next to this script (embedded fallback if missing).
+# Review prompt lives in final-review.md (REQUIRED — no stale fallback). If
+# missing, emits an error message instead of a degraded review.
 # Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0.
 # Debug: FINAL_REVIEW_DEBUG=1 logs exit reason to ~/.cursor/.hooks-pending/last-final-review.log
 
@@ -40,13 +44,20 @@ $loopCount = 0
 if ($obj.PSObject.Properties['loop_count']) {
     try { $loopCount = [int]$obj.loop_count } catch { $loopCount = 0 }
 }
-$loopLimit = 2
+$loopLimit = 3
 if ($env:FINAL_REVIEW_LOOP_LIMIT) {
     try { $loopLimit = [int]$env:FINAL_REVIEW_LOOP_LIMIT } catch { }
 }
 
 $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
 $flag = Join-Path $pendingDir "reviewed-$cid.flag"
+
+# Review only a clean completion.
+if ($status -and $status -ne 'completed') { Emit-None 'no_status' }
+
+# Resolve repo root early — needed by the verify-revise brake.
+$root = Resolve-ProjectRoot $obj
+if (-not $root) { Emit-None 'no_root' }
 
 # Sweep state older than 7 days from sessions that died before their stop hook.
 try {
@@ -55,13 +66,51 @@ try {
         Remove-Item -Force -ErrorAction SilentlyContinue
 } catch { }
 
-# One-shot brake: post-review stop clears the flag and ends the loop.
-# Orphaned flags (review follow-up never ran) are cleared and we continue.
+# --- verify-revise brake: compare current diff to review-time diff ------------
+# The flag stores the changed-file count at review time. On the post-review
+# stop, if the count CHANGED (agent revised), re-review the new diff. If SAME
+# (agent accepted), clear and end. Orphaned flags from missed follow-ups are
+# cleared. This implements Trinity's verify-revise-reverify cycle.
+#
+# The diff count is computed here (before the full git section below) so the
+# brake can compare early and exit fast.
+function Get-DiffCount([string]$repoRoot) {
+    $n = 0
+    & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $c = @(& git -C $repoRoot diff HEAD --name-only 2>$null).Count
+        $c += @(& git -C $repoRoot ls-files --others --exclude-standard 2>$null).Count
+        $n = $c
+    } else {
+        $sp = Join-Path $repoRoot '.scope.json'
+        if (Test-Path -LiteralPath $sp) {
+            try {
+                $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
+                if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
+                    $n = @($sj2.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' }).Count
+                }
+            } catch { }
+        }
+    }
+    return $n
+}
+
 if (Test-Path $flag) {
     $lastRaw = Get-LastRawUserQueryText $obj
     if (($lastRaw -and (Test-IsHookGeneratedQuery $lastRaw)) -or $loopCount -gt 0) {
-        Remove-Item $flag -Force -ErrorAction SilentlyContinue
-        Emit-None 'post_review_cleanup'
+        # Post-review stop. Check if the agent revised (diff changed).
+        $prevCount = 0
+        try { $prevCount = [int]((Get-Content $flag -Raw -ErrorAction SilentlyContinue).Trim()) } catch { }
+        $curCount = Get-DiffCount $root
+        if ($curCount -ne $prevCount -and $loopCount -lt $loopLimit) {
+            # Agent revised → re-review the new diff. Fall through to emit.
+            Write-FinalReviewDebug "re_review (prev=$prevCount cur=$curCount loop=$loopCount)"
+            Remove-Item $flag -Force -ErrorAction SilentlyContinue
+        } else {
+            # Agent accepted (same diff) or loop limit hit → end.
+            Remove-Item $flag -Force -ErrorAction SilentlyContinue
+            Emit-None 'post_review_cleanup'
+        }
     }
     Remove-Item $flag -Force -ErrorAction SilentlyContinue
     Write-FinalReviewDebug 'stale_flag_cleared'
@@ -69,63 +118,66 @@ if (Test-Path $flag) {
 
 if ($loopCount -ge $loopLimit) { Emit-None 'loop_limit' }
 
-# Review only a clean completion.
-if ($status -and $status -ne 'completed') { Emit-None 'no_status' }
-
-# Resolve repo root. No root -> no audit scope -> nothing to review.
-$root = Resolve-ProjectRoot $obj
-if (-not $root) { Emit-None 'no_root' }
-
-# Confirm git repo at root.
-& git -C $root rev-parse --git-dir 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { Emit-None 'no_git' }
-
-# --- collect changed files: tracked diff + untracked new files ----------------
-$edited = New-Object System.Collections.Generic.List[string]
-foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
-    if ($l) { $edited.Add($l) }
-}
-foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
-    if ($l) { $edited.Add($l) }
-}
-if ($edited.Count -eq 0) { Emit-None 'no_diff' }
-
-# Dedupe, normalize to repo-relative forward-slash paths.
+# --- collect changed files (git preferred, .scope.json fallback) ---------------
 $rel = New-Object System.Collections.Generic.List[string]
-foreach ($f in $edited) {
-    $rp = ConvertTo-FwdPath $f
-    if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
-        $rp = $rp.Substring($root.Length + 1)
+$diffStat = ''
+$isGitRepo = $false
+
+& git -C $root rev-parse --git-dir 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    $isGitRepo = $true
+    $edited = New-Object System.Collections.Generic.List[string]
+    foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
+        if ($l) { $edited.Add($l) }
     }
-    $rp = $rp.TrimStart('/')
-    if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+    foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
+        if ($l) { $edited.Add($l) }
+    }
+    # Capture diff stat for evidence injection.
+    $diffStat = (& git -C $root diff HEAD --stat 2>$null) -join "`n"
+    foreach ($f in $edited) {
+        $rp = ConvertTo-FwdPath $f
+        if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
+            $rp = $rp.Substring($root.Length + 1)
+        }
+        $rp = $rp.TrimStart('/')
+        if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+    }
 }
+
+# Non-git fallback: use .scope.json files[] as the change surface.
+if ($rel.Count -eq 0) {
+    $scopePathFb = Join-Path $root '.scope.json'
+    if (Test-Path -LiteralPath $scopePathFb) {
+        try {
+            $sjFb = Get-Content -LiteralPath $scopePathFb -Raw | ConvertFrom-Json
+            if ($sjFb.PSObject.Properties['files'] -and $sjFb.files) {
+                foreach ($f in $sjFb.files) {
+                    $s = [string]$f
+                    if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
+                    $rp = $s.Replace('\', '/').TrimStart('/')
+                    if ($rp -and $rp -ine '.scope.json' -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+                }
+            }
+        } catch { }
+    }
+}
+
 if ($rel.Count -eq 0) { Emit-None 'no_diff' }
 
-# --- review prompt body (md preferred, embedded fallback) ---------------------
-$body = ''
+# --- review prompt body (md REQUIRED — no stale fallback) ---------------------
 $promptFile = Join-Path $HOME '.agents\hooks\final-review.md'
-if (Test-Path -LiteralPath $promptFile) { $body = Get-Content -Raw -LiteralPath $promptFile }
-if (-not $body) {
-    $body = @'
-FINAL REVIEW - audit everything you changed this session and FIX what fails
-(do NOT revert the behaviour the user asked for). Run the axes in order.
-Emit ONE verdict line per axis, then any fixes:
-  axis N <name>: PASS | FIX (<what>) -> <what you did>
-Skip axes marked "(skip if ...)". Then stop. No summary paragraph.
-  0. Intent trace (run first, outranks all) - tie every diff hunk to ORIGINAL REQUEST.
-     Untraceable = hallucinated = revert. Prior-turn hunks stay.
-  1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
-  2. Reliability - error paths handled (no empty catch), timeouts/retries, resources
-     released on every path, no races, input validated at the boundary.
-  3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - apply ~/.agents/hooks/anti-slop.md to the session diff.
-  5. Wiring completeness - trace user-visible changes to a REAL EFFECT (persist/mutate/render).
-  6. Mechanics - N+1, idempotency, txn/rollback, guard clauses, no primitive obsession.
-  7. Role-trace (skip if decomposition empty) - every step has verdict, no leakage.
-Fix now, re-run tests, then stop.
-'@
+if (-not (Test-Path -LiteralPath $promptFile)) {
+    # No fallback. The .md is part of the install. If missing, the install is
+    # broken — tell the agent to fix it instead of running a degraded review.
+    $msg = "FINAL REVIEW: The review template (~/.agents/hooks/final-review.md) is missing. Your cursordoctrine install is incomplete. Run: npx cursordoctrine install"
+    New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-Content -LiteralPath $flag -Value $uniqueFiles -ErrorAction SilentlyContinue
+    Write-HookJson @{ followup_message = $msg }
+    exit 0
 }
+$body = Get-Content -Raw -LiteralPath $promptFile
+if (-not $body) { Emit-None 'empty_prompt' }
 $body = Expand-AgentPaths $body
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
@@ -243,13 +295,20 @@ if ($userQuery) {
 # --- change-surface metric ----------------------------------------------------
 $fileList = ($rel | Select-Object -First 30) -join "`n  "
 $uniqueFiles = @($rel | Select-Object -Unique).Count
-$surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n`n"
+$surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n"
+# Inject diff stat as evidence when git is available.
+if ($diffStat) {
+    $statTrimmed = ($diffStat -split "`n" | Select-Object -Last 1).Trim()
+    $surfaceBlock += "Diff: $statTrimmed`n"
+}
+$surfaceBlock += "`n"
 
-$msg = "FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, wiring, mechanics, role-trace (if decomposed). Emit one verdict line per axis (PASS | FIX).`n`n${surfaceBlock}${scopeBlock}${declaredNote}${roleTraceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
+$msg = "FINAL REVIEW (end of implementation). Emit a structured bullet report (one line per axis), then fix anything that fails. See the report template below.`n`n${surfaceBlock}${scopeBlock}${declaredNote}${roleTraceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
 
-# Arm the brake BEFORE emitting, so a crash after emit can't re-fire.
+# Arm the brake: store the current changed-file count so the post-review stop
+# can detect whether the agent revised (count changed) or accepted (same).
 New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-New-Item -ItemType File -Path $flag -Force -ErrorAction SilentlyContinue | Out-Null
+Set-Content -LiteralPath $flag -Value $uniqueFiles -ErrorAction SilentlyContinue
 
 Write-FinalReviewDebug 'emitted'
 Write-HookJson @{ followup_message = $msg }

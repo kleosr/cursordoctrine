@@ -54,11 +54,25 @@ function ConvertTo-FwdPath([string]$p) {
 }
 
 # Resolve the project root for an event: cwd -> workspace_roots ->
-# CURSOR_PROJECT_DIR -> $PWD (if it's a git repo). The $PWD fallback exists
-# because Cursor's beforeSubmitPrompt event does NOT include cwd in its
-# payload — the hook process's working directory IS the project root in that
-# case. The git-repo guard prevents writing .scope.json to $HOME or random dirs
-# (this was the cause of the ghost .scope.json in AppData\Local\Lemonade).
+# CURSOR_PROJECT_DIR -> $PWD (if it looks like a project root). The $PWD
+# fallback exists because Cursor's beforeSubmitPrompt event does NOT include
+# cwd in its payload — the hook process's working directory IS the project
+# root in that case. The project-marker guard prevents writing .scope.json to
+# $HOME or random dirs (this was the cause of the ghost .scope.json in
+# AppData\Local\Lemonade). Any git repo OR any dir with a recognized project
+# marker file is accepted, so this works for non-git repos too.
+$PROJECT_MARKERS = @(
+    '.git', '.hg', '.svn',
+    'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', 'setup.py',
+    'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile', 'composer.json',
+    'Makefile', 'CMakeLists.txt', '.project', 'tsconfig.json'
+)
+function Test-ProjectRoot([string]$dir) {
+    foreach ($m in $PROJECT_MARKERS) {
+        if (Test-Path -LiteralPath (Join-Path $dir $m)) { return $true }
+    }
+    return $false
+}
 function Resolve-ProjectRoot($obj) {
     $root = ''
     $cands = @()
@@ -73,13 +87,11 @@ function Resolve-ProjectRoot($obj) {
         if (Test-Path -LiteralPath $cpd) { $root = $cpd }
     }
     # Fallback: process working directory. Cursor launches hooks with CWD set
-    # to the project root. Only accept if it's a git repo — no ghost files.
+    # to the project root. Accept if it's a git repo OR has a project marker —
+    # no ghost files.
     if (-not $root) {
         $pwdFwd = (Get-Location).Path.Replace('\', '/').TrimEnd('/')
-        if ($pwdFwd) {
-            & git -C $pwdFwd rev-parse --git-dir 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { $root = $pwdFwd }
-        }
+        if ($pwdFwd -and (Test-ProjectRoot $pwdFwd)) { $root = $pwdFwd }
     }
     return $root
 }

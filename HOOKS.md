@@ -37,14 +37,15 @@ blocks. No repo root → silent. Disable: `INTENT_PRECOMPILE_ENFORCE=0`.
 context — the only governing text the agent receives. Short on purpose.
 
 ## afterFileEdit — scope-refresh (.ps1/.sh)
-5s, matcher `^Write$`. Reads `.scope.json` from the repo root and stashes a
+5s. Reads `.scope.json` from the repo root and stashes a
 one-line reminder (`prompt` / `intent` / `files` / `acceptance`) to
 `~/.cursor/.hooks-pending/scope-<cid>.txt`. Cursor does not consume
 afterFileEdit output directly, so the stash is delivered by `scope-drain`
 (postToolUse, fires next). Per-edit re-injection against Salience Dilution:
 keeps the contract visible as a turn fills with code. Silent when no
 `.scope.json` exists (trivial edits, fresh repos). One state file, no hashes,
-no latches. Disable: `SCOPE_REFRESH_ENFORCE=0`.
+no latches. No matcher — fires on ALL file edits (Write, Edit, MultiEdit,
+ApplyPatch, etc.), not just `Write`. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
 ## postToolUse — scope-drain (.ps1/.sh) + milestone-verify (.ps1/.sh) + intent-anchor (.ps1/.sh)
 5s each. Three entries run in array order.
@@ -67,16 +68,16 @@ trivial one-liners); all steps already verified; no expected_files completed;
 kill switch set; (Linux) no python3 available (verdict-scrape needs regex on
 transcript text). Never blocks. Disable: `MILESTONE_VERIFY_ENFORCE=0`.
 
-**intent-anchor (one-shot contract nudge):** Fires at most once per
-conversation_id. On the first postToolUse where `.scope.json` exists and
-either `intent` is empty or `acceptance` is still the default seed, emits an
-`INTENT ANCHOR` reminder listing which agent-owned field is missing. Arms a
-per-cid flag (`intent-anchored-<cid>.flag`) BEFORE emitting, so a crash can't
-re-fire and the agent won't see the nudge twice in one session. If both fields
-are already filled/customized on first run, the flag is armed silently (no
-emission). The hook never writes those fields — it just surfaces the gap so
-final-review's axis 0 intent trace has something better than the raw prompt to
-work with. Disable: `INTENT_ANCHOR_ENFORCE=0`.
+**intent-anchor (persistent contract nudge):** Re-fires whenever NEW files
+have been edited since the last nudge and `.scope.json`'s `intent` is empty
+or `acceptance` is still the default seed. The per-cid flag
+(`intent-anchored-<cid>.flag`) stores the `files[]` count at last nudge; if
+`files[]` hasn't grown, the hook stays silent. Once both fields are filled,
+the hook goes silent permanently for that conversation. Emits an
+`INTENT ANCHOR` reminder listing which agent-owned field is missing. The hook
+never writes those fields — it just surfaces the gap so final-review's axis 0
+intent trace has something better than the raw prompt to work with.
+Disable: `INTENT_ANCHOR_ENFORCE=0`.
 
 ## beforeShellExecution — permission-gate (.ps1/.sh)
 5s, `failClosed: false`. Deny a small explicit list of dangerous commands
@@ -89,21 +90,25 @@ shell is not blocked. Set `failClosed: true` in your merged `hooks.json` only
 if you prefer deny-on-timeout over availability.
 
 ## stop — final-review (.ps1/.sh)
-30s, `loop_limit: 2`. ONE comprehensive end-of-implementation review across
-seven axes (intent trace, correctness, reliability, coverage, anti-slop,
-wiring completeness, mechanics; plus role-trace as axis 7 if `decomposition[]`
-was declared). On a clean stop where files changed this session, returns
-`{followup_message}` so Cursor auto-submits ONE review pass.
+30s, `loop_limit: 3`. ONE comprehensive end-of-implementation review across
+eight axes (0 intent trace, 1 correctness, 2 reliability, 3 coverage, 4
+anti-slop, 5 wiring completeness, 6 mechanics, 7 role-trace if
+`decomposition[]` was declared). On a clean stop where files changed this
+session, returns `{followup_message}` so Cursor auto-submits ONE review pass.
 
 Change detection is stateless: `git diff --name-only HEAD` + untracked files
-against the resolved repo root. No per-edit marker files, no `.scope.json`
-ledger — git already knows what changed.
+against the resolved repo root (falls back to `.scope.json` `files[]` for
+non-git projects). The diff stat is injected as evidence so the model audits
+with real numbers. No per-edit marker files.
 
-Bounded by the per-cid `reviewed-<cid>.flag` one-shot brake (cleared on the
-post-review stop when the last user turn was hook-generated or `loop_count > 0`;
-orphaned flags from a missed follow-up are cleared and review re-fires).
-`loop_limit: 2` is the harness-side runaway cap. Only fires on
-`status === 'completed'`.
+Bounded by the per-cid `reviewed-<cid>.flag` verify-revise brake. The flag
+stores the changed-file COUNT at review time. On the post-review stop, if the
+count CHANGED (the agent revised), the review RE-FIRES with the new diff.
+If the count is the SAME (agent accepted), the flag clears and the loop ends.
+This implements the verify-revise-reverify cycle: review, fix, re-review until
+the diff stabilizes. Bounded by `loop_limit: 3` (review, revise, re-review).
+Orphaned flags from a missed follow-up are cleared and review re-fires.
+Only fires on `status === 'completed'`.
 
 Intent trace: pulls `intent` from `.scope.json` (agent restatement), quotes
 `prompt` as source when both exist, else falls back to the last human
