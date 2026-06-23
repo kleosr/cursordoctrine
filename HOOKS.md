@@ -117,11 +117,13 @@ The diff stat is injected as evidence so the model audits with real numbers.
 No per-edit marker files.
 
 Bounded by the per-cid `reviewed-<cid>.flag` verify-revise brake. The flag
-stores the changed-file COUNT at review time. On the post-review stop, if the
-count CHANGED (the agent revised), the review RE-FIRES with the new diff.
-If the count is the SAME (agent accepted), the flag clears and the loop ends.
-This implements the verify-revise-reverify cycle: review, fix, re-review until
-the diff stabilizes. Bounded by `loop_limit: 3` (review, revise, re-review).
+stores a CONTENT-HASH SIGNATURE (SHA256 of `git diff HEAD -- <files[]>` for
+doctrine, or `git diff HEAD` + untracked for non-doctrine) at review time.
+On the post-review stop, if the signature CHANGED (the agent revised), the
+review RE-FIRES with the new diff. If the signature is the SAME (agent
+accepted), the flag clears and the loop ends. This implements the
+verify-revise-reverify cycle: review, fix, re-review until the diff
+stabilizes. Bounded by `loop_limit: 3` (review, revise, re-review).
 Orphaned flags from a missed follow-up are cleared and review re-fires.
 Only fires on `status === 'completed'`.
 

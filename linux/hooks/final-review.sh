@@ -17,12 +17,20 @@
 #   non-doctrine (no .scope.json): `git diff --name-only HEAD` +
 #       `git ls-files --others --exclude-standard` (unchanged).
 #
-# Verify-revise loop: the brake flag stores the changed-file COUNT at review
-# time. On the post-review stop, if the count CHANGED (the agent revised based
-# on the review), the review RE-FIRES with the new diff. If the count is the
-# SAME (the agent accepted, no fixes), the flag clears and the loop ends.
-# This implements the Trinity verify-revise-reverify cycle: review → fix →
-# re-review until the diff stabilizes. Bounded by loop_limit (default 3).
+# Verify-revise loop: the brake flag stores a CONTENT-HASH SIGNATURE of the
+# change surface at review time. On the post-review stop, if the signature
+# CHANGED (the agent revised based on the review), the review RE-FIRES with
+# the new diff. If the signature is the SAME (the agent accepted, no fixes),
+# the flag clears and the loop ends. This implements the Trinity verify-revise-
+# reverify cycle: review → fix → re-review until the diff stabilizes.
+# Bounded by loop_limit (default 3).
+#
+# The signature is a SHA256 hash of git diff HEAD -- <files[]> (doctrine) or
+# git diff HEAD + untracked (non-doctrine). Unlike a file COUNT, this changes
+# on in-place edits to existing files — the dominant revision pattern after a
+# REVISE verdict. A count-based brake missed in-place edits entirely because
+# scope-refresh is append-only (editing an existing files[] entry does not
+# change the count), causing the loop to exit without reverify.
 #
 # Review prompt lives in final-review.md (REQUIRED — no stale fallback). If
 # missing, emits an error message instead of a degraded review.
@@ -72,49 +80,107 @@ root="$(resolve_project_root "$input")"
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
 # --- verify-revise brake: compare current diff to review-time diff ------------
-# get_diff_count: count changed files (.scope.json files[] primary; git fallback)
-get_diff_count() {
+# get_diff_signature: content-hash signature of the change surface.
+# Returns a SHA256 hex string (or 'empty'). Unlike a file COUNT, this changes
+# on in-place edits — the dominant revision pattern after a REVISE verdict.
+get_diff_signature() {
     local repo_root="$1" sp="$repo_root/.scope.json"
-    if [ -f "$sp" ]; then
-        # Doctrine project: files[] is the per-session edit surface.
-        # Empty/missing files[] → 0 (agent made no session edits).
-        if have_jq; then
-            local n
-            n="$(cat "$sp" 2>/dev/null | jq -r '.files[]? // empty' 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
-            printf '%s' "${n:-0}"
-            return
-        elif have_py; then
-            local n
-            n="$(cat "$sp" 2>/dev/null | python3 -c 'import json,sys
-try:
-    f=json.load(sys.stdin).get("files") or []
-    print(len([x for x in f if x and str(x).strip() and not str(x).strip().startswith("<") and str(x).strip()!=".scope.json"]))
-except Exception: print(0)' 2>/dev/null)"
-            printf '%s' "${n:-0}"
-            return
+    local sig=""
+
+    # Helper: hash a string via sha256sum / shasum / md5sum (first available).
+    _hash_str() {
+        local s="$1"
+        [ -n "$s" ] || { printf 'empty'; return; }
+        if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s' "$s" | sha256sum | cut -d' ' -f1
+        elif command -v shasum >/dev/null 2>&1; then
+            printf '%s' "$s" | shasum -a 256 | cut -d' ' -f1
+        elif command -v md5sum >/dev/null 2>&1; then
+            printf '%s' "$s" | md5sum | cut -d' ' -f1
+        else
+            printf 'wc:%s:%s' "$(printf '%s' "$s" | wc -l | tr -d ' ')" "$(printf '%s' "$s" | wc -c | tr -d ' ')"
         fi
-        printf '0'
-        return
-    fi
-    # Non-doctrine fallback: git diff + untracked.
+    }
+
+    # Read files[] from .scope.json into a normalized newline-separated list.
+    _read_scope_files() {
+        if have_jq; then
+            jq -r '.files[]? // empty' "$sp" 2>/dev/null
+        elif have_py; then
+            python3 -c '
+import json
+try:
+    for f in (json.load(open("'"$sp"'")).get("files") or []):
+        s = str(f).strip()
+        if s and not s.startswith("<") and s != ".scope.json":
+            print(s.replace("\\\\", "/").lstrip("/"))
+except Exception: pass' 2>/dev/null
+        fi
+    }
+
     if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
-        local n
-        n="$(git -C "$repo_root" diff HEAD --name-only 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
-        n=$((n + $(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c -v '^$' 2>/dev/null)))
-        printf '%s' "${n:-0}"
-        return
+        if [ -f "$sp" ]; then
+            # Doctrine + git: scoped diff + untracked file[] contents.
+            local scope_files norm_files
+            scope_files="$(_read_scope_files)"
+            if [ -n "$scope_files" ]; then
+                norm_files="$(printf '%s\n' "$scope_files" | grep -v '^$' | sort -u)"
+                # Build file args array for git diff.
+                local files_args=()
+                while IFS= read -r p; do
+                    [ -n "$p" ] && files_args+=("$p")
+                done <<< "$norm_files"
+                if [ ${#files_args[@]} -gt 0 ]; then
+                    sig="$(git -C "$repo_root" diff HEAD -- "${files_args[@]}" 2>/dev/null)"
+                    # Content of untracked files[] entries (not in git diff HEAD).
+                    local tracked
+                    tracked="$(git -C "$repo_root" ls-files -- "${files_args[@]}" 2>/dev/null | tr '\\' '/' | sed 's|^/||' | sort -u)"
+                    while IFS= read -r f; do
+                        [ -n "$f" ] || continue
+                        if ! printf '%s\n' "$tracked" | grep -qxF "$f" 2>/dev/null; then
+                            if [ -f "$repo_root/$f" ]; then
+                                sig="${sig}"$'\n'"==U:${f}=="$'\n'"$(cat "$repo_root/$f" 2>/dev/null)"
+                            fi
+                        fi
+                    done <<< "$norm_files"
+                fi
+            fi
+        else
+            # Non-doctrine git: full diff + untracked contents.
+            sig="$(git -C "$repo_root" diff HEAD 2>/dev/null)"
+            while IFS= read -r u; do
+                [ -n "$u" ] || continue
+                if [ -f "$repo_root/$u" ]; then
+                    sig="${sig}"$'\n'"==U:${u}=="$'\n'"$(cat "$repo_root/$u" 2>/dev/null)"
+                fi
+            done < <(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null)
+        fi
+    elif [ -f "$sp" ]; then
+        # Non-git doctrine: hash file contents from files[].
+        local scope_files
+        scope_files="$(_read_scope_files)"
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            if [ -f "$repo_root/$p" ]; then
+                sig="${sig}"$'\n'"==F:${p}=="$'\n'"$(cat "$repo_root/$p" 2>/dev/null)"
+            fi
+        done <<< "$scope_files"
     fi
-    printf '0'
+
+    _hash_str "$sig"
 }
 
 if [ -f "$flag" ]; then
     last_raw="$(extract_last_raw_user_query "$input")"
     if is_hook_generated_query "$last_raw" || [ "$loop_count" -gt 0 ]; then
-        prev_count="$(cat "$flag" 2>/dev/null | tr -dc '0-9')"
-        prev_count="${prev_count:-0}"
-        cur_count="$(get_diff_count "$root")"
-        if [ "$cur_count" != "$prev_count" ] && [ "$loop_count" -lt "$loop_limit" ]; then
-            final_review_debug "re_review (prev=$prev_count cur=$cur_count loop=$loop_count)"
+        prev_sig="$(cat "$flag" 2>/dev/null)"
+        prev_sig="${prev_sig%%$'\n'*}"
+        cur_sig="$(get_diff_signature "$root")"
+        if [ "$cur_sig" != "$prev_sig" ] && [ "$loop_count" -lt "$loop_limit" ]; then
+            prev_short="${prev_sig:0:8}"
+            [ -n "$prev_short" ] || prev_short='(none)'
+            cur_short="${cur_sig:0:8}"
+            final_review_debug "re_review (prev=$prev_short cur=$cur_short loop=$loop_count)"
             rm -f "$flag" 2>/dev/null
         else
             rm -f "$flag" 2>/dev/null
@@ -213,9 +279,8 @@ prompt_file="$HOME/.agents/hooks/final-review.md"
 if [ ! -f "$prompt_file" ]; then
     # No fallback. The .md is part of the install. If missing, the install is
     # broken — tell the agent to fix it instead of running a degraded review.
-    unique_files="$(printf '%s' "$edited" | grep -c -v '^$')"
     mkdir -p "$pending_dir" 2>/dev/null
-    printf '%s' "$unique_files" > "$flag" 2>/dev/null
+    get_diff_signature "$root" > "$flag" 2>/dev/null
     emit_json followup_message "FINAL REVIEW: The review template (~/.agents/hooks/final-review.md) is missing. Your cursordoctrine install is incomplete. Run: npx cursordoctrine install"
     exit 0
 fi
@@ -403,10 +468,10 @@ $file_list
 
 $body"
 
-# Arm the brake: store the current changed-file count so the post-review stop
-# can detect whether the agent revised (count changed) or accepted (same).
+# Arm the brake: store the current content-hash signature so the post-review
+# stop can detect whether the agent revised (signature changed) or accepted.
 mkdir -p "$pending_dir" 2>/dev/null
-printf '%s' "$unique_files" > "$flag" 2>/dev/null
+get_diff_signature "$root" > "$flag" 2>/dev/null
 
 final_review_debug emitted
 emit_json followup_message "$msg"

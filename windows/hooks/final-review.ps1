@@ -16,12 +16,20 @@
 #   non-doctrine (no .scope.json): `git diff --name-only HEAD` +
 #       `git ls-files --others --exclude-standard` (unchanged).
 #
-# Verify-revise loop: the brake flag stores the changed-file COUNT at review
-# time. On the post-review stop, if the count CHANGED (the agent revised based
-# on the review), the review RE-FIRES with the new diff. If the count is the
-# SAME (the agent accepted, no fixes), the flag clears and the loop ends.
-# This implements the Trinity verify-revise-reverify cycle: review → fix →
-# re-review until the diff stabilizes. Bounded by loop_limit (default 3).
+# Verify-revise loop: the brake flag stores a CONTENT-HASH SIGNATURE of the
+# change surface at review time. On the post-review stop, if the signature
+# CHANGED (the agent revised based on the review), the review RE-FIRES with
+# the new diff. If the signature is the SAME (the agent accepted, no fixes),
+# the flag clears and the loop ends. This implements the Trinity verify-revise-
+# reverify cycle: review → fix → re-review until the diff stabilizes.
+# Bounded by loop_limit (default 3).
+#
+# The signature is a SHA256 hash of git diff HEAD -- <files[]> (doctrine) or
+# git diff HEAD + untracked (non-doctrine). Unlike a file COUNT, this changes
+# on in-place edits to existing files — the dominant revision pattern after a
+# REVISE verdict. A count-based brake missed in-place edits entirely because
+# scope-refresh is append-only (editing an existing files[] entry does not
+# change the count), causing the loop to exit without reverify.
 #
 # Review prompt lives in final-review.md (REQUIRED — no stale fallback). If
 # missing, emits an error message instead of a degraded review.
@@ -72,46 +80,125 @@ try {
 } catch { }
 
 # --- verify-revise brake: compare current diff to review-time diff ------------
-# The flag stores the changed-file count at review time. On the post-review
-# stop, if the count CHANGED (agent revised), re-review the new diff. If SAME
-# (agent accepted), clear and end. Orphaned flags from missed follow-ups are
-# cleared. This implements Trinity's verify-revise-reverify cycle.
+# The flag stores a content-hash signature at review time. On the post-review
+# stop, if the signature CHANGED (agent revised), re-review the new diff. If
+# SAME (agent accepted), clear and end. Orphaned flags from missed follow-ups
+# are cleared. This implements Trinity's verify-revise-reverify cycle.
 #
-# The diff count is computed here (before the full git section below) so the
+# The signature is computed here (before the full git section below) so the
 # brake can compare early and exit fast.
-function Get-DiffCount([string]$repoRoot) {
+# Content-hash signature of the current change surface. Returns a SHA256 hex
+# string (or 'empty'). Unlike a file COUNT, this changes on in-place edits to
+# existing files — the dominant revision pattern after a REVISE verdict.
+#
+# Doctrine + git: hash git diff HEAD -- <files[]> + content of untracked
+#   files[] entries (those not in git diff HEAD).
+# Non-doctrine + git: hash full git diff HEAD + untracked file contents.
+# Non-git doctrine: hash concatenated contents of existing files in files[].
+# No git, no .scope.json: 'empty'.
+function Get-DiffSignature([string]$repoRoot) {
+    $sb = New-Object System.Text.StringBuilder
     $sp = Join-Path $repoRoot '.scope.json'
-    if (Test-Path -LiteralPath $sp) {
-        # Doctrine project: files[] is the per-session edit surface.
-        # Empty/missing files[] → 0 (agent made no session edits).
+    $hasScope = (Test-Path -LiteralPath $sp)
+
+    & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
+    $hasGit = ($LASTEXITCODE -eq 0)
+
+    if ($hasGit -and $hasScope) {
+        # Doctrine + git: scoped diff + untracked file[] contents.
+        $files = @()
         try {
             $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
             if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
-                return @($sj2.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' }).Count
+                $files = @($sj2.files |
+                    Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' } |
+                    ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
+                    Select-Object -Unique)
             }
         } catch { }
-        return 0
+
+        if ($files.Count -gt 0) {
+            # git diff HEAD scoped to files[] — catches tracked in-place edits.
+            # Join with newlines: git outputs an array of lines; StringBuilder.Append
+            # on an array yields "System.Object[]" instead of the content.
+            $diff = (& git -C $repoRoot diff HEAD -- $files 2>$null) -join "`n"
+            if ($diff) { [void]$sb.Append($diff) }
+            # Content of untracked files[] entries (not in git diff HEAD).
+            $tracked = @{}
+            foreach ($t in (& git -C $repoRoot ls-files -- $files 2>$null)) {
+                if ($t) { $tracked[$t.Replace('\', '/').TrimStart('/')] = $true }
+            }
+            foreach ($f in $files) {
+                if (-not $tracked.ContainsKey($f)) {
+                    $full = Join-Path $repoRoot $f
+                    if (Test-Path -LiteralPath $full -PathType Leaf) {
+                        try {
+                            [void]$sb.Append("`n==U:$f==`n")
+                            [void]$sb.Append([System.IO.File]::ReadAllText($full))
+                        } catch { }
+                    }
+                }
+            }
+        }
+    } elseif ($hasGit) {
+        # Non-doctrine git: full diff + untracked contents.
+        $diff = (& git -C $repoRoot diff HEAD 2>$null) -join "`n"
+        if ($diff) { [void]$sb.Append($diff) }
+        foreach ($u in (& git -C $repoRoot ls-files --others --exclude-standard 2>$null)) {
+            if (-not $u) { continue }
+            $full = Join-Path $repoRoot $u
+            if (Test-Path -LiteralPath $full -PathType Leaf) {
+                try {
+                    [void]$sb.Append("`n==U:$u==`n")
+                    [void]$sb.Append([System.IO.File]::ReadAllText($full))
+                } catch { }
+            }
+        }
+    } elseif ($hasScope) {
+        # Non-git doctrine: hash file contents from files[].
+        try {
+            $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
+            if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
+                foreach ($f in $sj2.files) {
+                    $s = [string]$f
+                    if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
+                    $rp = $s.Replace('\', '/').TrimStart('/')
+                    if ($rp -and $rp -ine '.scope.json') {
+                        $full = Join-Path $repoRoot $rp
+                        if (Test-Path -LiteralPath $full -PathType Leaf) {
+                            try {
+                                [void]$sb.Append("`n==F:$rp==`n")
+                                [void]$sb.Append([System.IO.File]::ReadAllText($full))
+                            } catch { }
+                        }
+                    }
+                }
+            }
+        } catch { }
     }
-    # Non-doctrine fallback: git diff + untracked.
-    & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        $c = @(& git -C $repoRoot diff HEAD --name-only 2>$null).Count
-        $c += @(& git -C $repoRoot ls-files --others --exclude-standard 2>$null).Count
-        return $c
-    }
-    return 0
+
+    $raw = $sb.ToString()
+    if ([string]::IsNullOrEmpty($raw)) { return 'empty' }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($raw))
+    } finally { $sha.Dispose() }
+    return -join ($hashBytes | ForEach-Object { $_.ToString('x2') })
 }
 
 if (Test-Path $flag) {
     $lastRaw = Get-LastRawUserQueryText $obj
     if (($lastRaw -and (Test-IsHookGeneratedQuery $lastRaw)) -or $loopCount -gt 0) {
-        # Post-review stop. Check if the agent revised (diff changed).
-        $prevCount = 0
-        try { $prevCount = [int]((Get-Content $flag -Raw -ErrorAction SilentlyContinue).Trim()) } catch { }
-        $curCount = Get-DiffCount $root
-        if ($curCount -ne $prevCount -and $loopCount -lt $loopLimit) {
+        # Post-review stop. Check if the agent revised (diff signature changed).
+        $prevSig = (Get-Content $flag -Raw -ErrorAction SilentlyContinue)
+        if ($prevSig) { $prevSig = $prevSig.Trim() }
+        $curSig = Get-DiffSignature $root
+        if ($curSig -ne $prevSig -and $loopCount -lt $loopLimit) {
             # Agent revised → re-review the new diff. Fall through to emit.
-            Write-FinalReviewDebug "re_review (prev=$prevCount cur=$curCount loop=$loopCount)"
+            $prevShort = if ($prevSig) { $prevSig.Substring(0, [Math]::Min(8, $prevSig.Length)) } else { '(none)' }
+            $curShort = $curSig.Substring(0, [Math]::Min(8, $curSig.Length))
+            Write-FinalReviewDebug "re_review (prev=$prevShort cur=$curShort loop=$loopCount)"
             Remove-Item $flag -Force -ErrorAction SilentlyContinue
         } else {
             # Agent accepted (same diff) or loop limit hit → end.
@@ -196,7 +283,7 @@ if (-not (Test-Path -LiteralPath $promptFile)) {
     # broken — tell the agent to fix it instead of running a degraded review.
     $msg = "FINAL REVIEW: The review template (~/.agents/hooks/final-review.md) is missing. Your cursordoctrine install is incomplete. Run: npx cursordoctrine install"
     New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-Content -LiteralPath $flag -Value $uniqueFiles -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath $flag -Value (Get-DiffSignature $root) -ErrorAction SilentlyContinue
     Write-HookJson @{ followup_message = $msg }
     exit 0
 }
@@ -349,10 +436,10 @@ $surfaceBlock += "`n"
 
 $msg = "FINAL REVIEW (end of implementation). Emit a structured bullet report (one line per axis), then fix anything that fails. See the report template below.`n`n${surfaceBlock}${scopeBlock}${declaredNote}${roleTraceBlock}${intentBlock}Files you changed this session:`n  $fileList`n`n$body"
 
-# Arm the brake: store the current changed-file count so the post-review stop
-# can detect whether the agent revised (count changed) or accepted (same).
+# Arm the brake: store the current content-hash signature so the post-review
+# stop can detect whether the agent revised (signature changed) or accepted.
 New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-Set-Content -LiteralPath $flag -Value $uniqueFiles -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $flag -Value (Get-DiffSignature $root) -ErrorAction SilentlyContinue
 
 Write-FinalReviewDebug 'emitted'
 Write-HookJson @{ followup_message = $msg }
