@@ -2,8 +2,8 @@
 // cursordoctrine — one-command installer for the cursordoctrine hook pack.
 //
 // The payload ships inside this npm package (windows/, linux/, skills/).
-// `install` copies it into $HOME exactly the way INSTALL.md step 2 does,
-// merging ~/.cursor/hooks.json instead of overwriting it. `verify` smoke-tests
+// `install` removes any prior cursordoctrine pack from $HOME, then copies the
+// new payload (windows/, linux/, skills/), merging ~/.cursor/hooks.json instead of overwriting it. `verify` smoke-tests
 // every hook with fake payloads (INSTALL.md step 3). `uninstall` removes our
 // files and strips our hooks.json entries while preserving foreign ones.
 //
@@ -171,6 +171,77 @@ function mergeHooks(existing, incoming, keys) {
   return { merged: out, preserved };
 }
 
+// Remove every file and hooks.json entry this pack owns. Used by uninstall()
+// and at the start of install() so `npx cursordoctrine@latest install` always
+// upgrades from a clean slate (foreign hooks.json entries are preserved).
+function removeOurPack() {
+  const removed = [];
+  const keys = ourKeys();
+
+  for (const f of payloadHookFiles()) {
+    const p = join(hooksDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(`~/.agents/hooks/${f}`);
+    }
+  }
+  for (const f of STALE_HOOK_FILES) {
+    const p = join(hooksDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(`~/.agents/hooks/${f}`);
+    }
+  }
+  for (const f of doctrineFiles) {
+    const p = join(cursorDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(`~/.cursor/${f}`);
+    }
+  }
+  for (const f of STALE_CURSOR_FILES) {
+    const p = join(cursorDst, f);
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(`~/.cursor/${f}`);
+    }
+  }
+  if (existsSync(skillDst)) {
+    rmSync(skillDst, { recursive: true, force: true });
+    removed.push('~/.cursor/skills/anti-slop/');
+  }
+  if (existsSync(pendingDir)) {
+    rmSync(pendingDir, { recursive: true, force: true });
+    removed.push('~/.cursor/.hooks-pending/');
+  }
+
+  if (existsSync(hooksJsonDst)) {
+    try {
+      const existing = JSON.parse(readFileSync(hooksJsonDst, 'utf8'));
+      let foreign = 0;
+      for (const [event, entries] of Object.entries(existing.hooks || {})) {
+        if (!Array.isArray(entries)) continue;
+        existing.hooks[event] = entries.filter(
+          (x) => !x || (!isOurs(x.command, keys) && !isStaleOurs(x.command))
+        );
+        foreign += existing.hooks[event].length;
+        if (existing.hooks[event].length === 0) delete existing.hooks[event];
+      }
+      if (foreign === 0) {
+        rmSync(hooksJsonDst, { force: true });
+        removed.push('~/.cursor/hooks.json');
+      } else {
+        writeFileSync(hooksJsonDst, JSON.stringify(existing, null, 2) + '\n');
+        removed.push(`~/.cursor/hooks.json (ours stripped, ${foreign} foreign entr${foreign === 1 ? 'y' : 'ies'} kept)`);
+      }
+    } catch {
+      // Invalid JSON left for install() to back up and rewrite.
+    }
+  }
+
+  return removed;
+}
+
 function install() {
   console.log(`cursordoctrine ${pkg.version} — installing the ${platform} hook pack into ${HOME}`);
   if (process.platform === 'darwin') {
@@ -180,27 +251,16 @@ function install() {
     console.log('  warning: home path contains spaces; hooks.json commands may need manual quoting.');
   }
 
+  const removedPrior = removeOurPack();
+  if (removedPrior.length) {
+    console.log(`  removed prior install  ${removedPrior.length} item(s)`);
+  }
+
   mkdirSync(hooksDst, { recursive: true });
   mkdirSync(cursorDst, { recursive: true });
 
   const hookFiles = payloadHookFiles();
   for (const f of hookFiles) cpSync(join(payload, 'hooks', f), join(hooksDst, f));
-  const reapedHooks = [];
-  for (const f of STALE_HOOK_FILES) {
-    const p = join(hooksDst, f);
-    if (existsSync(p)) {
-      rmSync(p, { force: true });
-      reapedHooks.push(f);
-    }
-  }
-  const reapedCursor = [];
-  for (const f of STALE_CURSOR_FILES) {
-    const p = join(cursorDst, f);
-    if (existsSync(p)) {
-      rmSync(p, { force: true });
-      reapedCursor.push(f);
-    }
-  }
 
   for (const f of doctrineFiles) cpSync(join(payload, f), join(cursorDst, f));
 
@@ -247,13 +307,7 @@ function install() {
 
   console.log('');
   console.log(`  ~/.agents/hooks        ${hookFiles.length} files`);
-  if (reapedHooks.length) {
-    console.log(`  reaped stale hooks     ${reapedHooks.join(', ')}`);
-  }
   console.log(`  ~/.cursor              ${doctrineFiles.join(', ')}`);
-  if (reapedCursor.length) {
-    console.log(`  reaped stale doctrine  ${reapedCursor.join(', ')}`);
-  }
   console.log(`  ~/.cursor/hooks.json   ${hooksJsonNote}`);
   console.log('  ~/.cursor/skills       anti-slop (SKILL.md + scanner)');
   console.log('');
@@ -414,6 +468,42 @@ function verify() {
       return { ok: false, detail: `retired hook ${staleName} survived the merge` };
     }
     return true;
+  });
+
+  check('install removes prior pack before writing new hooks', () => {
+    const sandbox = join(HOME, '.cd-verify-install-upgrade');
+    const staleName = STALE_HOOK_FILES.find((f) => f.endsWith(platform === 'windows' ? '.ps1' : '.sh'));
+    if (!staleName) return { ok: false, detail: 'no stale hook fixture for platform' };
+    const sandboxHooks = join(sandbox, '.agents', 'hooks');
+    const sandboxPending = join(sandbox, '.cursor', '.hooks-pending');
+    const stalePath = join(sandboxHooks, staleName);
+    const cliPath = join(pkgRoot, 'bin/cli.mjs');
+    const sandboxEnv = { ...process.env, CURSORDOCTRINE_HOME: sandbox, HOME: sandbox, USERPROFILE: sandbox };
+    try {
+      rmSync(sandbox, { recursive: true, force: true });
+      mkdirSync(sandboxHooks, { recursive: true });
+      mkdirSync(sandboxPending, { recursive: true });
+      writeFileSync(stalePath, '# stale leftover from prior version\n');
+      writeFileSync(join(sandboxPending, 'old.flag'), '1');
+      const r = spawnSync(process.execPath, [cliPath, 'install'], {
+        env: sandboxEnv,
+        encoding: 'utf8',
+        timeout: 30000,
+        windowsHide: true,
+      });
+      if (r.status !== 0) {
+        return { ok: false, detail: `install exited ${r.status}: ${(r.stderr || r.stdout || '').slice(0, 200)}` };
+      }
+      if (existsSync(stalePath)) return { ok: false, detail: `${staleName} survived install upgrade` };
+      if (existsSync(join(sandboxPending, 'old.flag'))) {
+        return { ok: false, detail: '.hooks-pending not cleared on upgrade install' };
+      }
+      const anchor = join(sandboxHooks, `intent-anchor.${platform === 'windows' ? 'ps1' : 'sh'}`);
+      if (!existsSync(anchor)) return { ok: false, detail: 'fresh hooks were not installed' };
+      return true;
+    } finally {
+      rmBestEffort(sandbox, { recursive: true, force: true });
+    }
   });
 
   check('permission gate denies `git push --force`', () =>
@@ -1157,53 +1247,11 @@ function sweep() {
 function uninstall() {
   console.log(`cursordoctrine ${pkg.version} — removing the ${platform} hook pack from ${HOME}`);
 
-  const removed = [];
-  for (const f of payloadHookFiles()) {
-    const p = join(hooksDst, f);
-    if (existsSync(p)) {
-      rmSync(p, { force: true });
-      removed.push(`~/.agents/hooks/${f}`);
-    }
-  }
-  for (const f of doctrineFiles) {
-    const p = join(cursorDst, f);
-    if (existsSync(p)) {
-      rmSync(p, { force: true });
-      removed.push(`~/.cursor/${f}`);
-    }
-  }
-  if (existsSync(skillDst)) {
-    rmSync(skillDst, { recursive: true, force: true });
-    removed.push('~/.cursor/skills/anti-slop/');
-  }
-  if (existsSync(pendingDir)) {
-    rmSync(pendingDir, { recursive: true, force: true });
-    removed.push('~/.cursor/.hooks-pending/');
-  }
+  const removed = removeOurPack();
 
   if (existsSync(hooksJsonDst)) {
     try {
-      const existing = JSON.parse(readFileSync(hooksJsonDst, 'utf8'));
-      const keys = ourKeys();
-      let foreign = 0;
-      for (const [event, entries] of Object.entries(existing.hooks || {})) {
-        if (!Array.isArray(entries)) continue;
-        // Remove both current ours AND stale ours (commands referencing scripts
-        // this pack no longer ships - leftovers from prior versions). Pure
-        // foreign entries are kept, same as before.
-        existing.hooks[event] = entries.filter(
-          (x) => !x || (!isOurs(x.command, keys) && !isStaleOurs(x.command))
-        );
-        foreign += existing.hooks[event].length;
-        if (existing.hooks[event].length === 0) delete existing.hooks[event];
-      }
-      if (foreign === 0) {
-        rmSync(hooksJsonDst, { force: true });
-        removed.push('~/.cursor/hooks.json');
-      } else {
-        writeFileSync(hooksJsonDst, JSON.stringify(existing, null, 2) + '\n');
-        removed.push(`~/.cursor/hooks.json (ours stripped, ${foreign} foreign entr${foreign === 1 ? 'y' : 'ies'} kept)`);
-      }
+      JSON.parse(readFileSync(hooksJsonDst, 'utf8'));
     } catch {
       console.log('  warning: ~/.cursor/hooks.json is not valid JSON — left untouched.');
     }
@@ -1224,6 +1272,7 @@ Usage
 
 Commands
   install      Install the hook pack, doctrine, and anti-slop skill into $HOME.
+               Removes any prior cursordoctrine install first, then writes fresh.
                Merges ~/.cursor/hooks.json — entries you added yourself are preserved.
   verify       Smoke-test every installed hook with fake payloads (no Cursor restart needed).
   sweep        Whole-codebase anti-slop audit: scan every file, print a category-by-
