@@ -6,15 +6,19 @@
 # Agent-owned fields: `intent` (Step 0 restatement), initial `files[]` blast
 # radius, sharpened `acceptance`.
 #
-# Intent seeding: on new task or fresh creation, the hook writes
-# `intent = "[DRAFT] <prompt>"` — a provisional placeholder so the field is
-# never blank. The agent refines it into a proper Step 0 restatement (removing
-# the [DRAFT] prefix). intent-anchor detects the [DRAFT] prefix and keeps
-# nudging until the agent rewrites it. On continuation, existing intent is
-# preserved verbatim.
+# Intent seeding: on topic change or fresh creation, the hook seeds `intent = ""`
+# (empty). A blank intent is HONEST — it signals "not done yet" and keeps both
+# intent-anchor (postToolUse nudge) and final-review (axis 0 FAIL) re-surfacing
+# the gap until the agent rewrites it as a real Step 0 restatement of the SAME
+# task, but clearer/better than the verbatim prompt. The hook never writes a
+# [DRAFT] copy of the prompt: a verbatim-with-prefix seed looked "filled" to a
+# lazy agent and never got regenerated. (Legacy [DRAFT] intents from older
+# installs are still detected defensively by intent-anchor / final-review and
+# nudged to be rewritten.) On continuation, existing intent is preserved verbatim.
 #
+# Topic change (automatic Jaccard detection): when the new prompt is dissimilar
+# enough from the stored prompt, reset intent/files/decomposition/verifications.
 # Continuation: update `prompt` only; preserve intent, files[], acceptance.
-# New task (prefix /new, "new task:", "new task —"): reset and seed [DRAFT] intent.
 #
 # scope-refresh (afterFileEdit) appends edited paths to files[].
 # Skips hook-generated auto-submits. Never blocks. Disable:
@@ -43,58 +47,109 @@ root="$(resolve_project_root "$input")"
 scope_path="$root/.scope.json"
 default_acceptance='Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
 
-is_new_task() {
-    local p lower
-    p="$(printf '%s' "$1" | sed 's/^[[:space:]]*//')"
-    lower="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
-    case "$lower" in
-        /new*) return 0 ;;
-        new\ task:*) return 0 ;;
-        new\ task\ —*|new\ task\ -*) return 0 ;;
-    esac
-    return 1
+# Returns "true" when the new prompt is dissimilar enough to treat as a new task.
+topic_changed() {
+    local new_p="$1" old_p="$2"
+    if have_py; then
+        NEW_P="$new_p" OLD_P="$old_p" python3 -c '
+import os, re, sys
+
+def tokens(p):
+    return set(t for t in re.sub(r"[^a-z0-9 ]", " ", p.lower()).split() if t)
+
+def changed(new_p, old_p):
+    if not (old_p or "").strip():
+        return True
+    a, b = tokens(new_p), tokens(old_p)
+    if len(a) < 3 or len(b) < 3:
+        return False
+    inter = len(a & b)
+    union = len(a | b)
+    if union == 0:
+        return False
+    try:
+        th = float(os.environ.get("INTENT_TOPIC_THRESHOLD", "0.34"))
+    except ValueError:
+        th = 0.34
+    return (inter / union) < th
+
+print("true" if changed(os.environ.get("NEW_P", ""), os.environ.get("OLD_P", "")) else "false")
+' 2>/dev/null
+        return
+    fi
+    # jq-only fallback: normalize tokens via tr/sort/comm.
+    _token_file() {
+        printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '\n' | sed '/^$/d' | sort -u
+    }
+    if [ -z "$(printf '%s' "$old_p" | tr -d '[:space:]')" ]; then
+        printf 'true'
+        return
+    fi
+    local tmpdir newf oldf
+    tmpdir="$(mktemp -d 2>/dev/null)" || return 1
+    newf="$tmpdir/new"; oldf="$tmpdir/old"
+    _token_file "$new_p" > "$newf"
+    _token_file "$old_p" > "$oldf"
+    local nc oc inter union th
+    nc="$(wc -l < "$newf" | tr -dc '0-9')"; nc="${nc:-0}"
+    oc="$(wc -l < "$oldf" | tr -dc '0-9')"; oc="${oc:-0}"
+    if [ "$nc" -lt 3 ] 2>/dev/null || [ "$oc" -lt 3 ] 2>/dev/null; then
+        rm -rf "$tmpdir" 2>/dev/null
+        printf 'false'
+        return
+    fi
+    inter="$(comm -12 "$newf" "$oldf" | wc -l | tr -dc '0-9')"; inter="${inter:-0}"
+    union="$(sort -u "$newf" "$oldf" | wc -l | tr -dc '0-9')"; union="${union:-0}"
+    rm -rf "$tmpdir" 2>/dev/null
+    if [ "$union" -eq 0 ] 2>/dev/null; then
+        printf 'false'
+        return
+    fi
+    th="${INTENT_TOPIC_THRESHOLD:-0.34}"
+    awk -v i="$inter" -v u="$union" -v t="$th" 'BEGIN { print (i/u < t+0) ? "true" : "false" }'
 }
 
-if [ -f "$scope_path" ]; then
-    scope_raw="$(cat "$scope_path" 2>/dev/null)"
-    if is_new_task "$prompt"; then
-        if have_jq; then
-            new_raw="$(jq -nc \
-                --arg p "$prompt" \
-                --arg a "$default_acceptance" \
-                '{prompt: $p, intent: ("[DRAFT] " + $p), decomposition: [], verifications: [], files: [], acceptance: $a}' 2>/dev/null)"
-        elif have_py; then
-            new_raw="$(P="$prompt" A="$default_acceptance" python3 -c '
+write_reset_scope() {
+    local p="$1"
+    if have_jq; then
+        jq -nc \
+            --arg p "$p" \
+            --arg a "$default_acceptance" \
+            '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
+    elif have_py; then
+        P="$p" A="$default_acceptance" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
-    "intent": "[DRAFT] " + os.environ["P"],
+    "intent": "",
     "decomposition": [],
     "verifications": [],
     "files": [],
     "acceptance": os.environ["A"],
-}, indent=2, ensure_ascii=False))' 2>/dev/null)"
-        else
-            exit 0
-        fi
-    elif have_jq; then
-        new_raw="$(printf '%s' "$scope_raw" | jq --arg p "$prompt" '
+}, indent=2, ensure_ascii=False))' > "$scope_path" 2>/dev/null
+    fi
+}
+
+write_continuation_scope() {
+    local p="$1" raw="$2"
+    if have_jq; then
+        printf '%s' "$raw" | jq --arg p "$p" '
             .prompt = $p
-            | if (.intent | type) != "string" then .intent = ("[DRAFT] " + $p) else . end
+            | if (.intent | type) != "string" then .intent = "" else . end
             | if (.decomposition | type) != "array" then .decomposition = [] else . end
             | if (.verifications | type) != "array" then .verifications = [] else . end
             | if (.files | type) != "array" then .files = [] else . end
             | del(.trace, .allow_growth)
             | with_entries(select(.key | startswith("_") | not))
-        ' 2>/dev/null)"
+        ' > "$scope_path" 2>/dev/null
     elif have_py; then
-        new_raw="$(P="$prompt" python3 -c '
+        P="$p" python3 -c '
 import json, os, sys
 try:
     o = json.load(sys.stdin)
     o["prompt"] = os.environ["P"]
     if not isinstance(o.get("intent"), str):
-        o["intent"] = "[DRAFT] " + os.environ["P"]
+        o["intent"] = ""
     if not isinstance(o.get("decomposition"), list):
         o["decomposition"] = []
     if not isinstance(o.get("verifications"), list):
@@ -106,29 +161,25 @@ try:
             del o[k]
     print(json.dumps(o, indent=2, ensure_ascii=False))
 except Exception:
-    pass' <<< "$scope_raw" 2>/dev/null)"
+    pass' <<< "$raw" > "$scope_path" 2>/dev/null
+    fi
+}
+
+if [ -f "$scope_path" ]; then
+    scope_raw="$(cat "$scope_path" 2>/dev/null)"
+    old_prompt="$(printf '%s' "$scope_raw" | jq -r '.prompt // empty' 2>/dev/null)"
+    if ! have_jq && have_py; then
+        old_prompt="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("prompt") or "")
+except Exception: pass' 2>/dev/null)"
+    fi
+    if [ "$(topic_changed "$prompt" "$old_prompt")" = "true" ]; then
+        write_reset_scope "$prompt"
     else
-        exit 0
+        write_continuation_scope "$prompt" "$scope_raw"
     fi
-    [ -n "$new_raw" ] && printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
 else
-    if have_jq; then
-        jq -nc \
-            --arg p "$prompt" \
-            --arg a "$default_acceptance" \
-            '{prompt: $p, intent: ("[DRAFT] " + $p), decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
-    elif have_py; then
-        P="$prompt" A="$default_acceptance" python3 -c '
-import json, os
-print(json.dumps({
-    "prompt": os.environ["P"],
-    "intent": "[DRAFT] " + os.environ["P"],
-    "decomposition": [],
-    "verifications": [],
-    "files": [],
-    "acceptance": os.environ["A"],
-}, indent=2, ensure_ascii=False))' > "$scope_path" 2>/dev/null
-    fi
+    write_reset_scope "$prompt"
 fi
 
 exit 0

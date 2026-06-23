@@ -432,7 +432,7 @@ function verify() {
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
       catch { return { ok: false, detail: '.scope.json is not valid JSON' }; }
       if (s.prompt !== 'fix the sidebar') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
-      if (s.intent !== '[DRAFT] fix the sidebar') return { ok: false, detail: `intent should be [DRAFT] seed: ${s.intent}` };
+      if (s.intent !== '') return { ok: false, detail: `intent should be empty seed: ${JSON.stringify(s.intent)}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: 'files[] should start empty' };
       if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: 'decomposition[] should start empty' };
       if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: 'verifications[] should start empty' };
@@ -440,10 +440,10 @@ function verify() {
       s.files = ['src/Sidebar.tsx'];
       s.decomposition = [{ step: 1, subtask: 'fix layout', expected_files: ['src/Sidebar.tsx'] }];
       writeFileSync(scopePath, JSON.stringify(s), 'utf8');
-      runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'now add dark mode' });
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1', cwd: repoDir, prompt: 'now fix the sidebar padding too' });
       try { s = JSON.parse(readFileSync(scopePath, 'utf8')); }
       catch { return { ok: false, detail: '.scope.json corrupted on second prompt' }; }
-      if (s.prompt !== 'now add dark mode') return { ok: false, detail: `prompt not updated: ${s.prompt}` };
+      if (s.prompt !== 'now fix the sidebar padding too') return { ok: false, detail: `prompt not updated: ${s.prompt}` };
       if (s.intent !== 'Fix sidebar layout bug') return { ok: false, detail: `intent clobbered: ${s.intent}` };
       if (!Array.isArray(s.files) || s.files.length !== 1 || s.files[0] !== 'src/Sidebar.tsx') {
         return { ok: false, detail: `files[] not preserved: ${JSON.stringify(s.files)}` };
@@ -483,25 +483,25 @@ function verify() {
     }
   });
 
-  check('intent-precompile resets scope on new-task prefix', () => {
-    const repoDir = join(HOME, '.cd-verify-precompile-new');
+  check('intent-precompile resets scope on topic change (automatic, no prefix)', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-topic');
     const scopePath = join(repoDir, '.scope.json');
     const defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.';
     try {
       rmSync(repoDir, { recursive: true, force: true });
       mkdirSync(repoDir, { recursive: true });
-      runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'fix the sidebar' });
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1t', cwd: repoDir, prompt: 'fix the sidebar' });
       let s = JSON.parse(readFileSync(scopePath, 'utf8'));
-      s.intent = 'Fix sidebar';
+      s.intent = 'Fix sidebar layout bug';
       s.files = ['src/Sidebar.tsx'];
-      s.decomposition = [{ step: 1, subtask: 'x', expected_files: ['a.ts'] }];
+      s.decomposition = [{ step: 1, subtask: 'fix layout', expected_files: ['src/Sidebar.tsx'] }];
       s.verifications = [{ step: 1, verdict: 'ACCEPT', diagnosis: '' }];
       s.acceptance = 'custom acceptance bar';
       writeFileSync(scopePath, JSON.stringify(s), 'utf8');
-      runHook(hook('intent-precompile'), { conversation_id: 'pc1n', cwd: repoDir, prompt: 'new task: rewrite auth module' });
+      runHook(hook('intent-precompile'), { conversation_id: 'pc1t', cwd: repoDir, prompt: 'refactor the auth middleware' });
       s = JSON.parse(readFileSync(scopePath, 'utf8'));
-      if (s.prompt !== 'new task: rewrite auth module') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
-      if (s.intent !== '[DRAFT] new task: rewrite auth module') return { ok: false, detail: `intent not reset to [DRAFT]: ${s.intent}` };
+      if (s.prompt !== 'refactor the auth middleware') return { ok: false, detail: `prompt mismatch: ${s.prompt}` };
+      if (s.intent !== '') return { ok: false, detail: `intent not reset to empty: ${JSON.stringify(s.intent)}` };
       if (!Array.isArray(s.files) || s.files.length !== 0) return { ok: false, detail: `files[] not reset: ${JSON.stringify(s.files)}` };
       if (!Array.isArray(s.decomposition) || s.decomposition.length !== 0) return { ok: false, detail: `decomposition[] not reset: ${JSON.stringify(s.decomposition)}` };
       if (!Array.isArray(s.verifications) || s.verifications.length !== 0) return { ok: false, detail: `verifications[] not reset: ${JSON.stringify(s.verifications)}` };
@@ -561,7 +561,7 @@ function verify() {
     }
   });
 
-  check('milestone-verify silent when decomposition empty (YAGNI rung 1)', () => {
+  check('milestone-verify emits DECOMPOSE on 1 file with empty decomposition', () => {
     const cidv = 'npxvmv2';
     const repoDir = join(HOME, '.cd-verify-mv2');
     const scopePath = join(repoDir, '.scope.json');
@@ -577,8 +577,33 @@ function verify() {
         acceptance: 'tests pass',
       }), 'utf8');
       const out = runHook(hook('milestone-verify'), { conversation_id: cidv, cwd: repoDir });
-      if (out.includes('additional_context') || out.includes('VERIFY MILESTONE')) {
-        return { ok: false, detail: `should be silent on empty decomposition, got: ${out.slice(0, 200)}` };
+      if (!out.includes('additional_context') || !out.includes('DECOMPOSE')) {
+        return { ok: false, detail: `expected DECOMPOSE nudge on 1 file, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('milestone-verify silent when no files touched', () => {
+    const cidv = 'npxvmv2b';
+    const repoDir = join(HOME, '.cd-verify-mv2b');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'typo fix',
+        intent: '',
+        decomposition: [],
+        verifications: [],
+        files: [],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, cwd: repoDir });
+      if (out.includes('additional_context') || out.includes('DECOMPOSE') || out.includes('VERIFY MILESTONE')) {
+        return { ok: false, detail: `should be silent with zero files, got: ${out.slice(0, 200)}` };
       }
       return true;
     } finally {

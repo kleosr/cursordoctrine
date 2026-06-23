@@ -22,7 +22,7 @@
 # expected_files completed; kill switch set; no python3 (verdict-scrape needs
 # regex on transcript text; jq alone is not enough — fail open silently, the
 # doctrine still applies). When decomposition is empty BUT the session has
-# touched >= 2 files, a DECOMPOSE nudge fires instead (per-cid throttle,
+# touched >= 1 file, a DECOMPOSE nudge fires instead (per-cid throttle,
 # mirrors intent-anchor) — the doctrine requires decomposition for multi-file
 # tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
 
@@ -47,7 +47,7 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 # Need jq or python3 for JSON work. Without either, fail open silently.
 have_jq || have_py || exit 0
 
-# --- decomposition nudge: empty decomposition + >=2 real files --------------
+# --- decomposition nudge: empty decomposition + >=1 real file ---------------
 # Doctrine requires decomposition for multi-step/multi-file tasks. When the
 # agent skips it (many files touched, zero steps declared), nudge once per
 # file-count growth. Per-cid flag mirrors intent-anchor's throttle. Silent
@@ -67,7 +67,7 @@ except Exception: print(0)' 2>/dev/null)"
 fi
 _dl="${_dl:-0}"; _rfc="${_rfc:-0}"
 if [ "$_dl" -eq 0 ] 2>/dev/null; then
-    if [ "$_rfc" -ge 2 ] 2>/dev/null; then
+    if [ "$_rfc" -ge 1 ] 2>/dev/null; then
         _cid="$(safe_conversation_id "$input")"
         _pdir="$HOME/.cursor/.hooks-pending"
         _dflag="$_pdir/decompose-$_cid.flag"
@@ -76,16 +76,19 @@ if [ "$_dl" -eq 0 ] 2>/dev/null; then
             _lc="$(cut -d: -f1 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _lc="${_lc:--1}"
             _nc="$(cut -d: -f2 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _nc="${_nc:-0}"
         fi
+        _fc="$_rfc"
+        _decompose_cap="${DECOMPOSE_NUDGE_CAP:-8}"
+        case "$_decompose_cap" in ''|*[!0-9]*) _decompose_cap=8 ;; esac
         # Re-nudge only when files[] grew since last nudge AND under the cap.
         _fire=false
         if [ "$_lc" -lt 0 ] 2>/dev/null; then _fire=true; fi
         if [ "$_rfc" -gt "$_lc" ] 2>/dev/null; then _fire=true; fi
-        if [ "$_nc" -ge 3 ] 2>/dev/null; then _fire=false; fi
+        if [ "$_nc" -ge "$_decompose_cap" ] 2>/dev/null; then _fire=false; fi
         if [ "$_fire" = true ]; then
             _nc=$((_nc + 1))
             mkdir -p "$_pdir" 2>/dev/null
             printf '%s:%s' "$_rfc" "$_nc" > "$_dflag" 2>/dev/null
-            emit_json additional_context "DECOMPOSE: this session has touched $_rfc file(s) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $_nc of 3)."
+            emit_json additional_context "DECOMPOSE: this session has touched $_rfc file(s) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $_nc of $_decompose_cap). The final review's axis 7 will FAIL on a multi-file task with no decomposition."
             exit 0
         fi
     fi

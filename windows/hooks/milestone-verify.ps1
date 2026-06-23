@@ -18,7 +18,7 @@
 #
 # Silent exits (YAGNI rung 1): .scope.json missing; all steps already verified;
 # no expected_files completed; kill switch set. When decomposition is empty BUT
-# the session has touched >= 2 files, a DECOMPOSE nudge fires instead (per-cid
+# the session has touched >= 1 file, a DECOMPOSE nudge fires instead (per-cid
 # throttle, mirrors intent-anchor) — the doctrine requires decomposition for
 # multi-file tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
 
@@ -42,7 +42,7 @@ try {
 if (-not $sj) { exit 0 }
 
 # Need a decomposition array. Empty/missing = YAGNI rung 1 — BUT if the
-# session has touched >= 2 files, the task is likely multi-step and the
+# session has touched >= 1 file, the task is likely multi-step and the
 # doctrine REQUIRES decomposition. Nudge the agent (per-cid throttle mirrors
 # intent-anchor), then silent. Closes the gap where a session touches many
 # files with zero steps declared (the doctrine's multi-file rule unenforced).
@@ -55,7 +55,7 @@ if ($decomp.Count -eq 0) {
     if ($sj.PSObject.Properties['files'] -and $sj.files) {
         $realFiles = @($sj.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and ("$_".Trim()) -ine '.scope.json' })
     }
-    if ($realFiles.Count -ge 2) {
+    if ($realFiles.Count -ge 1) {
         $cid = Get-SafeConversationId $obj
         $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
         $dflag = Join-Path $pendingDir "decompose-$cid.flag"
@@ -69,13 +69,17 @@ if ($decomp.Count -eq 0) {
             } catch { }
         }
         $fc = $realFiles.Count
+        $decomposeCap = 8
+        if ($env:DECOMPOSE_NUDGE_CAP) {
+            try { $decomposeCap = [int]$env:DECOMPOSE_NUDGE_CAP } catch { }
+        }
         # Re-nudge only when files[] grew since last nudge AND under the cap.
-        if (($lastCount -lt 0 -or $fc -gt $lastCount) -and $nudgeCount -lt 3) {
+        if (($lastCount -lt 0 -or $fc -gt $lastCount) -and $nudgeCount -lt $decomposeCap) {
             $nudgeCount++
             New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
             Set-Content -LiteralPath $dflag -Value "${fc}:${nudgeCount}" -ErrorAction SilentlyContinue
             $sample = (($realFiles | Select-Object -First 5) -join ', ')
-            $msg = "DECOMPOSE: this session has touched $fc file(s) ($sample) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $nudgeCount of 3)."
+            $msg = "DECOMPOSE: this session has touched $fc file(s) ($sample) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $nudgeCount of $decomposeCap). The final review's axis 7 will FAIL on a multi-file task with no decomposition."
             Write-HookJson @{ additional_context = $msg }
         }
     }

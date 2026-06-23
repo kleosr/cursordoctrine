@@ -284,7 +284,10 @@ except Exception: pass' 2>/dev/null)"
 "
         fi
 
-        # Role-trace (axis 7): decomposition + verifications. Empty = YAGNI rung 1.
+        # Role-trace (axis 7): decomposition + verifications. Empty
+        # decomposition is YAGNI rung 1 ONLY for a trivial one-liner (<=1 file);
+        # for a multi-file task an empty decomposition is a CONTRACT GAP that
+        # FAILs axis 7 (the doctrine requires a plan for multi-step work).
         if have_py; then
             role_trace_block="$(printf '%s\n' "$edited" | SCOPE_RAW="$scope_raw" python3 -c '
 import json, os, sys
@@ -293,14 +296,17 @@ try:
 except Exception:
     sys.exit(0)
 decomp = o.get("decomposition") or []
+touched = [l.strip() for l in sys.stdin if l.strip() and l.strip().lower() != ".scope.json"]
 if not decomp:
+    # CONTRACT GAP: multi-file task with no decomposition. Axis 7 FAILs (not SKIP).
+    if len(touched) >= 2:
+        print("Decomposition: EMPTY for a %d-file task. The doctrine requires a decomposition[] for any multi-step / multi-file change.\n  Declare it now: each entry { step (int), subtask (one-line), expected_files (array of paths) }.\n  Axis 7 (role-trace) will FAIL until decomposition is declared. Trivial one-liners (<=1 file) are the only SKIP." % len(touched))
     sys.exit(0)
 verifs = o.get("verifications") or []
 verdict_by_step = {}
 for v in verifs:
     if isinstance(v, dict) and isinstance(v.get("step"), int):
         verdict_by_step[v["step"]] = str(v.get("verdict") or "")
-touched = [l.strip() for l in sys.stdin if l.strip() and l.strip().lower() != ".scope.json"]
 touched_set = set(f.lower() for f in touched)
 all_expected = set()
 for step in decomp:
@@ -365,6 +371,16 @@ $user_query
         intent_block="${intent_block}
 "
     fi
+fi
+# CONTRACT GAP: intent never written (empty or stale [DRAFT] from a legacy
+# install). Axis 0 FAILs until the agent writes a one-line Step 0 restatement.
+intent_draft=false
+case "$scope_intent" in "[DRAFT]"*) intent_draft=true ;; esac
+if [ -z "$scope_intent" ] || [ "$intent_draft" = true ]; then
+    intent_gap="CONTRACT GAP: .scope.json intent is empty/[DRAFT] - the agent never wrote its Step 0 restatement. Axis 0 (intent trace) will FAIL until you write a one-line restatement of THIS task in your own words (clearer/better than the verbatim prompt, NOT a copy)."
+    intent_block="${intent_gap}
+
+${intent_block}"
 fi
 
 # --- change-surface metric ----------------------------------------------------

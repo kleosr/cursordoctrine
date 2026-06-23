@@ -70,19 +70,23 @@ empty BUT the session has touched >= 2 files, a `DECOMPOSE` nudge fires
 instead of going silent: the doctrine requires decomposition for multi-file
 tasks, and this closes the gap where an agent touches many files with zero
 steps declared. Per-cid flag throttle (mirrors intent-anchor) re-nudges only
-when `files[]` grows, capped at 3. Never blocks. Disable:
-`MILESTONE_VERIFY_ENFORCE=0`.
+when `files[]` grows, capped at 8 (env override `DECOMPOSE_NUDGE_CAP`). The
+final review's axis 7 is the backstop: a multi-file task with no decomposition
+FAILs. Never blocks. Disable: `MILESTONE_VERIFY_ENFORCE=0`.
 
 **intent-anchor (persistent contract nudge):** Re-fires whenever NEW files
 have been edited since the last nudge and `.scope.json`'s `intent` is empty
-or `acceptance` is still the default seed. The per-cid flag
-(`intent-anchored-<cid>.flag`) stores the `files[]` count at last nudge; if
-`files[]` hasn't grown, the hook stays silent. Once both fields are filled,
-the hook goes silent permanently for that conversation. Emits an
-`INTENT ANCHOR` reminder listing which agent-owned field is missing. The hook
-never writes those fields — it just surfaces the gap so final-review's axis 0
-intent trace has something better than the raw prompt to work with.
-Disable: `INTENT_ANCHOR_ENFORCE=0`.
+(or a stale `[DRAFT]` from a legacy install) or `acceptance` is still the
+default seed. The per-cid flag (`intent-anchored-<cid>.flag`) stores the
+`files[]` count at last nudge; if `files[]` hasn't grown, the hook stays
+silent. Once both fields are filled, the hook goes silent permanently for that
+conversation. The nudge cap is 8 per conversation (env override
+`INTENT_ANCHOR_NUDGE_CAP`); after the cap the hook stays silent but the final
+review's axis 0 FAIL is the backstop at stop time. Emits an `INTENT ANCHOR`
+reminder listing which agent-owned field is missing. The hook never writes
+those fields — it just surfaces the gap so final-review's axis 0 intent trace
+has something better than the raw prompt to work with. Disable:
+`INTENT_ANCHOR_ENFORCE=0`.
 
 ## beforeShellExecution — permission-gate (.ps1/.sh)
 5s, `failClosed: false`. Deny a small explicit list of dangerous commands
@@ -123,11 +127,16 @@ Only fires on `status === 'completed'`.
 
 Intent trace: pulls `intent` from `.scope.json` (agent restatement), quotes
 `prompt` as source when both exist, else falls back to the last human
-`<user_query>` from the transcript. Anything untraceable is a hallucinated
+`<user_query>` from the transcript. If `intent` is empty or still `[DRAFT]`
+(from a legacy install), a CONTRACT GAP note is prepended and axis 0 FAILs
+until the agent writes a restatement. Anything untraceable is a hallucinated
 requirement.
 
 Role-trace (axis 7): when `.scope.json` has a non-empty `decomposition[]`,
 the follow-up includes a per-step status block: each step shows whether its
 `expected_files` were touched and what verdict was recorded. Touched files
 that aren't in any step's `expected_files` are flagged as cross-step leakage.
+When `decomposition[]` is empty on a MULTI-FILE task (>=2 files), a CONTRACT
+GAP block is injected and axis 7 FAILs (not SKIP) until a plan is declared —
+only a genuine single-file one-liner SKIPs axis 7 (YAGNI rung 1).
 Empty decomposition → axis skipped (YAGNI rung 1).

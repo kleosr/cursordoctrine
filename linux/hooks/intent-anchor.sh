@@ -34,8 +34,12 @@ root="$(resolve_project_root "$input")"
 
 # Per-cid throttle: the flag stores "filesCount:nudgeCount". Re-fire only when
 # files[] has grown since the last nudge AND we haven't exceeded the nudge cap
-# (default 3). After 3 nudges the hook stays silent — the agent clearly isn't
-# responding, and more noise just wastes context.
+# (default 8). The cap was 3 — too low: a 10-file task went permanently silent
+# after 3 ignored nudges and the contract stayed broken for the whole session.
+# 8 keeps the gap visible across most real multi-file tasks. After the cap the
+# hook stays silent (the final-review axis 0 FAIL is the backstop at stop time).
+nudge_cap="${INTENT_ANCHOR_NUDGE_CAP:-8}"
+case "$nudge_cap" in ''|*[!0-9]*) nudge_cap=8 ;; esac
 pending_dir="$HOME/.cursor/.hooks-pending"
 flag="$pending_dir/intent-anchored-$cid.flag"
 
@@ -101,7 +105,7 @@ if [ "$last_count" -ge 0 ] && [ "${files_count:-0}" -le "$last_count" ]; then
 fi
 
 # Contract incomplete but nudge cap exceeded → stay silent.
-if [ "$nudge_count" -ge 3 ]; then
+if [ "$nudge_count" -ge "$nudge_cap" ]; then
     exit 0
 fi
 
@@ -131,7 +135,7 @@ fi
 msg="$msg
 
 Current prompt: $prompt
-This nudge re-fires on each new file edit until the contract is filled (nudge $nudge_count of 3)."
+This nudge re-fires on each new file edit until the contract is filled (nudge $nudge_count of $nudge_cap)."
 
 emit_json additional_context "$msg"
 exit 0
