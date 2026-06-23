@@ -4,8 +4,15 @@
 # Agent-owned: `intent` (Step 0 restatement), initial files[] blast radius,
 # sharpened acceptance.
 #
+# Intent seeding: on new task or fresh creation, the hook writes
+# `intent = "[DRAFT] <prompt>"` — a provisional placeholder so the field is
+# never blank. The agent refines it into a proper Step 0 restatement (removing
+# the [DRAFT] prefix). intent-anchor detects the [DRAFT] prefix and keeps
+# nudging until the agent rewrites it. On continuation, existing intent is
+# preserved verbatim.
+#
 # Continuation: update prompt only; preserve intent, files[], acceptance.
-# New task (/new, "new task:", "new task —"): reset intent, files[], acceptance.
+# New task (/new, "new task:", "new task —"): reset and seed [DRAFT] intent.
 #
 # Skips hook-generated auto-submits. Never blocks. Disable: HOOKS_ENFORCE=0 or
 # INTENT_PRECOMPILE_ENFORCE=0.
@@ -47,7 +54,7 @@ try {
     if (Test-NewTaskPrompt $prompt) {
         $ordered = [ordered]@{
             prompt        = $prompt
-            intent        = ''
+            intent        = "[DRAFT] $prompt"
             decomposition = @()
             verifications = @()
             files         = @()
@@ -61,11 +68,11 @@ try {
             if ($p.Name -in @('trace', 'allow_growth')) { continue }
             $ordered[$p.Name] = $p.Value
         }
-        if (-not $ordered.Contains('intent')) { $ordered['intent'] = '' }
+        if (-not $ordered.Contains('intent')) { $ordered['intent'] = "[DRAFT] $prompt" }
     } else {
         $ordered = [ordered]@{
             prompt        = $prompt
-            intent        = ''
+            intent        = "[DRAFT] $prompt"
             decomposition = @()
             verifications = @()
             files         = @()

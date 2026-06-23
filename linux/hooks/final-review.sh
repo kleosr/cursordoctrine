@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 # final-review.sh - stop hook (Cursor, Linux).
 #
-# ONE end-of-implementation review across six axes (intent, correctness,
-# reliability, coverage, anti-slop, wiring). On a clean stop where files
-# changed this session, Cursor auto-submits this hook's `followup_message` as
-# the next user turn so the model re-audits its whole session diff.
+# ONE end-of-implementation review across eight axes (0 intent, 1 correctness,
+# 2 reliability, 3 coverage, 4 anti-slop, 5 wiring, 6 mechanics, 7 role-trace).
+# On a clean stop where files changed this session, Cursor auto-submits this
+# hook's `followup_message` as the next user turn so the model re-audits its
+# whole session diff.
 #
-# Change detection: `git diff --name-only HEAD` + `git ls-files --others
-# --exclude-standard` against the resolved repo root. Zero state on disk.
+# Change detection (two paths):
+#   git repo:   `git diff --name-only HEAD` + `git ls-files --others --exclude-standard`
+#   non-git:    falls back to `.scope.json` `files[]` (hook-maintained by scope-refresh)
+# This ensures the review fires for ANY project, not just git repos.
 #
-# Bounded:
-#   - per-cid reviewed-<cid>.flag: armed when a review is emitted; cleared on
-#     the post-review stop (hook-generated last turn or loop_count > 0),
-#   - loop_limit in hooks.json caps runaway follow-ups harness-side,
-#   - only on status == 'completed'.
+# Verify-revise loop: the brake flag stores the changed-file COUNT at review
+# time. On the post-review stop, if the count CHANGED (the agent revised based
+# on the review), the review RE-FIRES with the new diff. If the count is the
+# SAME (the agent accepted, no fixes), the flag clears and the loop ends.
+# This implements the Trinity verify-revise-reverify cycle: review → fix →
+# re-review until the diff stabilizes. Bounded by loop_limit (default 3).
 #
-# Always emits valid JSON ({} = no follow-up). Review prompt lives in
-# final-review.md next to this script (embedded fallback if missing).
+# Review prompt lives in final-review.md (REQUIRED — no stale fallback). If
+# missing, emits an error message instead of a degraded review.
 # Disable: HOOKS_ENFORCE=0 or FINAL_REVIEW_ENFORCE=0.
 # Debug: FINAL_REVIEW_DEBUG=1 logs exit reason to ~/.cursor/.hooks-pending/last-final-review.log
 
@@ -42,24 +46,64 @@ loop_count="$(json_get "$input" loop_count)"
 case "$loop_count" in
     ''|*[!0-9]*) loop_count=0 ;;
 esac
-loop_limit="${FINAL_REVIEW_LOOP_LIMIT:-2}"
+loop_limit="${FINAL_REVIEW_LOOP_LIMIT:-3}"
 case "$loop_limit" in
-    ''|*[!0-9]*) loop_limit=2 ;;
+    ''|*[!0-9]*) loop_limit=3 ;;
 esac
 
 pending_dir="$HOME/.cursor/.hooks-pending"
 flag="$pending_dir/reviewed-$cid.flag"
 
+# Review only a clean completion.
+if [ -n "$status" ] && [ "$status" != "completed" ]; then
+    emit_none no_status
+fi
+
+# Resolve repo root early — needed by the verify-revise brake.
+root="$(resolve_project_root "$input")"
+[ -n "$root" ] || emit_none no_root
+
 # Sweep state older than 7 days from sessions that died before their stop hook.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
-# One-shot brake: post-review stop clears the flag and ends the loop.
-# Orphaned flags (review follow-up never ran) are cleared and we continue.
+# --- verify-revise brake: compare current diff to review-time diff ------------
+# get_diff_count: count changed files (git diff + untracked, or scope.json files[])
+get_diff_count() {
+    local repo_root="$1" n=0
+    if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+        n="$(git -C "$repo_root" diff HEAD --name-only 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
+        n=$((n + $(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c -v '^$' 2>/dev/null)))
+    else
+        local sp="$repo_root/.scope.json"
+        if [ -f "$sp" ]; then
+            n="$(cat "$sp" 2>/dev/null | grep -o '"files"[[:space:]]*:[[:space:]]*\[' | head -1 | wc -l)"
+            if have_jq; then
+                n="$(cat "$sp" 2>/dev/null | jq -r '.files[]? // empty' 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
+            elif have_py; then
+                n="$(cat "$sp" 2>/dev/null | python3 -c 'import json,sys
+try:
+    f=json.load(sys.stdin).get("files") or []
+    print(len([x for x in f if x and str(x).strip() and not str(x).strip().startswith("<") and str(x).strip()!=".scope.json"]))
+except Exception: print(0)' 2>/dev/null)"
+            fi
+        fi
+    fi
+    printf '%s' "${n:-0}"
+}
+
 if [ -f "$flag" ]; then
     last_raw="$(extract_last_raw_user_query "$input")"
     if is_hook_generated_query "$last_raw" || [ "$loop_count" -gt 0 ]; then
-        rm -f "$flag" 2>/dev/null
-        emit_none post_review_cleanup
+        prev_count="$(cat "$flag" 2>/dev/null | tr -dc '0-9')"
+        prev_count="${prev_count:-0}"
+        cur_count="$(get_diff_count "$root")"
+        if [ "$cur_count" != "$prev_count" ] && [ "$loop_count" -lt "$loop_limit" ]; then
+            final_review_debug "re_review (prev=$prev_count cur=$cur_count loop=$loop_count)"
+            rm -f "$flag" 2>/dev/null
+        else
+            rm -f "$flag" 2>/dev/null
+            emit_none post_review_cleanup
+        fi
     fi
     rm -f "$flag" 2>/dev/null
     final_review_debug stale_flag_cleared
@@ -67,65 +111,83 @@ fi
 
 [ "$loop_count" -ge "$loop_limit" ] && emit_none loop_limit
 
-# Review only a clean completion.
-if [ -n "$status" ] && [ "$status" != "completed" ]; then
-    emit_none no_status
-fi
-
-# Resolve repo root. No root -> no audit scope -> nothing to review.
-root="$(resolve_project_root "$input")"
-[ -n "$root" ] || emit_none no_root
-
-# Confirm git repo at root.
-git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || emit_none no_git
-
-# --- collect changed files: tracked diff + untracked new files ----------------
-edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
-edited_raw="${edited_raw}
-$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
-
-# Dedupe, normalize to repo-relative forward-slash paths.
-root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+# --- collect changed files (git preferred, .scope.json fallback) ---------------
+diff_stat=""
+is_git_repo=false
 edited=""
-while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    case "$p" in
-        "$root_fwd"/*) p="${p#"$root_fwd"/}" ;;
-        "$root_fwd") continue ;;
-    esac
-    p="${p#/}"
-    [ -n "$p" ] || continue
-    case "$edited" in
-        *"$p"*) ;;
-        *) edited="${edited}${p}"$'\n' ;;
-    esac
-done <<EOF
+
+if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+    is_git_repo=true
+    edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
+    edited_raw="${edited_raw}
+$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+    diff_stat="$(git -C "$root" diff HEAD --stat 2>/dev/null)"
+
+    # Dedupe, normalize to repo-relative forward-slash paths.
+    root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case "$p" in
+            "$root_fwd"/*) p="${p#"$root_fwd"/}" ;;
+            "$root_fwd") continue ;;
+        esac
+        p="${p#/}"
+        [ -n "$p" ] || continue
+        case "$edited" in
+            *"$p"*) ;;
+            *) edited="${edited}${p}"$'\n' ;;
+        esac
+    done <<EOF
 $edited_raw
 EOF
-[ -n "$edited" ] || emit_none no_diff
-
-# --- review prompt body (md preferred, embedded fallback) ---------------------
-body=""
-prompt_file="$HOME/.agents/hooks/final-review.md"
-[ -f "$prompt_file" ] && body="$(cat "$prompt_file")"
-if [ -z "$body" ]; then
-    body='FINAL REVIEW - audit everything you changed this session and FIX what fails
-(do NOT revert the behaviour the user asked for). Run the axes in order.
-Emit ONE verdict line per axis, then any fixes:
-  axis N <name>: PASS | FIX (<what>) -> <what you did>
-Skip axes marked "(skip if ...)". Then stop. No summary paragraph.
-  0. Intent trace (run first, outranks all) - tie every diff hunk to ORIGINAL REQUEST.
-     Untraceable = hallucinated = revert. Prior-turn hunks stay.
-  1. Correctness - logic, edge cases (null/empty/zero/boundary), language traps, security.
-  2. Reliability - error paths handled (no empty catch), timeouts/retries, resources
-     released on every path, no races, input validated at the boundary.
-  3. Coverage - behaviour-bearing changes have real tests; RUN the suite if present.
-  4. Anti-slop - apply ~/.agents/hooks/anti-slop.md to the session diff.
-  5. Wiring completeness - trace user-visible changes to a REAL EFFECT (persist/mutate/render).
-  6. Mechanics - N+1, idempotency, txn/rollback, guard clauses, no primitive obsession.
-  7. Role-trace (skip if decomposition empty) - every step has verdict, no leakage.
-Fix now, re-run tests, then stop.'
 fi
+
+# Non-git fallback: use .scope.json files[] as the change surface.
+if [ -z "$(printf '%s' "$edited" | grep -v '^$')" ]; then
+    scope_path_fb="$root/.scope.json"
+    if [ -f "$scope_path_fb" ]; then
+        scope_raw_fb="$(cat "$scope_path_fb" 2>/dev/null)"
+        if [ -n "$scope_raw_fb" ]; then
+            if have_jq; then
+                fb_files="$(printf '%s' "$scope_raw_fb" | jq -r '.files[]? // empty' 2>/dev/null)"
+            elif have_py; then
+                fb_files="$(printf '%s' "$scope_raw_fb" | python3 -c 'import json,sys
+try:
+    for f in (json.load(sys.stdin).get("files") or []):
+        s = str(f).strip()
+        if s and not s.startswith("<"): print(s)
+except Exception: pass' 2>/dev/null)"
+            fi
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                p="$(printf '%s' "$p" | tr '\\' '/' | sed 's|^/||')"
+                [ "$p" = ".scope.json" ] && continue
+                case "$edited" in
+                    *"$p"*) ;;
+                    *) edited="${edited}${p}"$'\n' ;;
+                esac
+            done <<EOF
+$fb_files
+EOF
+        fi
+    fi
+fi
+
+[ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || emit_none no_diff
+
+# --- review prompt body (md REQUIRED — no stale fallback) ---------------------
+prompt_file="$HOME/.agents/hooks/final-review.md"
+if [ ! -f "$prompt_file" ]; then
+    # No fallback. The .md is part of the install. If missing, the install is
+    # broken — tell the agent to fix it instead of running a degraded review.
+    unique_files="$(printf '%s' "$edited" | grep -c -v '^$')"
+    mkdir -p "$pending_dir" 2>/dev/null
+    printf '%s' "$unique_files" > "$flag" 2>/dev/null
+    emit_json followup_message "FINAL REVIEW: The review template (~/.agents/hooks/final-review.md) is missing. Your cursordoctrine install is incomplete. Run: npx cursordoctrine install"
+    exit 0
+fi
+body="$(cat "$prompt_file")"
+[ -n "$body" ] || emit_none empty_prompt
 body="$(expand_agent_paths "$body")"
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
@@ -275,20 +337,27 @@ fi
 # --- change-surface metric ----------------------------------------------------
 file_list="$(printf '%s' "$edited" | grep -v '^$' | head -n 30 | sed 's/^/  /')"
 unique_files="$(printf '%s' "$edited" | grep -c -v '^$')"
-surface_block="Session footprint: ${unique_files} file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.
+surface_block="Session footprint: ${unique_files} file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim."
+if [ -n "$diff_stat" ]; then
+    stat_trimmed="$(printf '%s' "$diff_stat" | tail -1)"
+    surface_block="${surface_block}
+Diff: ${stat_trimmed}"
+fi
+surface_block="${surface_block}
 
 "
 
-msg="FINAL REVIEW (end of implementation) - intent, correctness, reliability, coverage, anti-slop, wiring, mechanics, role-trace (if decomposed). Emit one verdict line per axis (PASS | FIX).
+msg="FINAL REVIEW (end of implementation). Emit a structured bullet report (one line per axis), then fix anything that fails. See the report template below.
 
 ${surface_block}${scope_block}${declared_note}${role_trace_block}${intent_block}Files you changed this session:
 $file_list
 
 $body"
 
-# Arm the brake BEFORE emitting, so a crash after emit can't re-fire.
+# Arm the brake: store the current changed-file count so the post-review stop
+# can detect whether the agent revised (count changed) or accepted (same).
 mkdir -p "$pending_dir" 2>/dev/null
-touch "$flag" 2>/dev/null
+printf '%s' "$unique_files" > "$flag" 2>/dev/null
 
 final_review_debug emitted
 emit_json followup_message "$msg"

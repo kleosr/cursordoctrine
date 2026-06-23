@@ -6,9 +6,15 @@
 # Agent-owned fields: `intent` (Step 0 restatement), initial `files[]` blast
 # radius, sharpened `acceptance`.
 #
+# Intent seeding: on new task or fresh creation, the hook writes
+# `intent = "[DRAFT] <prompt>"` — a provisional placeholder so the field is
+# never blank. The agent refines it into a proper Step 0 restatement (removing
+# the [DRAFT] prefix). intent-anchor detects the [DRAFT] prefix and keeps
+# nudging until the agent rewrites it. On continuation, existing intent is
+# preserved verbatim.
+#
 # Continuation: update `prompt` only; preserve intent, files[], acceptance.
-# New task (prefix /new, "new task:", "new task —"): reset intent, files[],
-# acceptance to defaults; agent must restate.
+# New task (prefix /new, "new task:", "new task —"): reset and seed [DRAFT] intent.
 #
 # scope-refresh (afterFileEdit) appends edited paths to files[].
 # Skips hook-generated auto-submits. Never blocks. Disable:
@@ -56,13 +62,13 @@ if [ -f "$scope_path" ]; then
             new_raw="$(jq -nc \
                 --arg p "$prompt" \
                 --arg a "$default_acceptance" \
-                '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' 2>/dev/null)"
+                '{prompt: $p, intent: ("[DRAFT] " + $p), decomposition: [], verifications: [], files: [], acceptance: $a}' 2>/dev/null)"
         elif have_py; then
             new_raw="$(P="$prompt" A="$default_acceptance" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
-    "intent": "",
+    "intent": "[DRAFT] " + os.environ["P"],
     "decomposition": [],
     "verifications": [],
     "files": [],
@@ -74,7 +80,7 @@ print(json.dumps({
     elif have_jq; then
         new_raw="$(printf '%s' "$scope_raw" | jq --arg p "$prompt" '
             .prompt = $p
-            | if (.intent | type) != "string" then .intent = "" else . end
+            | if (.intent | type) != "string" then .intent = ("[DRAFT] " + $p) else . end
             | del(.trace, .allow_growth)
             | with_entries(select(.key | startswith("_") | not))
         ' 2>/dev/null)"
@@ -85,7 +91,7 @@ try:
     o = json.load(sys.stdin)
     o["prompt"] = os.environ["P"]
     if not isinstance(o.get("intent"), str):
-        o["intent"] = ""
+        o["intent"] = "[DRAFT] " + os.environ["P"]
     for k in list(o.keys()):
         if k.startswith("_") or k in ("trace", "allow_growth"):
             del o[k]
@@ -101,13 +107,13 @@ else
         jq -nc \
             --arg p "$prompt" \
             --arg a "$default_acceptance" \
-            '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
+            '{prompt: $p, intent: ("[DRAFT] " + $p), decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
     elif have_py; then
         P="$prompt" A="$default_acceptance" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
-    "intent": "",
+    "intent": "[DRAFT] " + os.environ["P"],
     "decomposition": [],
     "verifications": [],
     "files": [],

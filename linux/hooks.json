@@ -16,8 +16,7 @@
     "afterFileEdit": [
       {
         "command": "bash ~/.agents/hooks/scope-refresh.sh",
-        "timeout": 5,
-        "matcher": "^Write$"
+        "timeout": 5
       }
     ],
     "postToolUse": [
@@ -45,7 +44,7 @@
       {
         "command": "bash ~/.agents/hooks/final-review.sh",
         "timeout": 30,
-        "loop_limit": 2
+        "loop_limit": 3
       }
     ]
   }

@@ -229,8 +229,9 @@ The `stop` hook (`~/.agents/hooks/final-review.ps1` on Windows,
 `~/.agents/hooks/final-review.sh` on Linux) fires after the agent finishes an
 implementation that edited files. It extracts the last `<user_query>` from the
 session transcript (Tier 0 intent trace), reports session footprint (Tier 5),
-and auto-submits a `followup_message` so the model audits six axes: intent,
-correctness, reliability, coverage, anti-slop, wiring completeness. Axis 4 delegates to this skill's
+and auto-submits a `followup_message` so the model audits eight axes: 0 intent,
+1 correctness, 2 reliability, 3 coverage, 4 anti-slop, 5 wiring completeness, 6 mechanics,
+7 role-trace. Axis 4 delegates to this skill's
 scanner (run scoped to the changed files — `scan_slop.py <files>`, never `--all`
 at review time) and the canonical checklist at
 `~/.agents/hooks/anti-slop.md` (40 items, including semantic contracts,
@@ -271,7 +272,7 @@ Diff: {before} → {after} lines.   Tests: {pass | n/a}
 | Hook checklist | `~/.agents/hooks/anti-slop.md` (40 items; final-review axis 4) |
 
 The scanner is stdlib-only and needs Python 3.9+. It pairs with the shipped
-hook pack: the **stop hook** (`final-review.ps1` / `.sh`) runs a six-axis
+hook pack: the **stop hook** (`final-review.ps1` / `.sh`) runs an eight-axis
 session review whose anti-slop axis (4) points the model at this skill's
 checklist (`anti-slop.md`) and runs the scanner scoped to the changed files;
 **scope-refresh** (`afterFileEdit`) records every edited file into `.scope.json`

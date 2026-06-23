@@ -99,7 +99,7 @@ Also validate the config: `~/.cursor/hooks.json` must parse as JSON.
 1. Restart Cursor (hooks.json is read at startup).
 2. Open any project and start a new agent chat. The doctrine should be in context — ask the agent "what does your doctrine say about diffs?" and it should answer from §1 and §3.
 3. Ask the agent to run `git push --force` (in a throwaway repo). The permission gate must block it.
-4. Finish a small implementation in a git repo and stop. A single `FINAL REVIEW` follow-up should fire — exactly once. The follow-up lists the files git sees as changed (tracked diff + untracked new files), prepends your last user message for intent trace, and asks the model to audit across six axes.
+4. Finish a small implementation in a git repo and stop. A single `FINAL REVIEW` follow-up should fire — exactly once. The follow-up lists the files git sees as changed (tracked diff + untracked new files), prepends your last user message for intent trace, and asks the model to audit across eight axes. Non-git projects use `.scope.json` `files[]` as the change surface.
 5. Type `/anti-slop` in a chat (or say "remove the AI slop") — the anti-slop skill should load and run the scanner as its first step.
 6. (Optional) Run `npx cursordoctrine sweep` for a whole-codebase anti-slop audit with a category-by-category breakdown and a cleanup handoff.
 

@@ -2,29 +2,42 @@ Re-read the diff first; scope to your session's changes. Run the axes in order.
 Untraceable or hallucinated work reverts; everything else gets fixed in place.
 If an axis is clean, one line — don't manufacture work.
 
-**Verdict contract — emit ONE line per axis, then any fixes:**
-    axis N <name>: PASS | FIX (<one-line what>) → <one-line what you did>
-Skip axes marked "(skip if ...)" when their condition holds. Then stop. No
-summary paragraph, no "in conclusion." Example:
+## Report format (MANDATORY — emit this block EXACTLY, then stop)
 
-    axis 0 intent: PASS
-    axis 1 correctness: FIX (null check missing L42) → added guard
-    axis 2 reliability: PASS
-    axis 3 coverage: PASS
-    axis 4 anti-slop: FIX (tautological test in foo.test.ts) → rewrote
-    axis 5 wiring: PASS
-    axis 6 mechanics: PASS
-    axis 7 role-trace: skip (decomposition empty)
+Copy this template. Replace each verdict. One line per axis. No prose between lines.
+For trivial diffs (1 file, <10 lines, typo/literal): collapse to axes 0+1 only,
+mark the rest N/A.
 
-## 0. Intent trace (run first — outranks all)
+    - **0 Intent trace**: PASS | FAIL — <one line>
+    - **1 Correctness**: PASS | FAIL — <one line>
+    - **2 Reliability**: PASS | FAIL | N/A — <one line>
+    - **3 Coverage**: PASS | FAIL | N/A — <one line>
+    - **4 Anti-slop**: PASS | FAIL — <one line>
+    - **5 Wiring**: PASS | FAIL | N/A — <one line>
+    - **6 Mechanics**: PASS | FAIL | N/A — <one line>
+    - **7 Role-trace**: PASS | FAIL | SKIP — <one line>
+
+    **Verdict**: ACCEPT | REVISE
+
+Rules:
+- **PASS** = axis is clean, no action needed.
+- **FAIL** = a real issue exists. Fix it NOW, then the line becomes `PASS — fixed: <what>`.
+- **N/A** = axis doesn't apply (e.g. no UI = wiring N/A, no tests exist = coverage N/A).
+- **SKIP** = axis 7 only, when decomposition is empty (trivial one-liner).
+- **ACCEPT** = all axes PASS, N/A, or SKIP. Stop immediately after the report.
+- **REVISE** = any axis FAIL. Fix every FAIL, re-run tests, emit the report again
+  with those lines now showing PASS. Then ACCEPT and stop.
+
+No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
+
+## 0. Intent trace (run FIRST — outranks all other axes)
 "Clean code, wrong feature" is the worst failure; no later axis catches it.
 - [ ] Every hunk traces to a sentence in ORIGINAL REQUEST. None → hallucinated → revert.
 - [ ] Hunks from a prior turn (in working tree at turn start) → prior accepted work → leave.
 - [ ] Touched but not in `.scope.json` `files[]` → scope creep IF added this turn → revert.
 - [ ] Unsure if hunk is yours-this-turn → ASK, never auto-revert.
 - [ ] No ORIGINAL REQUEST (sandboxed run) → skip this axis.
-- [ ] `.scope.json` `intent` field is non-empty AND reflects THIS turn's task (not the raw prompt, not stale from a prior turn). Empty → write it now (one-line restatement).
-- [ ] `.scope.json` `acceptance` field is NOT the default seed (`Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.`). Default → sharpen it now to this task's real done-check.
+- [ ] `.scope.json` `intent` field is non-empty AND does NOT start with `[DRAFT]` AND reflects THIS turn's task. `[DRAFT]` or empty → rewrite it now (one-line restatement in your own words, remove the prefix).
 
 ## 1. Correctness
 - [ ] Logic does what the task requires (re-read the request, not the diff).
@@ -73,8 +86,8 @@ Fix by name (don't explain — delete and write the correct pattern).
 - [ ] Styling: Tailwind soup / magic tokens / hardcoded hex / `z-[9999]`.
 - [ ] Types: primitive obsession. Imperative `for` where `.map` / `.filter` work.
 
-## 7. Role-trace (skip if decomposition is empty)
+## 7. Role-trace (SKIP if decomposition is empty)
 - [ ] Each `decomposition[i]` has a matching `verifications[i]` (else unfinished work — verify or remove the step).
 - [ ] Each `verifications[i].verdict == "ACCEPT"` (open REVISE → fix or convert with one-line justification).
 - [ ] No files touched this session outside any step's `expected_files` (else cross-step leakage — justify or revert).
-- [ ] Empty decomposition (trivial one-liner, typo) → skip this axis. YAGNI rung 1 governs.
+- [ ] Empty decomposition (trivial one-liner, typo) → SKIP this axis. YAGNI rung 1 governs.
