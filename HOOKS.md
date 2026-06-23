@@ -96,10 +96,16 @@ anti-slop, 5 wiring completeness, 6 mechanics, 7 role-trace if
 `decomposition[]` was declared). On a clean stop where files changed this
 session, returns `{followup_message}` so Cursor auto-submits ONE review pass.
 
-Change detection is stateless: `git diff --name-only HEAD` + untracked files
-against the resolved repo root (falls back to `.scope.json` `files[]` for
-non-git projects). The diff stat is injected as evidence so the model audits
-with real numbers. No per-edit marker files.
+Change detection is session-scoped: when `.scope.json` is present,
+`files[]` (maintained by scope-refresh on every afterFileEdit) is the
+authoritative per-session edit surface. Empty `files[]` means the agent made
+no session edits, so the review does NOT fire (read-only turns skip). This was
+the root fix: previously `git diff HEAD` was preferred, which counted
+pre-existing uncommitted files the agent only READ as "changed this session."
+Non-doctrine projects (no `.scope.json`) fall back to
+`git diff --name-only HEAD` + untracked files against the resolved repo root.
+The diff stat is injected as evidence so the model audits with real numbers.
+No per-edit marker files.
 
 Bounded by the per-cid `reviewed-<cid>.flag` verify-revise brake. The flag
 stores the changed-file COUNT at review time. On the post-review stop, if the

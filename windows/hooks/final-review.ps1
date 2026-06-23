@@ -7,9 +7,14 @@
 # whole session diff.
 #
 # Change detection (two paths):
-#   git repo:   `git diff --name-only HEAD` + `git ls-files --others --exclude-standard`
-#   non-git:    falls back to `.scope.json` `files[]` (hook-maintained by scope-refresh)
-# This ensures the review fires for ANY project, not just git repos.
+#   doctrine project (.scope.json present): `files[]` is the authoritative
+#       per-session edit surface (maintained by scope-refresh on every
+#       afterFileEdit). Empty files[] = agent made no session edits = no review
+#       (read-only turns don't fire). This is the root fix: previously git diff
+#       HEAD was preferred, which counted pre-existing uncommitted files the
+#       agent only READ as "changed this session".
+#   non-doctrine (no .scope.json): `git diff --name-only HEAD` +
+#       `git ls-files --others --exclude-standard` (unchanged).
 #
 # Verify-revise loop: the brake flag stores the changed-file COUNT at review
 # time. On the post-review stop, if the count CHANGED (the agent revised based
@@ -75,24 +80,26 @@ try {
 # The diff count is computed here (before the full git section below) so the
 # brake can compare early and exit fast.
 function Get-DiffCount([string]$repoRoot) {
-    $n = 0
+    $sp = Join-Path $repoRoot '.scope.json'
+    if (Test-Path -LiteralPath $sp) {
+        # Doctrine project: files[] is the per-session edit surface.
+        # Empty/missing files[] → 0 (agent made no session edits).
+        try {
+            $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
+            if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
+                return @($sj2.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' }).Count
+            }
+        } catch { }
+        return 0
+    }
+    # Non-doctrine fallback: git diff + untracked.
     & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         $c = @(& git -C $repoRoot diff HEAD --name-only 2>$null).Count
         $c += @(& git -C $repoRoot ls-files --others --exclude-standard 2>$null).Count
-        $n = $c
-    } else {
-        $sp = Join-Path $repoRoot '.scope.json'
-        if (Test-Path -LiteralPath $sp) {
-            try {
-                $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
-                if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
-                    $n = @($sj2.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' }).Count
-                }
-            } catch { }
-        }
+        return $c
     }
-    return $n
+    return 0
 }
 
 if (Test-Path $flag) {
@@ -118,48 +125,65 @@ if (Test-Path $flag) {
 
 if ($loopCount -ge $loopLimit) { Emit-None 'loop_limit' }
 
-# --- collect changed files (git preferred, .scope.json fallback) ---------------
+# --- collect changed files (.scope.json files[] primary; git fallback) ---------
+# Priority:
+#   1. .scope.json present → files[] is the authoritative per-session edit
+#      surface (maintained by scope-refresh on every afterFileEdit). Empty
+#      files[] → agent made no session edits → no_diff (read-only turns don't
+#      fire a review). Root fix: previously git diff HEAD was preferred, which
+#      counted pre-existing uncommitted files the agent only READ as "changed
+#      this session".
+#   2. No .scope.json (non-doctrine project) → git diff HEAD + untracked,
+#      unchanged from before.
 $rel = New-Object System.Collections.Generic.List[string]
 $diffStat = ''
 $isGitRepo = $false
+$scopePath = Join-Path $root '.scope.json'
 
-& git -C $root rev-parse --git-dir 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    $isGitRepo = $true
-    $edited = New-Object System.Collections.Generic.List[string]
-    foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
-        if ($l) { $edited.Add($l) }
-    }
-    foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
-        if ($l) { $edited.Add($l) }
-    }
-    # Capture diff stat for evidence injection.
-    $diffStat = (& git -C $root diff HEAD --stat 2>$null) -join "`n"
-    foreach ($f in $edited) {
-        $rp = ConvertTo-FwdPath $f
-        if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
-            $rp = $rp.Substring($root.Length + 1)
-        }
-        $rp = $rp.TrimStart('/')
-        if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
-    }
-}
-
-# Non-git fallback: use .scope.json files[] as the change surface.
-if ($rel.Count -eq 0) {
-    $scopePathFb = Join-Path $root '.scope.json'
-    if (Test-Path -LiteralPath $scopePathFb) {
-        try {
-            $sjFb = Get-Content -LiteralPath $scopePathFb -Raw | ConvertFrom-Json
-            if ($sjFb.PSObject.Properties['files'] -and $sjFb.files) {
-                foreach ($f in $sjFb.files) {
-                    $s = [string]$f
-                    if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
-                    $rp = $s.Replace('\', '/').TrimStart('/')
-                    if ($rp -and $rp -ine '.scope.json' -and -not $rel.Contains($rp)) { $rel.Add($rp) }
-                }
+if (Test-Path -LiteralPath $scopePath) {
+    # Doctrine project: files[] is the authoritative session-edit surface.
+    try {
+        $sjSc = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json
+        if ($sjSc.PSObject.Properties['files'] -and $sjSc.files) {
+            foreach ($f in $sjSc.files) {
+                $s = [string]$f
+                if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
+                $rp = $s.Replace('\', '/').TrimStart('/')
+                if ($rp -and $rp -ine '.scope.json' -and -not $rel.Contains($rp)) { $rel.Add($rp) }
             }
-        } catch { }
+        }
+    } catch { }
+    # Diff-stat evidence scoped to the session surface, not the whole tree.
+    if ($rel.Count -gt 0) {
+        & git -C $root rev-parse --git-dir 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $isGitRepo = $true
+            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat') + $rel
+            $diffStat = (& git @statArgs 2>$null) -join "`n"
+        }
+    }
+} else {
+    # Non-doctrine fallback: git diff HEAD + untracked (whole tree).
+    & git -C $root rev-parse --git-dir 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $isGitRepo = $true
+        $edited = New-Object System.Collections.Generic.List[string]
+        foreach ($l in & git -C $root diff HEAD --name-only 2>$null) {
+            if ($l) { $edited.Add($l) }
+        }
+        foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
+            if ($l) { $edited.Add($l) }
+        }
+        # Capture diff stat for evidence injection.
+        $diffStat = (& git -C $root diff HEAD --stat 2>$null) -join "`n"
+        foreach ($f in $edited) {
+            $rp = ConvertTo-FwdPath $f
+            if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
+                $rp = $rp.Substring($root.Length + 1)
+            }
+            $rp = $rp.TrimStart('/')
+            if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+        }
     }
 }
 
@@ -181,7 +205,7 @@ if (-not $body) { Emit-None 'empty_prompt' }
 $body = Expand-AgentPaths $body
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
-$scopePath = Join-Path $root '.scope.json'
+# $scopePath already resolved above (change-surface block).
 $scopeBlock = ''
 $declaredNote = ''
 $roleTraceBlock = ''

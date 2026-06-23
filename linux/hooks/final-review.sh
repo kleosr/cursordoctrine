@@ -8,9 +8,14 @@
 # whole session diff.
 #
 # Change detection (two paths):
-#   git repo:   `git diff --name-only HEAD` + `git ls-files --others --exclude-standard`
-#   non-git:    falls back to `.scope.json` `files[]` (hook-maintained by scope-refresh)
-# This ensures the review fires for ANY project, not just git repos.
+#   doctrine project (.scope.json present): `files[]` is the authoritative
+#       per-session edit surface (maintained by scope-refresh on every
+#       afterFileEdit). Empty files[] = agent made no session edits = no review
+#       (read-only turns don't fire). This is the root fix: previously git diff
+#       HEAD was preferred, which counted pre-existing uncommitted files the
+#       agent only READ as "changed this session".
+#   non-doctrine (no .scope.json): `git diff --name-only HEAD` +
+#       `git ls-files --others --exclude-standard` (unchanged).
 #
 # Verify-revise loop: the brake flag stores the changed-file COUNT at review
 # time. On the post-review stop, if the count CHANGED (the agent revised based
@@ -67,28 +72,39 @@ root="$(resolve_project_root "$input")"
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
 # --- verify-revise brake: compare current diff to review-time diff ------------
-# get_diff_count: count changed files (git diff + untracked, or scope.json files[])
+# get_diff_count: count changed files (.scope.json files[] primary; git fallback)
 get_diff_count() {
-    local repo_root="$1" n=0
-    if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
-        n="$(git -C "$repo_root" diff HEAD --name-only 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
-        n=$((n + $(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c -v '^$' 2>/dev/null)))
-    else
-        local sp="$repo_root/.scope.json"
-        if [ -f "$sp" ]; then
-            n="$(cat "$sp" 2>/dev/null | grep -o '"files"[[:space:]]*:[[:space:]]*\[' | head -1 | wc -l)"
-            if have_jq; then
-                n="$(cat "$sp" 2>/dev/null | jq -r '.files[]? // empty' 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
-            elif have_py; then
-                n="$(cat "$sp" 2>/dev/null | python3 -c 'import json,sys
+    local repo_root="$1" sp="$repo_root/.scope.json"
+    if [ -f "$sp" ]; then
+        # Doctrine project: files[] is the per-session edit surface.
+        # Empty/missing files[] → 0 (agent made no session edits).
+        if have_jq; then
+            local n
+            n="$(cat "$sp" 2>/dev/null | jq -r '.files[]? // empty' 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
+            printf '%s' "${n:-0}"
+            return
+        elif have_py; then
+            local n
+            n="$(cat "$sp" 2>/dev/null | python3 -c 'import json,sys
 try:
     f=json.load(sys.stdin).get("files") or []
     print(len([x for x in f if x and str(x).strip() and not str(x).strip().startswith("<") and str(x).strip()!=".scope.json"]))
 except Exception: print(0)' 2>/dev/null)"
-            fi
+            printf '%s' "${n:-0}"
+            return
         fi
+        printf '0'
+        return
     fi
-    printf '%s' "${n:-0}"
+    # Non-doctrine fallback: git diff + untracked.
+    if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+        local n
+        n="$(git -C "$repo_root" diff HEAD --name-only 2>/dev/null | grep -c -v '^$' 2>/dev/null)"
+        n=$((n + $(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | grep -c -v '^$' 2>/dev/null)))
+        printf '%s' "${n:-0}"
+        return
+    fi
+    printf '0'
 }
 
 if [ -f "$flag" ]; then
@@ -111,65 +127,82 @@ fi
 
 [ "$loop_count" -ge "$loop_limit" ] && emit_none loop_limit
 
-# --- collect changed files (git preferred, .scope.json fallback) ---------------
+# --- collect changed files (.scope.json files[] primary; git fallback) ---------
+# Priority:
+#   1. .scope.json present → files[] is the authoritative per-session edit
+#      surface (maintained by scope-refresh on every afterFileEdit). Empty
+#      files[] → agent made no session edits → no_diff (read-only turns don't
+#      fire a review). Root fix: previously git diff HEAD was preferred, which
+#      counted pre-existing uncommitted files the agent only READ as "changed
+#      this session".
+#   2. No .scope.json → git diff HEAD + untracked, unchanged.
 diff_stat=""
 is_git_repo=false
 edited=""
+scope_path="$root/.scope.json"
 
-if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
-    is_git_repo=true
-    edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
-    edited_raw="${edited_raw}
-$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
-    diff_stat="$(git -C "$root" diff HEAD --stat 2>/dev/null)"
-
-    # Dedupe, normalize to repo-relative forward-slash paths.
-    root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
-    while IFS= read -r p; do
-        [ -n "$p" ] || continue
-        case "$p" in
-            "$root_fwd"/*) p="${p#"$root_fwd"/}" ;;
-            "$root_fwd") continue ;;
-        esac
-        p="${p#/}"
-        [ -n "$p" ] || continue
-        case "$edited" in
-            *"$p"*) ;;
-            *) edited="${edited}${p}"$'\n' ;;
-        esac
-    done <<EOF
-$edited_raw
-EOF
-fi
-
-# Non-git fallback: use .scope.json files[] as the change surface.
-if [ -z "$(printf '%s' "$edited" | grep -v '^$')" ]; then
-    scope_path_fb="$root/.scope.json"
-    if [ -f "$scope_path_fb" ]; then
-        scope_raw_fb="$(cat "$scope_path_fb" 2>/dev/null)"
-        if [ -n "$scope_raw_fb" ]; then
-            if have_jq; then
-                fb_files="$(printf '%s' "$scope_raw_fb" | jq -r '.files[]? // empty' 2>/dev/null)"
-            elif have_py; then
-                fb_files="$(printf '%s' "$scope_raw_fb" | python3 -c 'import json,sys
+if [ -f "$scope_path" ]; then
+    # Doctrine project: files[] is the authoritative session-edit surface.
+    scope_raw_sc="$(cat "$scope_path" 2>/dev/null)"
+    if [ -n "$scope_raw_sc" ]; then
+        if have_jq; then
+            sc_files="$(printf '%s' "$scope_raw_sc" | jq -r '.files[]? // empty' 2>/dev/null)"
+        elif have_py; then
+            sc_files="$(printf '%s' "$scope_raw_sc" | python3 -c 'import json,sys
 try:
     for f in (json.load(sys.stdin).get("files") or []):
         s = str(f).strip()
         if s and not s.startswith("<"): print(s)
 except Exception: pass' 2>/dev/null)"
-            fi
-            while IFS= read -r p; do
-                [ -n "$p" ] || continue
-                p="$(printf '%s' "$p" | tr '\\' '/' | sed 's|^/||')"
-                [ "$p" = ".scope.json" ] && continue
-                case "$edited" in
-                    *"$p"*) ;;
-                    *) edited="${edited}${p}"$'\n' ;;
-                esac
-            done <<EOF
-$fb_files
-EOF
         fi
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            p="$(printf '%s' "$p" | tr '\\' '/' | sed 's|^/||')"
+            [ "$p" = ".scope.json" ] && continue
+            case "$edited" in
+                *"$p"*) ;;
+                *) edited="${edited}${p}"$'\n' ;;
+            esac
+        done <<EOF
+$sc_files
+EOF
+    fi
+    # Diff-stat evidence scoped to the session surface, not the whole tree.
+    if [ -n "$(printf '%s' "$edited" | grep -v '^$')" ]; then
+        if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+            is_git_repo=true
+            mapfile -t stat_files < <(printf '%s' "$edited" | grep -v '^$')
+            if [ ${#stat_files[@]} -gt 0 ]; then
+                diff_stat="$(git -C "$root" diff HEAD --stat -- "${stat_files[@]}" 2>/dev/null)"
+            fi
+        fi
+    fi
+else
+    # Non-doctrine fallback: git diff HEAD + untracked (whole tree).
+    if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+        is_git_repo=true
+        edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
+        edited_raw="${edited_raw}
+$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+        diff_stat="$(git -C "$root" diff HEAD --stat 2>/dev/null)"
+
+        # Dedupe, normalize to repo-relative forward-slash paths.
+        root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            case "$p" in
+                "$root_fwd"/*) p="${p#"$root_fwd"/}" ;;
+                "$root_fwd") continue ;;
+            esac
+            p="${p#/}"
+            [ -n "$p" ] || continue
+            case "$edited" in
+                *"$p"*) ;;
+                *) edited="${edited}${p}"$'\n' ;;
+            esac
+        done <<EOF
+$edited_raw
+EOF
     fi
 fi
 
@@ -191,7 +224,7 @@ body="$(cat "$prompt_file")"
 body="$(expand_agent_paths "$body")"
 
 # --- .scope.json: declarative contract (optional, agent-written at Step 0) ----
-scope_path="$root/.scope.json"
+# scope_path already resolved above (change-surface block).
 scope_block=""
 declared_note=""
 role_trace_block=""
