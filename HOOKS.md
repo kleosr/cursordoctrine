@@ -21,10 +21,18 @@ the prompt in the payload directly. Writes the prompt as `.scope.json`'s
 **Continuation:** update `prompt` only; preserve `intent`, `decomposition[]`,
 `verifications[]`, `files[]`, and `acceptance`.
 
-**New task:** prompt starts with `/new`, `new task:`, or `new task —` (case
-insensitive) → reset `intent` to `""`, `decomposition[]` to `[]`,
-`verifications[]` to `[]`, `files[]` to `[]`, `acceptance` to default. Agent
-must restate.
+**New task (automatic):** when the new prompt is dissimilar enough from the
+stored prompt (Jaccard token overlap below 0.34; env override
+`INTENT_TOPIC_THRESHOLD`), reset `intent` to `""`, `decomposition[]` to `[]`,
+`verifications[]` to `[]`, `files[]` to `[]`, `acceptance` to default, and
+clear per-conversation nudge throttle flags. Agent must restate. Optional human
+signal: prefix with `/new` or `new task:` — not required by the hook.
+
+**Step 0 nudge:** when `intent` is empty or `acceptance` is still the default
+seed after seeding, stashes a `STEP 0 CONTRACT` reminder to
+`~/.cursor/.hooks-pending/precompile-<cid>.txt`. `scope-drain` delivers it on
+the first `postToolUse` boundary (one-shot). Resets `intent-anchor` throttle
+so edit-time nudges can fire again this turn.
 
 If `.scope.json` doesn't exist, creates it fresh with empty `intent`,
 `decomposition[]`, `verifications[]`, and `files[]`. Skips hook-generated
@@ -51,9 +59,10 @@ ApplyPatch, etc.), not just `Write`. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 5s each. Three entries run in array order.
 
 **scope-drain:** Drains the per-cid `scope-<cid>.txt` stash (written by
-`scope-refresh`) into `additional_context`. One-shot: the stash is deleted on
-read. Fires on every postToolUse but emits nothing when no stash is present
-(most fires, between edits, are silent). Disable: `SCOPE_REFRESH_ENFORCE=0`.
+`scope-refresh`) and/or `precompile-<cid>.txt` (written by `intent-precompile`)
+into `additional_context`. One-shot: each stash is deleted on read. Fires on
+every postToolUse but emits nothing when no stash is present (most fires, between
+edits, are silent). Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
 **milestone-verify (doctrine-ultra):** Tri-role Verifier. When `.scope.json`
 declares a non-empty `decomposition[]` AND a step's `expected_files[]` are all
@@ -66,23 +75,22 @@ verdict and writes it into `verifications[]` (hook-owned).
 Silent when: `.scope.json` missing; all steps already verified; no
 expected_files completed; kill switch set; (Linux) no python3 available
 (verdict-scrape needs regex on transcript text). When `decomposition[]` is
-empty BUT the session has touched >= 2 files, a `DECOMPOSE` nudge fires
+empty BUT the session has touched >= 1 file, a `DECOMPOSE` nudge fires
 instead of going silent: the doctrine requires decomposition for multi-file
 tasks, and this closes the gap where an agent touches many files with zero
 steps declared. Per-cid flag throttle (mirrors intent-anchor) re-nudges only
-when `files[]` grows, capped at 8 (env override `DECOMPOSE_NUDGE_CAP`). The
+when `files[]` grows, capped at 99999 (env override `DECOMPOSE_NUDGE_CAP`). The
 final review's axis 7 is the backstop: a multi-file task with no decomposition
 FAILs. Never blocks. Disable: `MILESTONE_VERIFY_ENFORCE=0`.
 
-**intent-anchor (persistent contract nudge):** Re-fires whenever NEW files
-have been edited since the last nudge and `.scope.json`'s `intent` is empty
-(or a stale `[DRAFT]` from a legacy install) or `acceptance` is still the
-default seed. The per-cid flag (`intent-anchored-<cid>.flag`) stores the
-`files[]` count at last nudge; if `files[]` hasn't grown, the hook stays
-silent. Once both fields are filled, the hook goes silent permanently for that
-conversation. The nudge cap is 8 per conversation (env override
-`INTENT_ANCHOR_NUDGE_CAP`); after the cap the hook stays silent but the final
-review's axis 0 FAIL is the backstop at stop time. Emits an `INTENT ANCHOR`
+**intent-anchor (persistent contract nudge):** Re-fires when the contract is
+still incomplete (empty `intent`, stale `[DRAFT]`, or default-seed `acceptance`)
+AND either (a) this conversation has never been nudged yet, or (b) `files[]`
+has grown since the last nudge. The per-cid flag (`intent-anchored-<cid>.flag`)
+stores `filesCount:nudgeCount`. Once both `intent` and sharpened `acceptance`
+are filled, the hook goes silent permanently for that conversation. The nudge
+cap is 99999 per conversation (env override `INTENT_ANCHOR_NUDGE_CAP`); the
+final review's axis 0 FAIL is the backstop at stop time. Emits an `INTENT ANCHOR`
 reminder listing which agent-owned field is missing. The hook never writes
 those fields — it just surfaces the gap so final-review's axis 0 intent trace
 has something better than the raw prompt to work with. Disable:

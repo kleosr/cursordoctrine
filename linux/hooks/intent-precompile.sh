@@ -20,6 +20,11 @@
 # enough from the stored prompt, reset intent/files/decomposition/verifications.
 # Continuation: update `prompt` only; preserve intent, files[], acceptance.
 #
+# Step 0 nudge: when intent is empty/[DRAFT] or acceptance is the default seed,
+# stashes STEP 0 CONTRACT to ~/.cursor/.hooks-pending/precompile-<cid>.txt for
+# scope-drain on the first postToolUse. Clears intent-anchor throttle so
+# edit-time nudges can fire again this turn.
+#
 # scope-refresh (afterFileEdit) appends edited paths to files[].
 # Skips hook-generated auto-submits. Never blocks. Disable:
 # HOOKS_ENFORCE=0 or INTENT_PRECOMPILE_ENFORCE=0.
@@ -193,5 +198,45 @@ except Exception: pass' 2>/dev/null)"
 else
     write_reset_scope "$prompt"
 fi
+
+write_precompile_stash() {
+    local p="$1"
+    local cid raw intent acceptance needs
+    cid="$(safe_conversation_id "$input")"
+    [ -n "$cid" ] || return 0
+    [ -f "$scope_path" ] || return 0
+    raw="$(cat "$scope_path" 2>/dev/null)"
+    [ -n "$raw" ] || return 0
+    if have_jq; then
+        intent="$(printf '%s' "$raw" | jq -r '.intent // empty' 2>/dev/null)"
+        acceptance="$(printf '%s' "$raw" | jq -r '.acceptance // empty' 2>/dev/null)"
+    elif have_py; then
+        intent="$(printf '%s' "$raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("intent") or "")
+except Exception: pass' 2>/dev/null)"
+        acceptance="$(printf '%s' "$raw" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("acceptance") or "")
+except Exception: pass' 2>/dev/null)"
+    else
+        return 0
+    fi
+    needs=false
+    [ -z "$intent" ] && needs=true
+    case "$intent" in "[DRAFT]"*) needs=true ;; esac
+    [ "$acceptance" = "$default_acceptance" ] && needs=true
+    [ "$needs" = "true" ] || return 0
+    _pdir="$HOME/.cursor/.hooks-pending"
+    rm -f "$_pdir/intent-anchored-$cid.flag" 2>/dev/null
+    _msg="STEP 0 CONTRACT (re-injected at prompt submit): .scope.json was seeded by intent-precompile. Fill agent-owned fields NOW before your first edit:
+  - intent: empty — write your one-line restatement (NOT the verbatim prompt)
+  - acceptance: sharpen from the default seed to this task's real done-check
+  - decomposition[]: declare steps if this task is multi-file or multi-step
+
+Current prompt: $p"
+    mkdir -p "$_pdir" 2>/dev/null
+    printf '%s' "$_msg" > "$_pdir/precompile-$cid.txt" 2>/dev/null
+}
+
+write_precompile_stash "$prompt"
 
 exit 0

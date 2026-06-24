@@ -104,6 +104,7 @@ if [ "$intent_empty" = "false" ] && [ "$intent_draft" = "false" ] && [ "$accepta
 fi
 
 # Contract incomplete but no new files since last nudge → stay silent.
+# Exception: last_count -lt 0 means never nudged this cid — first postToolUse fires.
 if [ "$last_count" -ge 0 ] && [ "${files_count:-0}" -le "$last_count" ]; then
     exit 0
 fi

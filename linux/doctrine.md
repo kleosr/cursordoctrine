@@ -14,27 +14,31 @@ Before any code, write `.scope.json` to the repo root:
 
 ```json
 {
-  "prompt":     "<hook: verbatim latest user message — do not edit>",
-  "intent":     "your Step 0 restatement (not the verbatim request)",
-  "files":      ["<blast radius>"],
-  "acceptance": "<deterministic done-check>"
+  "prompt":         "<hook: verbatim latest user message — do not edit>",
+  "intent":         "your Step 0 restatement (not the verbatim request)",
+  "decomposition":  [{"step": 1, "subtask": "<one line>", "expected_files": ["..."]}],
+  "verifications":  [],
+  "files":          ["<blast radius>"],
+  "acceptance":     "<deterministic done-check>"
 }
 ```
 
 - **prompt** — hook-owned. `intent-precompile` writes this on every send. Do not overwrite it.
-- **intent** — agent-owned Step 0 restatement, NOT the verbatim request. The hook seeds this EMPTY so a blank field honestly signals "not done yet." Your first job is to WRITE it in your own words — a clearer, better restatement of the SAME task than the verbatim prompt (not a copy with a prefix). `intent-anchor` re-nudges you on every new file edit until you do, and the final review's axis 0 FAILs while it stays empty — the review will not ACCEPT until you've written it.
-- **files** — the **blast radius**. Grep `from '.*X'` and walk the import chain: the target file + every importer (transitively) + every shared type/helper. `scope-refresh` appends paths as you edit; declare the expected radius at Step 0.
-- **acceptance** — the project's linters at max strictness pass clean (Biome `--error-on-warnings`, Semgrep `--error --config auto`, Ruff / ESLint — whatever the repo has), the change typechecks/builds, and the described problem no longer reproduces. Frozen on continuation; reset on new task.
+- **intent** — agent-owned Step 0 restatement, NOT the verbatim request. The hook seeds this EMPTY so a blank field honestly signals "not done yet." Your first job is to WRITE it in your own words — a clearer, better restatement of the SAME task than the verbatim prompt (not a copy with a prefix). `intent-precompile` stashes a `STEP 0 CONTRACT` reminder at prompt submit; `intent-anchor` re-nudges on each new file edit until you do; the final review's axis 0 FAILs while it stays empty — the review will not ACCEPT until you've written it.
+- **decomposition[]** — agent-owned at Step 0 for multi-step / multi-file tasks. Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Only trivial one-liners leave it `[]`.
+- **verifications[]** — hook-owned. `milestone-verify` records ACCEPT/REVISE verdicts scraped from chat. Do not write it yourself.
+- **files[]** — blast radius plus hook-owned session footprint. Grep `from '.*X'` and walk the import chain at Step 0; `scope-refresh` appends paths as you edit.
+- **acceptance** — the project's linters at max strictness pass clean (Biome `--error-on-warnings`, Semgrep `--error --config auto`, Ruff / ESLint — whatever the repo has), the change typechecks/builds, and the described problem no longer reproduces. Sharpen from the default seed at Step 0. Frozen on continuation; reset on new task.
 
 The `stop` hook reads `.scope.json` for the final review and diffs your declared `files[]` against what git sees touched. Trivial one-liners (typo, literal) skip this — YAGNI rung 1 governs.
 
 **Decomposition (required for multi-step, skip only for trivial one-liners).** For any task that touches more than one file or has more than one logical step, you MUST declare a `decomposition[]` array at Step 0. Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Only trivial one-liners (typo, literal, <=1 file) leave it `[]` (YAGNI rung 1). The `verifications[]` array is hook-owned: `milestone-verify` (postToolUse) records ACCEPT/REVISE verdicts based on what you emit in chat when a step's `expected_files` are all touched. Emit `ACCEPT step N` to proceed or `REVISE step N: <one-line diagnosis>` to repair. The final review's axis 7 audits the chain: every step must trace to a verdict, and every touched file to a step. **A multi-file task (>=2 files) with empty decomposition FAILs axis 7** — the review will not ACCEPT until you declare the plan. Only a genuine single-file one-liner may SKIP axis 7.
 
-**Contract enforcement.** `intent-anchor` (postToolUse) emits an `INTENT ANCHOR` reminder whenever new files are edited and `.scope.json` has empty `intent` or default-seed `acceptance` (a stale `[DRAFT]` intent from a legacy install is also caught). Write the `intent` and sharpen acceptance, and the nudge stays silent. The nudge cap is 8 per conversation (env override `INTENT_ANCHOR_NUDGE_CAP`); after the cap the hook stays silent but the final review's axis 0 FAIL is the backstop at stop time. The harness never writes those fields — they're agent-owned by design.
+**Contract enforcement.** `intent-precompile` (beforeSubmitPrompt) stashes a `STEP 0 CONTRACT` reminder when `intent` is empty or `acceptance` is still the default seed; `scope-drain` delivers it on the first tool boundary. `intent-anchor` (postToolUse) emits an `INTENT ANCHOR` reminder whenever new files are edited and the contract is still incomplete (empty `intent`, stale `[DRAFT]` from a legacy install, or default-seed `acceptance`). Write `intent`, declare `decomposition[]` if needed, and sharpen `acceptance` — then nudges go silent. The nudge cap is effectively unlimited (default 99999; env override `INTENT_ANCHOR_NUDGE_CAP`); the final review's axis 0 FAIL is the backstop at stop time. The harness never writes agent-owned fields.
 
-**Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` BEFORE writing. Decide:
-- **Continuation** (the prompt extends, refines, or fixes the same task): UPDATE `intent` in place (merge the new ask into your restatement). `files[]` accumulates via edits. Sharpen `acceptance` only if the done-check changed.
-- **New task** (unrelated): start the prompt with `/new` or `new task:` — the hook resets `intent`, `files[]`, and `acceptance`. Then regenerate your Step 0 restatement and blast radius.
+**Cross-prompt continuity.** When a new prompt arrives, READ the existing `.scope.json` BEFORE writing. The hook detects topic change automatically (Jaccard similarity on prompt tokens; threshold 0.34, env override `INTENT_TOPIC_THRESHOLD`):
+- **Continuation** (similar prompt): update `prompt` only; preserve `intent`, `decomposition[]`, `verifications[]`, `files[]`, and `acceptance`. Merge the new ask into your restatement if needed.
+- **New task** (dissimilar prompt): hook resets `intent`, `decomposition[]`, `verifications[]`, `files[]`, and `acceptance` to fresh seeds. Regenerate your Step 0 restatement and blast radius. Optional: prefix with `/new` or `new task:` as a human signal — the hook does not require it.
 
 Never silently wipe a contract that tracks in-progress work. The `afterFileEdit` hook re-injects `.scope.json` into your context after every edit — if you forget to update it, the stale contract surfaces and the mismatch becomes obvious.
 

@@ -18,6 +18,11 @@
 # enough from the stored prompt, reset intent/files/decomposition/verifications.
 # Continuation: update prompt only; preserve intent, files[], acceptance.
 #
+# Step 0 nudge: when intent is empty/[DRAFT] or acceptance is the default seed,
+# stashes STEP 0 CONTRACT to ~/.cursor/.hooks-pending/precompile-<cid>.txt for
+# scope-drain on the first postToolUse. Clears intent-anchor throttle so
+# edit-time nudges can fire again this turn.
+#
 # Skips hook-generated auto-submits. Never blocks. Disable: HOOKS_ENFORCE=0 or
 # INTENT_PRECOMPILE_ENFORCE=0.
 
@@ -130,6 +135,28 @@ try {
     }
     $json = $ordered | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+
+    $intentVal = ''
+    if ($ordered.Contains('intent')) { $intentVal = [string]$ordered['intent'] }
+    $acceptVal = ''
+    if ($ordered.Contains('acceptance')) { $acceptVal = [string]$ordered['acceptance'] }
+    $needsStep0 = [string]::IsNullOrWhiteSpace($intentVal) -or ($intentVal -match '^\[DRAFT\]') -or ($acceptVal -ieq $defaultAcceptance)
+    if ($needsStep0) {
+        $cid = Get-SafeConversationId $obj
+        if ($cid) {
+            $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
+            $anchorFlag = Join-Path $pendingDir "intent-anchored-$cid.flag"
+            if (Test-Path -LiteralPath $anchorFlag) {
+                Remove-Item -LiteralPath $anchorFlag -Force -ErrorAction SilentlyContinue
+            }
+            $msg = "STEP 0 CONTRACT (re-injected at prompt submit): .scope.json was seeded by intent-precompile. Fill agent-owned fields NOW before your first edit:`n  - intent: empty — write your one-line restatement (NOT the verbatim prompt)`n  - acceptance: sharpen from the default seed to this task's real done-check`n  - decomposition[]: declare steps if this task is multi-file or multi-step`n`nCurrent prompt: $prompt"
+            $stash = Join-Path $pendingDir "precompile-$cid.txt"
+            try {
+                New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
+                [System.IO.File]::WriteAllText($stash, $msg, [System.Text.UTF8Encoding]::new($false))
+            } catch { }
+        }
+    }
 } catch { }
 
 exit 0

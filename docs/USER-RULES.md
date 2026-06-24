@@ -27,13 +27,13 @@ The harness writes `.scope.json` to the repo root automatically on every prompt 
 ```
 
 - **`prompt`** — hook-owned. Written by `intent-precompile` on every send. Do not overwrite.
-- **`intent`** — YOUR Step 0 restatement. Not the verbatim request. The hook seeds this as `[DRAFT] <prompt>` so it is never blank — rewrite it in your own words (remove the `[DRAFT]` prefix) before your first edit. `intent-anchor` re-nudges you on every new file edit (up to 3 times) until you do.
+- **`intent`** — YOUR Step 0 restatement. Not the verbatim request. The hook seeds this EMPTY so a blank field honestly signals "not done yet." Write it in your own words before your first edit. `intent-precompile` stashes a `STEP 0 CONTRACT` reminder at prompt submit; `intent-anchor` re-nudges on each new file edit until you do.
 - **`decomposition[]`** — REQUIRED for multi-step tasks (more than one file or more than one logical step). Each entry: `{"step": N, "subtask": "<one line>", "expected_files": ["..."]}`. Only trivial one-liners (typo, literal) leave it `[]`.
 - **`verifications[]`** — hook-owned. `milestone-verify` records ACCEPT/REVISE verdicts here. Do not write it yourself.
 - **`files[]`** — the blast radius: target file + every importer (transitively) + every shared type/helper. Grep `from '.*X'` and walk the import chain. The `scope-refresh` hook auto-records every file you edit into `files[]` as you work — declare the expected radius at Step 0.
-- **`acceptance`** — Biome `biome check --error-on-warnings`, Semgrep `semgrep --config auto --error`, Ruff/ESLint at max — whatever the repo has — plus typecheck/build, plus the described problem no longer reproduces. Sharpen it to this task's real done-check. Frozen on continuation; reset on new task.
+- **`acceptance`** — Biome `biome check --error-on-warnings`, Semgrep `semgrep --config auto --error`, Ruff/ESLint at max — whatever the repo has — plus typecheck/build, plus the described problem no longer reproduces. Sharpen it to this task's real done-check. Frozen on continuation; reset on automatic topic change.
 
-The `intent-anchor` hook re-nudges you on every new file edit until `intent` is filled and `acceptance` is sharpened. Fill them early.
+The `intent-precompile` + `intent-anchor` hooks re-nudge you until `intent` is filled and `acceptance` is sharpened. Fill them at Step 0, before any code edit.
 
 ## 3. Decomposition + milestone verdicts (multi-step tasks)
 
@@ -54,7 +54,7 @@ Trivial one-liners (typo, literal): leave `decomposition[]` empty. The hook stay
 When a new prompt arrives, READ the existing `.scope.json` first.
 
 - **Continuation** (extends, refines, fixes the same task): UPDATE `intent` in place. `files[]` accumulates via edits. Sharpen `acceptance` only if the done-check changed.
-- **New task** (unrelated): prefix with `/new` or `new task:`. The hook resets `intent`, `decomposition[]`, `verifications[]`, `files[]`, and `acceptance`. Then regenerate your Step 0 restatement and blast radius.
+- **New task** (unrelated): the hook detects topic change automatically (Jaccard similarity on prompt tokens). It resets `intent`, `decomposition[]`, `verifications[]`, `files[]`, and `acceptance`. Regenerate your Step 0 restatement and blast radius. Optional human signal: prefix with `/new` or `new task:`.
 
 Never silently wipe a contract that tracks in-progress work.
 

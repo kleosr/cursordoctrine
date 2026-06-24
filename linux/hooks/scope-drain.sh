@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# scope-drain.sh - postToolUse: drain the stashed scope reminder into additional_context.
+# scope-drain.sh - postToolUse: drain stashed reminders into additional_context.
 #
-# Pairs with scope-refresh.sh (afterFileEdit). afterFileEdit output is not
-# consumed by Cursor, so scope-refresh writes a per-cid stash file and THIS
-# hook delivers it on the next tool boundary. One-shot: the stash is deleted
-# on read, so a hook error can't replay it forever.
+# Pairs with scope-refresh.sh (afterFileEdit) and intent-precompile.sh
+# (beforeSubmitPrompt). Delivers precompile-<cid>.txt (Step 0 contract) and/or
+# scope-<cid>.txt (per-edit reminder). One-shot: each stash deleted on read.
 #
 # Fires on every postToolUse. Most fires find no stash (scope-refresh only
 # writes one after an actual edit) and emit nothing. No matcher on postToolUse
@@ -20,12 +19,31 @@ set +e
 input="$(read_hook_stdin)"
 cid="$(safe_conversation_id "$input")"
 
+msgs=""
+precompile="$HOME/.cursor/.hooks-pending/precompile-$cid.txt"
+if [ -f "$precompile" ]; then
+    part="$(cat "$precompile" 2>/dev/null)"
+    rm -f "$precompile" 2>/dev/null
+    if [ -n "$part" ]; then
+        msgs="$part"
+    fi
+fi
+
 pending="$HOME/.cursor/.hooks-pending/scope-$cid.txt"
-[ -f "$pending" ] || exit 0
+if [ -f "$pending" ]; then
+    part="$(cat "$pending" 2>/dev/null)"
+    rm -f "$pending" 2>/dev/null
+    if [ -n "$part" ]; then
+        if [ -n "$msgs" ]; then
+            msgs="$msgs
 
-msg="$(cat "$pending" 2>/dev/null)"
-rm -f "$pending" 2>/dev/null
+$part"
+        else
+            msgs="$part"
+        fi
+    fi
+fi
 
-[ -n "$msg" ] || exit 0
-emit_json additional_context "$msg"
+[ -n "$msgs" ] || exit 0
+emit_json additional_context "$msgs"
 exit 0

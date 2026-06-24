@@ -7,8 +7,9 @@
 # final-review's intent trace falls back to the raw prompt, and the acceptance
 # bar shown is generic rather than task-specific.
 #
-# This hook re-fires whenever NEW files have been edited since the last nudge
-# and the contract is still incomplete (empty intent and/or default acceptance).
+# This hook re-fires when the contract is still incomplete (empty intent and/or
+# default acceptance) AND either this conversation has never been nudged
+# (lastCount -lt 0) OR files[] has grown since the last nudge.
 # The per-cid flag stores the files[] count at last fire; if files[] hasn't
 # grown, the hook stays silent (no new work to anchor against). Once intent AND
 # acceptance are both filled, the hook goes silent permanently for this cid.
@@ -87,6 +88,7 @@ if (-not ($intentEmpty -or $intentDraft -or $acceptanceDefault)) {
 }
 
 # Contract incomplete but no new files since last nudge → stay silent.
+# Exception: lastCount -lt 0 means never nudged this cid — first postToolUse fires.
 if ($lastCount -ge 0 -and $filesCount -le $lastCount) { exit 0 }
 
 # Contract incomplete but nudge cap exceeded → stay silent (stop pestering).

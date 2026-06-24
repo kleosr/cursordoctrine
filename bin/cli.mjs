@@ -623,6 +623,30 @@ function verify() {
     }
   });
 
+  check('intent-precompile stashes STEP 0 CONTRACT for scope-drain', () => {
+    const cidv = 'npxvpc0';
+    const repoDir = join(HOME, '.cd-verify-precompile-step0');
+    const stashPath = join(pendingDir, `precompile-${cidv}.txt`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      rmBestEffort(stashPath);
+      runHook(hook('intent-precompile'), { conversation_id: cidv, cwd: repoDir, prompt: 'fix the sidebar' });
+      if (!existsSync(stashPath)) return { ok: false, detail: 'precompile stash not written' };
+      const stash = readFileSync(stashPath, 'utf8');
+      if (!stash.includes('STEP 0 CONTRACT')) return { ok: false, detail: 'stash missing STEP 0 CONTRACT header' };
+      const delivered = runHook(hook('scope-drain'), { conversation_id: cidv });
+      if (!delivered.includes('additional_context') || !delivered.includes('STEP 0 CONTRACT')) {
+        return { ok: false, detail: `scope-drain did not deliver precompile stash: ${delivered.slice(0, 200)}` };
+      }
+      if (existsSync(stashPath)) return { ok: false, detail: 'precompile stash not one-shot' };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(stashPath);
+    }
+  });
+
   check('milestone-verify emits reminder when step expected_files all touched', () => {
     const cidv = 'npxvmv1';
     const repoDir = join(HOME, '.cd-verify-mv1');
