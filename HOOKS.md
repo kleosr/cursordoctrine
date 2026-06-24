@@ -1,12 +1,13 @@
 # Hooks — operational reference
 
-Eight hooks, six events. The `hooks.json` files (`windows/`, `linux/`) are
+Nine hooks, seven events. The `hooks.json` files (`windows/`, `linux/`) are
 spec-clean: only the documented Cursor options (`command`, `timeout`,
 `loop_limit`, `failClosed`, `matcher`). Aligns with https://cursor.com/docs/hooks.
 
 Kill switches: any hook no-ops when `HOOKS_ENFORCE=0`; each also has its own
-(`PERM_GATE_ENFORCE=0`, `INTENT_PRECOMPILE_ENFORCE=0`, `SCOPE_REFRESH_ENFORCE=0`,
-`MILESTONE_VERIFY_ENFORCE=0`, `INTENT_ANCHOR_ENFORCE=0`, `FINAL_REVIEW_ENFORCE=0`).
+(`PERM_GATE_ENFORCE=0`, `INTENT_PRECOMPILE_ENFORCE=0`, `STEP0_GATE_ENFORCE=0`,
+`SCOPE_REFRESH_ENFORCE=0`, `MILESTONE_VERIFY_ENFORCE=0`, `INTENT_ANCHOR_ENFORCE=0`,
+`FINAL_REVIEW_ENFORCE=0`).
 The final-review brake state lives under `~/.cursor/.hooks-pending/`, keyed by
 `conversation_id`. Never committed.
 
@@ -43,6 +44,24 @@ blocks. No repo root → silent. Disable: `INTENT_PRECOMPILE_ENFORCE=0`.
 5s. Reads `~/.cursor/doctrine.md` and emits it as `{"additional_context": ...}`
 (sessionStart does NOT consume raw stdout). This is the session-scoped system
 context — the only governing text the agent receives. Short on purpose.
+
+## preToolUse — step0-gate (.ps1/.sh)
+5s, `failClosed: false`, matcher `Write|StrReplace|ApplyPatch`. Hard Step 0
+enforcement — the second non-advisory lever (beside `permission-gate`).
+
+**Always allow:** writes targeting `.scope.json` (agent must fill the contract).
+
+**Deny** other file writes when:
+- `intent` is empty, whitespace-only, or still `[DRAFT]`; or
+- `files[]` already has >=1 real entry (non-placeholder, not `.scope.json`) AND
+  `decomposition[]` is empty (multi-file work needs a plan before file 2).
+
+**Fail open when:** no `.scope.json`; project root cannot be resolved; target
+path cannot be parsed from `tool_input`; internal parse/runtime error; kill
+switch set. Read/Grep/Shell are not matched — explore first, contract second.
+
+Emits `{"permission":"deny","user_message":...,"agent_message":...}`. Disable:
+`STEP0_GATE_ENFORCE=0`.
 
 ## afterFileEdit — scope-refresh (.ps1/.sh)
 5s. Reads `.scope.json` from the repo root and stashes a

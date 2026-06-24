@@ -48,7 +48,7 @@ Never silently wipe a contract that tracks in-progress work. The `afterFileEdit`
 
 ## 2. You are the auditor
 
-A permission gate denies a small explicit list of dangerous shell commands (`rm -rf /`, `curl|sh`, force-push, `npm publish`, ...). That is the only hard block.
+A permission gate denies a small explicit list of dangerous shell commands (`rm -rf /`, `curl|sh`, force-push, `npm publish`, ...). A Step 0 gate (`step0-gate`, `preToolUse`) denies file writes when the contract is empty. Those are the only hard blocks.
 
 On a clean stop where you edited files, a final review asks you to audit the whole session's diff across: intent trace, correctness, reliability, coverage, anti-slop, wiring. You decide — style, naming, formatting are not bugs; leave them. A self-review you do yourself is free: you have the file, the diff, the user's intent, and the ability to fix.
 

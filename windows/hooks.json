@@ -13,6 +13,14 @@
         "timeout": 5
       }
     ],
+    "preToolUse": [
+      {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/step0-gate.ps1",
+        "matcher": "Write|StrReplace|ApplyPatch",
+        "timeout": 5,
+        "failClosed": false
+      }
+    ],
     "afterFileEdit": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-refresh.ps1",

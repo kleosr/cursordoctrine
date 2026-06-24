@@ -509,6 +509,151 @@ function verify() {
   check('permission gate denies `git push --force`', () =>
     /"permission"\s*:\s*"deny"/.test(runHook(hook('permission-gate'), { command: 'git push --force' })));
 
+  check('step0-gate denies code edit when intent empty', () => {
+    const repoDir = join(HOME, '.cd-verify-step0-empty');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), '{}');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix foo',
+        intent: '',
+        decomposition: [],
+        verifications: [],
+        files: [],
+        acceptance: 'tests pass',
+      }));
+      const out = runHook(hook('step0-gate'), {
+        cwd: repoDir,
+        tool_name: 'Write',
+        tool_input: { path: join(repoDir, 'src/foo.ts') },
+      });
+      if (!/"permission"\s*:\s*"deny"/.test(out)) {
+        return { ok: false, detail: `expected deny, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('step0-gate allows .scope.json write when intent empty', () => {
+    const repoDir = join(HOME, '.cd-verify-step0-scope');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), '{}');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix foo',
+        intent: '',
+        decomposition: [],
+        verifications: [],
+        files: [],
+        acceptance: 'tests pass',
+      }));
+      const out = runHook(hook('step0-gate'), {
+        cwd: repoDir,
+        tool_name: 'Write',
+        tool_input: { path: scopePath },
+      });
+      if (!/"permission"\s*:\s*"allow"/.test(out)) {
+        return { ok: false, detail: `expected allow, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('step0-gate allows code edit when intent filled', () => {
+    const repoDir = join(HOME, '.cd-verify-step0-allow');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), '{}');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix foo',
+        intent: 'Fix the foo module',
+        decomposition: [],
+        verifications: [],
+        files: [],
+        acceptance: 'tests pass',
+      }));
+      const out = runHook(hook('step0-gate'), {
+        cwd: repoDir,
+        tool_name: 'StrReplace',
+        tool_input: { path: join(repoDir, 'src/foo.ts') },
+      });
+      if (!/"permission"\s*:\s*"allow"/.test(out)) {
+        return { ok: false, detail: `expected allow, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('step0-gate denies second file without decomposition', () => {
+    const repoDir = join(HOME, '.cd-verify-step0-decomp');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), '{}');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix foo and bar',
+        intent: 'Fix foo and bar modules',
+        decomposition: [],
+        verifications: [],
+        files: ['src/foo.ts'],
+        acceptance: 'tests pass',
+      }));
+      const out = runHook(hook('step0-gate'), {
+        cwd: repoDir,
+        tool_name: 'Write',
+        tool_input: { path: join(repoDir, 'src/bar.ts') },
+      });
+      if (!/"permission"\s*:\s*"deny"/.test(out)) {
+        return { ok: false, detail: `expected deny, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('step0-gate allows second file when decomposition declared', () => {
+    const repoDir = join(HOME, '.cd-verify-step0-decomp-ok');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), '{}');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix foo and bar',
+        intent: 'Fix foo and bar modules',
+        decomposition: [{ step: 1, subtask: 'foo', expected_files: ['src/foo.ts'] }, { step: 2, subtask: 'bar', expected_files: ['src/bar.ts'] }],
+        verifications: [],
+        files: ['src/foo.ts'],
+        acceptance: 'tests pass',
+      }));
+      const out = runHook(hook('step0-gate'), {
+        cwd: repoDir,
+        tool_name: 'Write',
+        tool_input: { path: join(repoDir, 'src/bar.ts') },
+      });
+      if (!/"permission"\s*:\s*"allow"/.test(out)) {
+        return { ok: false, detail: `expected allow, got: ${out.slice(0, 200)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
   check('intent-precompile writes .scope.json from the prompt', () => {
     const repoDir = join(HOME, '.cd-verify-precompile');
     const scopePath = join(repoDir, '.scope.json');

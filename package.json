@@ -1,7 +1,7 @@
 {
   "name": "cursordoctrine",
-  "version": "1.4.5",
-  "description": "Cursor hooks: doctrine at session start, intent-precompile (.scope.json), scope refresh/drain, mid-session milestone verify, permission gate, final review at stop.",
+  "version": "1.5.0",
+  "description": "Cursor hooks: doctrine at session start, intent-precompile (.scope.json), Step 0 hard gate, scope refresh/drain, mid-session milestone verify, permission gate, final review at stop.",
   "bin": {
     "cursordoctrine": "bin/cli.mjs"
   },

@@ -13,6 +13,14 @@
         "timeout": 5
       }
     ],
+    "preToolUse": [
+      {
+        "command": "bash ~/.agents/hooks/step0-gate.sh",
+        "matcher": "Write|StrReplace|ApplyPatch",
+        "timeout": 5,
+        "failClosed": false
+      }
+    ],
     "afterFileEdit": [
       {
         "command": "bash ~/.agents/hooks/scope-refresh.sh",

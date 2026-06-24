@@ -9,8 +9,8 @@
 
 <div align="center">
   <h1>cursordoctrine</h1>
-  <p><strong>Eight hooks for Cursor. Doctrine at start, scope tracked per edit, mid-session milestone verify + intent anchor, gate on shell, review at stop.</strong></p>
-  <p>The model is the auditor. The harness does only what the model can't do for itself:<br />inject governing text, keep <code>.scope.json</code> in sync, surface mid-session verification milestones + empty-contract nudges, block irreversible shell, and ask for one end-of-session review.</p>
+  <p><strong>Nine hooks for Cursor. Doctrine at start, Step 0 hard gate, scope tracked per edit, mid-session milestone verify + intent anchor, gate on shell, review at stop.</strong></p>
+  <p>The model is the auditor. The harness does only what the model can't do for itself:<br />inject governing text, keep <code>.scope.json</code> in sync, enforce Step 0 before code edits, surface mid-session verification milestones + empty-contract nudges, block irreversible shell, and ask for one end-of-session review.</p>
 </div>
 
 <br />
@@ -19,17 +19,18 @@
 
 ## What this is
 
-Eight Cursor hooks across six events. No state machine the agent has to maintain; the only on-disk state is a one-shot brake and a scope stash under `~/.cursor/.hooks-pending/`. The single repo file is `.scope.json`, written for you so you don't have to.
+Nine Cursor hooks across seven events. No state machine the agent has to maintain; the only on-disk state is a one-shot brake and a scope stash under `~/.cursor/.hooks-pending/`. The single repo file is `.scope.json`, written for you so you don't have to.
 
 1. **Seed the contract** at `beforeSubmitPrompt` — `intent-precompile` writes your prompt into `.scope.json`'s `prompt` the moment you hit send. On continuation it preserves agent-owned `intent`, `decomposition[]`, `verifications[]`, `files[]`, and `acceptance`. Automatic Jaccard topic detection resets for a dissimilar new task (threshold 0.34). When `intent` is empty or `acceptance` is the default seed, it stashes a `STEP 0 CONTRACT` reminder delivered on the first tool boundary.
 2. **Inject the doctrine** at `sessionStart` — every chat starts with the same short governing text (`doctrine.md`): smallest correct diff, YAGNI ultra, ask-don't-guess, conventional commits, the auditor mindset. ~95 lines, read once.
-3. **Track the blast radius** at `afterFileEdit` + `postToolUse` — `scope-refresh` records each edited file into `files[]` and stashes a one-line reminder; `scope-drain` delivers it as `additional_context` on the next tool boundary (Cursor doesn't consume `afterFileEdit` stdout, so the stash-and-drain pair carries it). Fires on ALL file edits (Write, Edit, MultiEdit, ApplyPatch, etc.), not just `Write`. Keeps the contract visible as a turn fills with code.
-4. **Mid-session milestone verify (doctrine-ultra)** at `postToolUse` — `milestone-verify` runs after `scope-drain`. When the agent declares a `decomposition[]` at Step 0 (Thinker) and a step's `expected_files` are all touched without a recorded verdict, it emits `VERIFY MILESTONE step N` as `additional_context`. The agent types `ACCEPT step N` or `REVISE step N: <diagnosis>` in chat; the hook scrapes the transcript and writes the verdict into `.scope.json`'s `verifications[]`. Tri-role (Trinity-style): Thinker=decomposition at Step 0, Worker=edits, Verifier=this hook + final-review axis 7. Trivial one-liners (YAGNI rung 1) leave `decomposition[]` empty and the hook stays silent.
-5. **Intent anchor (persistent contract nudge)** at `postToolUse` — `intent-anchor` re-fires when the contract is incomplete and either this conversation has never been nudged or new files were edited since the last nudge. The per-cid flag stores `filesCount:nudgeCount`. Capped at 99999 nudges per conversation (effectively unlimited). Once both fields are filled, it goes silent permanently for that conversation.
-6. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). The script fails open on internal errors; `failClosed: false` so a pwsh cold-start abort does not block all shell use. Everything else passes.
-7. **One final review** at `stop` — when an implementation finishes and `git` sees changed files (or `.scope.json` `files[]` has entries for non-git projects), Cursor auto-submits one `FINAL REVIEW` follow-up. **Eight axes with a structured bullet report** (the model emits `- **N Axis**: PASS | FAIL — reason` per axis, then `**Verdict**: ACCEPT | REVISE`). If the agent revises based on the review, the hook detects the diff changed and re-reviews the new diff. This verify-revise-reverify cycle repeats until the diff stabilizes or `loop_limit: 3` is hit. The hook reads `git diff --name-only HEAD` + untracked files (falls back to `.scope.json` `files[]` for non-git projects); the only state is a per-conversation brake flag storing a content-hash signature of the change surface.
+3. **Enforce Step 0** at `preToolUse` — `step0-gate` is the second hard lever (beside the shell permission gate). It **denies** Write/StrReplace/ApplyPatch to any file except `.scope.json` when `intent` is empty, and denies a second file when `files[]` already has one entry but `decomposition[]` is still empty. Read/Grep/Shell are untouched so the agent can explore first. No `.scope.json` in the repo → fail open (non-doctrine projects).
+4. **Track the blast radius** at `afterFileEdit` + `postToolUse` — `scope-refresh` records each edited file into `files[]` and stashes a one-line reminder; `scope-drain` delivers it as `additional_context` on the next tool boundary (Cursor doesn't consume `afterFileEdit` stdout, so the stash-and-drain pair carries it). Fires on ALL file edits (Write, Edit, MultiEdit, ApplyPatch, etc.), not just `Write`. Keeps the contract visible as a turn fills with code.
+5. **Mid-session milestone verify (doctrine-ultra)** at `postToolUse` — `milestone-verify` runs after `scope-drain`. When the agent declares a `decomposition[]` at Step 0 (Thinker) and a step's `expected_files` are all touched without a recorded verdict, it emits `VERIFY MILESTONE step N` as `additional_context`. The agent types `ACCEPT step N` or `REVISE step N: <diagnosis>` in chat; the hook scrapes the transcript and writes the verdict into `.scope.json`'s `verifications[]`. Tri-role (Trinity-style): Thinker=decomposition at Step 0, Worker=edits, Verifier=this hook + final-review axis 7. Trivial one-liners (YAGNI rung 1) leave `decomposition[]` empty and the hook stays silent.
+6. **Intent anchor (persistent contract nudge)** at `postToolUse` — `intent-anchor` re-fires when the contract is incomplete and either this conversation has never been nudged or new files were edited since the last nudge. The per-cid flag stores `filesCount:nudgeCount`. Capped at 99999 nudges per conversation (effectively unlimited). Once both fields are filled, it goes silent permanently for that conversation.
+7. **Gate blast radius** at `beforeShellExecution` — one permission gate denies a short explicit list of dangerous commands (`rm -rf /`, `curl | sh`, force-push, `npm publish`, ...). The script fails open on internal errors; `failClosed: false` so a pwsh cold-start abort does not block all shell use. Everything else passes.
+8. **One final review** at `stop` — when an implementation finishes and `git` sees changed files (or `.scope.json` `files[]` has entries for non-git projects), Cursor auto-submits one `FINAL REVIEW` follow-up. **Eight axes with a structured bullet report** (the model emits `- **N Axis**: PASS | FAIL — reason` per axis, then `**Verdict**: ACCEPT | REVISE`). If the agent revises based on the review, the hook detects the diff changed and re-reviews the new diff. This verify-revise-reverify cycle repeats until the diff stabilizes or `loop_limit: 3` is hit. The hook reads `git diff --name-only HEAD` + untracked files (falls back to `.scope.json` `files[]` for non-git projects); the only state is a per-conversation brake flag storing a content-hash signature of the change surface.
 
-The model is the auditor. A self-review done by the model in its own context is free — it has the file, the diff, the user's intent, and the ability to fix. The harness's only non-advisory lever is the permission gate's hard deny.
+The model is the auditor. A self-review done by the model in its own context is free — it has the file, the diff, the user's intent, and the ability to fix. The harness's two hard levers are **step0-gate** (no code edits without a persisted contract) and the **permission gate** (no irreversible shell).
 
 ## Prerequisites
 
@@ -72,6 +73,7 @@ The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scan
 |---|---|---|
 | Prompt | `beforeSubmitPrompt` | `intent-precompile` writes `prompt` (verbatim). Preserves agent fields on continuation. Automatic Jaccard topic change resets scope. Stashes `STEP 0 CONTRACT` when intent empty or acceptance default. Skips hook-generated auto-submits. Never blocks. |
 | Session | `sessionStart` | `inject-doctrine` reads `doctrine.md` and emits it as `additional_context`. |
+| Tool (pre) | `preToolUse` | `step0-gate` denies Write/StrReplace/ApplyPatch when `intent` is empty (always allows `.scope.json`). Denies a second file when `files[]` has one entry and `decomposition[]` is empty. Matcher-limited; `failClosed: false`. Disable: `STEP0_GATE_ENFORCE=0`. |
 | Edit | `afterFileEdit` | `scope-refresh` records the edited file into `files[]` and stashes a one-line scope reminder. Fires on ALL file edits (Write, Edit, MultiEdit, ApplyPatch). |
 | Tool | `postToolUse` | `scope-drain` delivers stashed reminders (`precompile-<cid>.txt` from intent-precompile, `scope-<cid>.txt` from scope-refresh) as `additional_context` (one-shot each). Then `milestone-verify` … Then `intent-anchor` re-fires when contract incomplete and never-nudged or new files edited. |
 | Shell | `beforeShellExecution` | `permission-gate` checks the command against a deny list. Allow by default, deny by list, **fail open** (`failClosed: false` — an internal error or pwsh abort does not block shell). |
@@ -83,7 +85,7 @@ The anti-slop skill (`skills/anti-slop/` — `SKILL.md` and the duplication scan
 windows/          PowerShell 7 hooks (pwsh) — install on Windows machines
   hooks.json      6-event hook wiring for ~/.cursor/hooks.json
   inject-doctrine.ps1, doctrine.md
-  hooks/          intent-precompile.ps1, scope-refresh.ps1, scope-drain.ps1,
+  hooks/          intent-precompile.ps1, step0-gate.ps1, scope-refresh.ps1, scope-drain.ps1,
                   milestone-verify.ps1, intent-anchor.ps1, permission-gate.ps1,
                   final-review.ps1, hook-common.ps1 (shared)
                   + 3 prompt files: anti-slop.md, final-review.md, cleanup-doctrine.md
@@ -112,6 +114,7 @@ All hooks fail open and always exit 0. Nothing here can block your session.
 | `SCOPE_REFRESH_ENFORCE=0` | on | disables per-edit `files[]` recording + re-injection (scope-refresh + scope-drain) |
 | `MILESTONE_VERIFY_ENFORCE=0` | on | disables the mid-session milestone verifier (doctrine-ultra) |
 | `INTENT_ANCHOR_ENFORCE=0` | on | disables the contract nudge |
+| `STEP0_GATE_ENFORCE=0` | on | disables the Step 0 hard gate on file writes |
 | `FINAL_REVIEW_ENFORCE=0` | on | disables the final review pass |
 
 ## Design notes
