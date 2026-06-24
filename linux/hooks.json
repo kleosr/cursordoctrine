@@ -25,6 +25,10 @@
         "timeout": 5
       },
       {
+        "command": "bash ~/.agents/hooks/scope-git-sweep.sh",
+        "timeout": 5
+      },
+      {
         "command": "bash ~/.agents/hooks/milestone-verify.sh",
         "timeout": 5
       },

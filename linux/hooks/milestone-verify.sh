@@ -125,10 +125,31 @@ if ! have_py; then
         else
             reversed="$(awk '{a[NR]=$0} END {for(i=NR;i>=1;i--) print a[i]}' "$tp" 2>/dev/null)"
         fi
+        # Scrape verdict backward: canonical ACCEPT/REVISE step N, then
+        # ACCEPTED/REVISED, then loosened "step N <phrase>" forms.
         scraped_verdict="$(printf '%s' "$reversed" | grep -oE '(ACCEPT|REVISE)[[:space:]]+step[[:space:]]+[0-9]+' | head -1 2>/dev/null)"
+        sv_kind=canonical
+        if [ -z "$scraped_verdict" ]; then
+            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE '(ACCEPTED|REVISED)[[:space:]]+step[[:space:]]+[0-9]+' | head -1 2>/dev/null)"
+            sv_kind=ed
+        fi
+        if [ -z "$scraped_verdict" ]; then
+            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE 'step[[:space:]]+[0-9]+[[:space:]]+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)' | head -1 2>/dev/null)"
+            sv_kind=accept
+        fi
+        if [ -z "$scraped_verdict" ]; then
+            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE 'step[[:space:]]+[0-9]+[[:space:]]+(revise[ds]?|needs?[[:space:]]+fix|fails?|failed|broken|reject(ed)?)' | head -1 2>/dev/null)"
+            sv_kind=revise
+        fi
         if [ -n "$scraped_verdict" ]; then
-            sv_verb="$(printf '%s' "$scraped_verdict" | grep -oE '^(ACCEPT|REVISE)')"
-            sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+')"
+            case "$sv_kind" in
+                canonical) sv_verb="$(printf '%s' "$scraped_verdict" | grep -oiE '^(ACCEPT|REVISE)' | tr '[:lower:]' '[:upper:]')" ;;
+                ed)        v="$(printf '%s' "$scraped_verdict" | grep -oiE '^(ACCEPTED|REVISED)' | tr '[:lower:]' '[:upper:]')"
+                           sv_verb="$(if [ "$v" = "ACCEPTED" ]; then printf ACCEPT; else printf REVISE; fi)" ;;
+                accept)    sv_verb="ACCEPT" ;;
+                revise)    sv_verb="REVISE" ;;
+            esac
+            sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+' | head -1)"
             # Only record if not already verified.
             if [ -n "$sv_step" ] && ! printf '%s\n' "$verified_steps" | grep -qx "$sv_step"; then
                 # Update .scope.json verifications via jq.
@@ -156,9 +177,22 @@ if ! have_py; then
             select(.step as $sn | $verified | index($sn) | not) |
             select((.expected_files // []) | length > 0) |
             select(all((.expected_files // [])[]; (. | ltrimstr("/") | ascii_downcase) as $ef | $files_lc | index($ef))) |
-            "VERIFY MILESTONE step \(.step) of \($total)\n  subtask: \(.subtask // "(no subtask declared)")\n  expected_files: \((.expected_files // []) | join(", ")) (all touched)\n  Emit \"ACCEPT step \(.step)\" to proceed, or \"REVISE step \(.step): <one-line diagnosis>\" to repair."
+            "VERIFY MILESTONE step \(.step) of \($total)\n  subtask: \(.subtask // "(no subtask declared)")\n  expected_files: \((.expected_files // []) | join(", ")) (all touched; recorded as PENDING in verifications[])\n  Emit \"ACCEPT step \(.step)\" to proceed, or \"REVISE step \(.step): <one-line diagnosis>\" to repair."
         ) // empty
     ' 2>/dev/null)"
+    # Auto-PENDING: write a {verdict:"PENDING"} entry for the milestone step
+    # before emitting the reminder, so verifications[] is never blank once a
+    # milestone is reached. Uses the same jq replace-then-append as Phase 1.
+    pending_step="$(printf '%s' "$msg" | grep -oE 'VERIFY MILESTONE step [0-9]+' | grep -oE '[0-9]+' | head -1)"
+    if [ -n "$pending_step" ]; then
+        new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$pending_step" '
+            .verifications = ((.verifications // []) | map(select(.step != $sn)))
+            + [{"step": $sn, "verdict": "PENDING", "diagnosis": "auto: all expected_files touched"}]
+        ' 2>/dev/null)"
+        if [ -n "$new_raw" ]; then
+            printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+        fi
+    fi
     if [ -n "$msg" ]; then
         emit_json additional_context "$msg"
     fi
@@ -203,7 +237,11 @@ if tp and os.path.isfile(tp):
             lines = fh.readlines()
     except Exception:
         lines = []
-    pattern = re.compile(r"\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$", re.M | re.I)
+    pattern_canonical = re.compile(r"\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$", re.M | re.I)
+    pattern_ed = re.compile(r"\b(ACCEPTED|REVISED)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$", re.M | re.I)
+    # Loosened phrasings — catch casual model language the canonical regex misses.
+    pattern_step_accept = re.compile(r"\bstep\s+(\d+)\s+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)\b", re.I)
+    pattern_step_revise = re.compile(r"\bstep\s+(\d+)\s+(revise[ds]?|needs?\s+fix|fails?|failed|broken|reject(?:ed)?)\b", re.I)
     for line in reversed(lines):
         try:
             rec = json.loads(line)
@@ -226,25 +264,38 @@ if tp and os.path.isfile(tp):
                     text += p["text"]
         if not text:
             continue
-        m = pattern.search(text)
+        # Try canonical first, then ACCEPTED/REVISED, then loosened step-N phrasings.
+        verdict = step_num = diag = None
+        m = pattern_canonical.search(text)
         if m:
-            verdict = m.group(1).upper()
+            verdict, step_num, diag = m.group(1).upper(), int(m.group(2)), (m.group(3) or "").strip()
+        else:
+            m = pattern_ed.search(text)
+            if m:
+                verb = m.group(1).upper()
+                verdict = "ACCEPT" if verb == "ACCEPTED" else "REVISE"
+                step_num, diag = int(m.group(2)), (m.group(3) or "").strip()
+            else:
+                m = pattern_step_accept.search(text)
+                if m:
+                    verdict, step_num = "ACCEPT", int(m.group(1))
+                else:
+                    m = pattern_step_revise.search(text)
+                    if m:
+                        verdict, step_num = "REVISE", int(m.group(1))
+        if verdict is None or step_num is None:
+            continue
+        if step_num > 0 and step_num not in verified:
+            new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == step_num)]
+            new_verifs.append({"step": step_num, "verdict": verdict, "diagnosis": diag})
+            scope["verifications"] = new_verifs
+            verified.add(step_num)
             try:
-                step_num = int(m.group(2))
+                with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
+                    json.dump(scope, fh, indent=2, ensure_ascii=False)
             except Exception:
-                continue
-            diag = (m.group(3) or "").strip() if m.group(3) else ""
-            if step_num > 0 and step_num not in verified:
-                new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == step_num)]
-                new_verifs.append({"step": step_num, "verdict": verdict, "diagnosis": diag})
-                scope["verifications"] = new_verifs
-                verified.add(step_num)
-                try:
-                    with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
-                        json.dump(scope, fh, indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
-            break
+                pass
+        break
 
 # --- Phase 2: emit reminder for first unverified completed milestone --------
 files_set = set(f.lower() for f in files)
@@ -258,10 +309,21 @@ for step in decomp:
     if not expected:
         continue
     if all(ef.lower() in files_set for ef in expected):
+        # Auto-PENDING: record before emitting so verifications[] is never
+        # blank once a milestone is reached. The model's later ACCEPT/REVISE
+        # (Phase 1) upgrades PENDING -> ACCEPT/REVISE.
+        new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == sn)]
+        new_verifs.append({"step": sn, "verdict": "PENDING", "diagnosis": "auto: all expected_files touched"})
+        scope["verifications"] = new_verifs
+        try:
+            with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
+                json.dump(scope, fh, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
         subtask = step.get("subtask") or "(no subtask declared)"
         total = len(decomp)
         expected_list = ", ".join(expected)
-        print(f"VERIFY MILESTONE step {sn} of {total}\n  subtask: {subtask}\n  expected_files: {expected_list} (all touched)\n  Emit \"ACCEPT step {sn}\" to proceed, or \"REVISE step {sn}: <one-line diagnosis>\" to repair.")
+        print(f"VERIFY MILESTONE step {sn} of {total}\n  subtask: {subtask}\n  expected_files: {expected_list} (all touched; recorded as PENDING in verifications[])\n  Emit \"ACCEPT step {sn}\" to proceed, or \"REVISE step {sn}: <one-line diagnosis>\" to repair.")
         break
 ' 2>/dev/null)"
 

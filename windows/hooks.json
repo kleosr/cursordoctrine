@@ -25,6 +25,10 @@
         "timeout": 5
       },
       {
+        "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/scope-git-sweep.ps1",
+        "timeout": 5
+      },
+      {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/milestone-verify.ps1",
         "timeout": 5
       },
