@@ -423,10 +423,47 @@ if ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\[DRAFT
     $intentBlock = $intentGap + $intentBlock
 }
 
-# --- change-surface metric ----------------------------------------------------
+# --- change-surface metric + minimality signal --------------------------------
 $fileList = ($rel | Select-Object -First 30) -join "`n  "
 $uniqueFiles = @($rel | Select-Object -Unique).Count
-$surfaceBlock = "Session footprint: $uniqueFiles file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim.`n"
+
+# Minimality signal: diff churn is the Levenshtein analog. No ground-truth
+# minimal edit exists in production, so we flag VOLUME disproportionate to
+# the intent's scope and let axis 4 judge whether the change is faithful.
+$added = 0; $deleted = 0
+if ($isGitRepo -and $rel.Count -gt 0) {
+    $numstatArgs = @('-C', $root, 'diff', '--numstat', 'HEAD', '--') + $rel
+    foreach ($ln in & git @numstatArgs 2>$null) {
+        if ($ln -match '^\s*(\d+|-)\s+(\d+|-)\s') {
+            if ($matches[1] -ne '-') { try { $added += [int]$matches[1] } catch { } }
+            if ($matches[2] -ne '-') { try { $deleted += [int]$matches[2] } catch { } }
+        }
+    }
+}
+$churn = $added + $deleted
+
+# Intent classification by keyword: surgical (bug/fix) expects a tiny diff;
+# constructive (add/build/migrate) tolerates more. Neutral uses a mid threshold.
+$intentText = ("$scopeIntent $scopePrompt").ToLower()
+$taskKind = 'neutral'
+if ($intentText -match 'fix|bug|typo|off-by-one|off by one|wrong|incorrect|broken|hotfix|patch|crash|regression|null pointer|exception') { $taskKind = 'surgical' }
+elseif ($intentText -match 'add|implement|create|build|new feature|migrate|refactor|rewrite|introduce|scaffold|generate|support|enable') { $taskKind = 'constructive' }
+
+$minFlag = $false; $minWhy = ''
+if ($taskKind -eq 'surgical') {
+    if ($uniqueFiles -gt 3 -or $churn -gt 30) { $minFlag = $true; $minWhy = "bug/fix task but $uniqueFiles file(s) / $churn line(s) churn" }
+} elseif ($taskKind -eq 'constructive') {
+    if ($uniqueFiles -gt 10 -or $churn -gt 400) { $minFlag = $true; $minWhy = "large blast radius: $uniqueFiles file(s) / $churn line(s)" }
+} else {
+    if ($uniqueFiles -gt 5 -or $churn -gt 150) { $minFlag = $true; $minWhy = "$uniqueFiles file(s) / $churn line(s) - justify each or trim" }
+}
+
+$surfaceBlock = "Session footprint: $uniqueFiles file(s) touched, +$added/-$deleted ($churn churn). Task kind: $taskKind.`n"
+if ($minFlag) {
+    $surfaceBlock += "MINIMALITY FLAG: DISPROPORTIONATE - $minWhy. Axis 4 (minimality): justify every file/line or trim to the faithful minimal edit.`n"
+} else {
+    $surfaceBlock += "MINIMALITY: proportionate to intent scope.`n"
+}
 # Inject diff stat as evidence when git is available.
 if ($diffStat) {
     $statTrimmed = ($diffStat -split "`n" | Select-Object -Last 1).Trim()

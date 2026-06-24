@@ -448,10 +448,69 @@ if [ -z "$scope_intent" ] || [ "$intent_draft" = true ]; then
 ${intent_block}"
 fi
 
-# --- change-surface metric ----------------------------------------------------
+# --- change-surface metric + minimality signal --------------------------------
 file_list="$(printf '%s' "$edited" | grep -v '^$' | head -n 30 | sed 's/^/  /')"
 unique_files="$(printf '%s' "$edited" | grep -c -v '^$')"
-surface_block="Session footprint: ${unique_files} file(s) touched. If a simple request produced >5 files or >200 lines, justify each file's inclusion or trim."
+
+# Minimality signal: diff churn is the Levenshtein analog. No ground-truth
+# minimal edit exists in production, so we flag VOLUME disproportionate to
+# the intent's scope and let axis 4 judge whether the change is faithful.
+added=0; deleted=0
+if [ "$is_git_repo" = true ] && [ -n "$edited" ]; then
+    # Build an array from the newline-separated $edited so paths with spaces
+    # survive the git arg list (unquoted $edited would split on spaces too).
+    edited_arr=()
+    while IFS= read -r _p; do [ -n "$_p" ] && edited_arr+=("$_p"); done <<< "$edited"
+    if [ "${#edited_arr[@]}" -gt 0 ]; then
+        numstat_out="$(git -C "$root" diff --numstat HEAD -- "${edited_arr[@]}" 2>/dev/null)"
+        # numstat: "<added>\t<deleted>\t<path>"; '-' for binary files.
+        while IFS=$'\t' read -r a d _path; do
+            [ -z "$a" ] && continue
+            case "$a" in *[!0-9-]*) continue ;; esac
+            [ "$a" != "-" ] && added=$((added + a))
+            [ "$d" != "-" ] && deleted=$((deleted + d))
+        done <<< "$numstat_out"
+    fi
+fi
+churn=$((added + deleted))
+
+# Intent classification by keyword: surgical (bug/fix) expects a tiny diff;
+# constructive (add/build/migrate) tolerates more. Neutral uses a mid threshold.
+intent_lc="$(printf '%s %s' "$scope_intent" "$scope_prompt" | tr '[:upper:]' '[:lower:]')"
+task_kind=neutral
+if printf '%s' "$intent_lc" | grep -Eq 'fix|bug|typo|off-by-one|off by one|wrong|incorrect|broken|hotfix|patch|crash|regression|null pointer|exception'; then
+    task_kind=surgical
+elif printf '%s' "$intent_lc" | grep -Eq 'add|implement|create|build|new feature|migrate|refactor|rewrite|introduce|scaffold|generate|support|enable'; then
+    task_kind=constructive
+fi
+
+min_flag=false; min_why=""
+case "$task_kind" in
+    surgical)
+        if [ "$unique_files" -gt 3 ] || [ "$churn" -gt 30 ]; then
+            min_flag=true; min_why="bug/fix task but ${unique_files} file(s) / ${churn} line(s) churn"
+        fi
+        ;;
+    constructive)
+        if [ "$unique_files" -gt 10 ] || [ "$churn" -gt 400 ]; then
+            min_flag=true; min_why="large blast radius: ${unique_files} file(s) / ${churn} line(s)"
+        fi
+        ;;
+    *)
+        if [ "$unique_files" -gt 5 ] || [ "$churn" -gt 150 ]; then
+            min_flag=true; min_why="${unique_files} file(s) / ${churn} line(s) - justify each or trim"
+        fi
+        ;;
+esac
+
+surface_block="Session footprint: ${unique_files} file(s) touched, +${added}/-${deleted} (${churn} churn). Task kind: ${task_kind}."
+if [ "$min_flag" = true ]; then
+    surface_block="${surface_block}
+MINIMALITY FLAG: DISPROPORTIONATE - ${min_why}. Axis 4 (minimality): justify every file/line or trim to the faithful minimal edit."
+else
+    surface_block="${surface_block}
+MINIMALITY: proportionate to intent scope."
+fi
 if [ -n "$diff_stat" ]; then
     stat_trimmed="$(printf '%s' "$diff_stat" | tail -1)"
     surface_block="${surface_block}
