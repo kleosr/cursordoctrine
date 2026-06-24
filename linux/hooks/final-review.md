@@ -67,7 +67,11 @@ No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 - [ ] If scanner available: `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py <files>`.
 - [ ] NEVER use `--all` at review time — audits pre-existing codebase, out of scope.
 - [ ] Whole-codebase audit is separate (`cursordoctrine sweep`).
-- [ ] Session footprint >5 files OR simple request → justify each file or trim.
+- [ ] MINIMALITY (over-editing): read the injected MINIMALITY line. If DISPROPORTIONATE,
+      justify every file/line or trim. A bug fix is a surgical edit — added nesting,
+      branching, validation, renames, helpers, or restructuring beyond the fix is
+      over-editing (Added Cognitive Complexity must be ~0 for a fix). Functionally
+      correct is not enough; the diff must be the faithful minimal edit.
 
 ## 5. Wiring completeness
 - [ ] Every user-visible change traces click → handler → call → store → render → REAL EFFECT.
