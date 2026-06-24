@@ -229,9 +229,15 @@ function Get-LastUserQuery($obj) {
 # transcript. Returns $null if none. Used by milestone-verify (postToolUse) to
 # record the agent's per-step verdict into .scope.json's verifications[] without
 # requiring the agent to write the file itself. Walks backward through assistant
-# records; the first match (most recent) wins. Pattern requires literal
-# "ACCEPT step N" or "REVISE step N[: diagnosis]" so casual chat ("I accept")
-# doesn't false-positive.
+# records; the first match (most recent) wins.
+#
+# Pattern set (canonical first, then loosened phrasings). The canonical
+# "ACCEPT step N" / "REVISE step N" form is still the doctrine-taught phrasing
+# and stays the primary match so existing transcripts and verify() fixtures
+# scrape unchanged. The loosened alternates catch casual model phrasings
+# ("step N looks good", "step N accepted", "step N needs work") that previously
+# left verifications[] blank. First regex to match (in order) wins; verdict verb
+# is normalized to ACCEPT/REVISE before writing.
 function Get-LastVerdict($obj) {
     $tp = ''
     if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
@@ -257,12 +263,33 @@ function Get-LastVerdict($obj) {
             }
         }
         if (-not $text) { continue }
+
+        # Canonical: ACCEPT step N [: diagnosis] / REVISE step N [: diagnosis]
         if ($text -match '(?mi)\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$') {
             $verdict = $Matches[1].ToUpperInvariant()
             try { $stepNum = [int]$Matches[2] } catch { continue }
             $diag = ''
             if ($Matches.Count -ge 4 -and $Matches[3]) { $diag = ([string]$Matches[3]).Trim() }
             return @{ verdict = $verdict; step = $stepNum; diagnosis = $diag }
+        }
+        # Loosened: "ACCEPTED step N" / "REVISED step N"
+        if ($text -match '(?mi)\b(ACCEPTED|REVISED)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$') {
+            $verb = $Matches[1].ToUpperInvariant()
+            $verdict = if ($verb -eq 'ACCEPTED') { 'ACCEPT' } else { 'REVISE' }
+            try { $stepNum = [int]$Matches[2] } catch { continue }
+            $diag = ''
+            if ($Matches.Count -ge 4 -and $Matches[3]) { $diag = ([string]$Matches[3]).Trim() }
+            return @{ verdict = $verdict; step = $stepNum; diagnosis = $diag }
+        }
+        # Loosened: "step N <accepting-phrase>" — accept/approve/done/complete/good/ok/pass
+        if ($text -match '(?mi)\bstep\s+(\d+)\s+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)\b') {
+            try { $stepNum = [int]$Matches[1] } catch { continue }
+            return @{ verdict = 'ACCEPT'; step = $stepNum; diagnosis = '' }
+        }
+        # Loosened: "step N <rejecting-phrase>" — revise/fail/broken/needs fix
+        if ($text -match '(?mi)\bstep\s+(\d+)\s+(revise[ds]?|needs?\s+fix|fails?|failed|broken|reject(?:ed)?)\b') {
+            try { $stepNum = [int]$Matches[1] } catch { continue }
+            return @{ verdict = 'REVISE'; step = $stepNum; diagnosis = '' }
         }
     }
     return $null

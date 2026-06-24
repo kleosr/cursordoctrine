@@ -769,6 +769,124 @@ function verify() {
     }
   });
 
+  check('milestone-verify auto-writes PENDING when expected_files all touched', () => {
+    const cidv = 'npxvmvp';
+    const repoDir = join(HOME, '.cd-verify-mvp');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: 'Add JWT login',
+        decomposition: [
+          { step: 1, subtask: 'backend', expected_files: ['server/auth.ts'] },
+        ],
+        verifications: [],
+        files: ['server/auth.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, cwd: repoDir });
+      if (!out.includes('VERIFY MILESTONE')) {
+        return { ok: false, detail: `expected reminder, got: ${out.slice(0, 200)}` };
+      }
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (!Array.isArray(after.verifications) || after.verifications.length !== 1) {
+        return { ok: false, detail: `PENDING not recorded: ${JSON.stringify(after.verifications)}` };
+      }
+      const v = after.verifications[0];
+      if (v.step !== 1 || v.verdict !== 'PENDING') {
+        return { ok: false, detail: `expected step 1 PENDING, got: ${JSON.stringify(v)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('milestone-verify scrapes loosened phrasings (e.g. "step 1 looks good")', () => {
+    const cidv = 'npxvmvl';
+    const repoDir = join(HOME, '.cd-verify-mvl');
+    const scopePath = join(repoDir, '.scope.json');
+    const transcriptPath = join(pendingDir, `transcript-${cidv}.jsonl`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      mkdirSync(dirname(transcriptPath), { recursive: true });
+      // Casual phrasing that the OLD regex missed — the loosened set must catch it.
+      const rec = { role: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'step 1 looks good, wiring is correct.' }] } };
+      writeFileSync(transcriptPath, JSON.stringify(rec) + '\n', 'utf8');
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'add login',
+        intent: 'Add JWT login',
+        decomposition: [{ step: 1, subtask: 'backend', expected_files: ['server/auth.ts'] }],
+        verifications: [],
+        files: ['server/auth.ts'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      const out = runHook(hook('milestone-verify'), { conversation_id: cidv, transcript_path: transcriptPath, cwd: repoDir });
+      // After scraping, the verdict is recorded as ACCEPT and no PENDING remains.
+      if (out.includes('VERIFY MILESTONE')) {
+        return { ok: false, detail: 'reminder fired after loose verdict was scraped' };
+      }
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      const v = after.verifications && after.verifications[0];
+      if (!v || v.step !== 1 || v.verdict !== 'ACCEPT') {
+        return { ok: false, detail: `expected ACCEPT step 1, got: ${JSON.stringify(after.verifications)}` };
+      }
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(transcriptPath);
+    }
+  });
+
+  check('scope-git-sweep catches a Shell-written file into files[]', () => {
+    const cidv = 'npxvsgs';
+    const sandbox = join(HOME, '.cd-verify-sgs');
+    const scopePath = join(sandbox, '.scope.json');
+    const sandboxEnv = { ...process.env, CURSORDOCTRINE_HOME: HOME, HOME, USERPROFILE: HOME };
+    try {
+      rmSync(sandbox, { recursive: true, force: true });
+      mkdirSync(sandbox, { recursive: true });
+      const git = (args) => spawnSync('git', ['-C', sandbox, ...args], {
+        encoding: 'utf8', windowsHide: true,
+        env: { ...sandboxEnv, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      if (git(['init', '-q']).status !== 0) return { ok: false, detail: 'git init failed' };
+      writeFileSync(join(sandbox, 'README.md'), 'init\n');
+      git(['add', 'README.md']);
+      if (git(['commit', '-q', '-m', 'init']).status !== 0) return { ok: false, detail: 'git commit failed' };
+
+      // Seed .scope.json with empty files[].
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 't', intent: 't', decomposition: [], verifications: [], files: [], acceptance: 'tests pass',
+      }));
+
+      // Simulate a Shell-tool write: create a new untracked file via plain
+      // Set-Content-equivalent (no afterFileEdit). The hook must catch it via
+      // git diff --name-only + ls-files --others.
+      mkdirSync(join(sandbox, 'src'), { recursive: true });
+      writeFileSync(join(sandbox, 'src', 'generated.ts'), 'shell-written\n');
+
+      const payload = JSON.stringify({ conversation_id: cidv, cwd: sandbox, tool_name: 'Shell' });
+      const r = spawnSync(platform === 'windows' ? 'pwsh.exe' : 'bash',
+        platform === 'windows'
+          ? ['-NoProfile', '-File', hook('scope-git-sweep')]
+          : [hook('scope-git-sweep')],
+        { input: payload, encoding: 'utf8', timeout: 20000, windowsHide: true, env: sandboxEnv });
+      if (r.error) return { ok: false, detail: `spawn error: ${r.error.message}` };
+
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      // Path normalization is forward-slash relative; accept either form.
+      const hit = (after.files || []).some((f) => String(f).replace(/\\/g, '/') === 'src/generated.ts');
+      if (!hit) return { ok: false, detail: `src/generated.ts not in files[]: ${JSON.stringify(after.files)}` };
+      return true;
+    } finally {
+      rmBestEffort(sandbox, { recursive: true, force: true });
+    }
+  });
+
   check('intent-anchor fires on empty intent, silent when no new files, re-fires on new files', () => {
     const cidv = 'npxvia';
     const repoDir = join(HOME, '.cd-verify-ia');

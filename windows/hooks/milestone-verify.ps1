@@ -11,6 +11,12 @@
 # for the most recent verdict matching a still-unverified step, and writes it
 # into .scope.json's `verifications[]` (hook-owned).
 #
+# Auto-PENDING: when a step's expected_files are all touched AND no verdict is
+# recorded for it, the hook writes a {verdict:"PENDING"} entry before emitting
+# the VERIFY MILESTONE reminder — so verifications[] is never blank once a
+# milestone is reached, even if the model stays silent. The model's later
+# ACCEPT/REVISE (scraped by Phase 1) upgrades PENDING -> ACCEPT/REVISE.
+#
 # Tri-role (Trinity-style): Thinker=decomposition at Step 0,
 # Worker=edits+scope-refresh, Verifier=this hook + final-review axis 7.
 # Doctrine-ultra: the harness adds structure; the model fills it. The hook
@@ -157,13 +163,33 @@ foreach ($step in $decomp) {
     }
     if (-not $allTouched) { continue }
 
-    # Milestone reached.
+    # Milestone reached. Auto-record a PENDING verdict so verifications[] is
+    # never blank once a step's expected_files are all touched — even if the
+    # model never emits ACCEPT/REVISE. The model's later ACCEPT/REVISE (scraped
+    # by Get-LastVerdict in Phase 1) upgrades PENDING -> ACCEPT/REVISE via the
+    # existing $existingStep replacement at the top of this hook.
+    $entry = [PSCustomObject]@{
+        step      = $stepNum
+        verdict   = 'PENDING'
+        diagnosis = 'auto: all expected_files touched'
+    }
+    $newVerifs = New-Object System.Collections.Generic.List[object]
+    foreach ($v in $verifications) { $newVerifs.Add($v) | Out-Null }
+    $newVerifs.Add($entry) | Out-Null
+    try {
+        $ordered = [ordered]@{}
+        foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
+        $ordered['verifications'] = @($newVerifs.ToArray())
+        $json = $ordered | ConvertTo-Json -Depth 8
+        [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+    } catch { }
+
     $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask declared)' }
     $expectedList = $expected -join ', '
     $total = $decomp.Count
     $acceptForm = "ACCEPT step $stepNum"
     $reviseForm = "REVISE step ${stepNum}: one-line diagnosis"
-    $msg = "VERIFY MILESTONE step $stepNum of $total`n  subtask: $subtask`n  expected_files: $expectedList (all touched)`n  Emit '$acceptForm' to proceed, or '$reviseForm' to repair."
+    $msg = "VERIFY MILESTONE step $stepNum of $total`n  subtask: $subtask`n  expected_files: $expectedList (all touched; recorded as PENDING in verifications[])`n  Emit '$acceptForm' to proceed, or '$reviseForm' to repair."
     Write-HookJson @{ additional_context = $msg }
     exit 0
 }
