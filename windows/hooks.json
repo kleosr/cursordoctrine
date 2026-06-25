@@ -16,7 +16,7 @@
     "preToolUse": [
       {
         "command": "pwsh.exe -NoProfile -File ~/.agents/hooks/step0-gate.ps1",
-        "matcher": "Write|StrReplace|ApplyPatch",
+        "matcher": "Write|StrReplace|ApplyPatch|Edit|MultiEdit|Replace",
         "timeout": 5,
         "failClosed": false
       }

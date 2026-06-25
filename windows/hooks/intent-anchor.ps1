@@ -73,12 +73,12 @@ if (Test-Path $flag) {
 $intent = ''
 if ($sj.PSObject.Properties['intent']) { $intent = [string]$sj.intent }
 $acceptance = ''
-if ($sj.PSObject.Properties['acceptance']) { $acceptance = [string]$sj.acceptance }
+if ($sj.PSObject.Properties['acceptance'] -and $sj.acceptance -is [string]) { $acceptance = [string]$sj.acceptance }
 $defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
 
 $intentEmpty = [string]::IsNullOrWhiteSpace($intent)
 $intentDraft = $intent -match '^\[DRAFT\]'
-$acceptanceDefault = ($acceptance -ieq $defaultAcceptance)
+$acceptanceDefault = [string]::IsNullOrWhiteSpace($acceptance) -or ($acceptance -ieq $defaultAcceptance)
 
 # Both filled → contract complete. Store count and stay silent permanently.
 if (-not ($intentEmpty -or $intentDraft -or $acceptanceDefault)) {

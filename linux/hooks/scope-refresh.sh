@@ -47,14 +47,7 @@ for k in file_path path filename absolute_path abs_path; do
 done
 
 if [ -n "$edited_file" ]; then
-    # Repo-relative forward-slash path
-    rel="$(printf '%s' "$edited_file" | tr '\\' '/' )"
-    root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
-    case "$rel" in
-        "$root_fwd"/*) rel="${rel#"$root_fwd"/}" ;;
-        "$root_fwd") rel="" ;;
-    esac
-    rel="${rel#/}"
+    rel="$(scope_relative_path "$edited_file" "$root")"
 
     # Never record the contract file itself.
     if [ -n "$rel" ] && [ "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" != ".scope.json" ]; then

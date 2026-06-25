@@ -51,38 +51,10 @@ try {
 } catch { Allow-Step0 }
 if (-not $sj) { Allow-Step0 }
 
-$ti = $null
-if ($obj.PSObject.Properties['tool_input'] -and $obj.tool_input) {
-    $rawTi = $obj.tool_input
-    if ($rawTi -is [string]) {
-        try { $ti = $rawTi | ConvertFrom-Json } catch { $ti = $null }
-    } else {
-        $ti = $rawTi
-    }
-}
-if (-not $ti) { Allow-Step0 }
-
-$targetPath = ''
-foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
-    if ($ti.PSObject.Properties[$k] -and $ti.$k) { $targetPath = [string]$ti.$k; break }
-}
-if (-not $targetPath) { Allow-Step0 }
-
-$rel = ConvertTo-FwdPath $targetPath
-if ($rel.StartsWith($root + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
-    $rel = $rel.Substring($root.Length + 1)
-}
-$rel = $rel.TrimStart('/')
-if (-not $rel) { Allow-Step0 }
-if ($rel -ieq '.scope.json') { Allow-Step0 }
-
 $intent = ''
 if ($sj.PSObject.Properties['intent'] -and $sj.intent) { $intent = [string]$sj.intent }
 $intent = $intent.Trim()
 $intentEmpty = [string]::IsNullOrWhiteSpace($intent) -or ($intent -match '^\[DRAFT\]')
-if ($intentEmpty) {
-    Deny-Step0 'intent is empty — write your one-line Step 0 restatement to .scope.json before editing code.'
-}
 
 $realFiles = 0
 if ($sj.PSObject.Properties['files'] -and $sj.files) {
@@ -97,8 +69,46 @@ $decompCount = 0
 if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) {
     $decompCount = @($sj.decomposition).Count
 }
-if ($realFiles -ge 1 -and $decompCount -eq 0) {
-    Deny-Step0 'files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file.'
+
+$ti = $null
+if ($obj.PSObject.Properties['tool_input'] -and $obj.tool_input) {
+    $rawTi = $obj.tool_input
+    if ($rawTi -is [string]) {
+        try { $ti = $rawTi | ConvertFrom-Json } catch { $ti = $null }
+    } else {
+        $ti = $rawTi
+    }
+}
+if (-not $ti) { Allow-Step0 }
+
+$targetPaths = New-Object System.Collections.Generic.List[string]
+foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
+    if ($ti.PSObject.Properties[$k] -and $ti.$k) { $targetPaths.Add([string]$ti.$k) | Out-Null }
+}
+if ($ti.PSObject.Properties['edits'] -and $ti.edits) {
+    foreach ($edit in @($ti.edits)) {
+        if (-not $edit) { continue }
+        foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
+            if ($edit.PSObject.Properties[$k] -and $edit.$k) { $targetPaths.Add([string]$edit.$k) | Out-Null; break }
+        }
+    }
+}
+if ($targetPaths.Count -eq 0) {
+    if ($intentEmpty) { Deny-Step0 'edit tool target path could not be parsed and intent is empty — fill .scope.json before editing.' }
+    if ($realFiles -ge 1 -and $decompCount -eq 0) { Deny-Step0 'edit tool target path could not be parsed and decomposition[] is empty after prior file edits.' }
+    Allow-Step0
+}
+
+foreach ($targetPath in $targetPaths) {
+    $rel = ConvertTo-ScopeRelativePath $targetPath $root
+    if (-not $rel) { Deny-Step0 'edit target is outside the resolved project root or could not be normalized.' }
+    if ($rel -ieq '.scope.json') { continue }
+    if ($intentEmpty) {
+        Deny-Step0 'intent is empty — write your one-line Step 0 restatement to .scope.json before editing code.'
+    }
+    if ($realFiles -ge 1 -and $decompCount -eq 0) {
+        Deny-Step0 'files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file.'
+    }
 }
 
 Allow-Step0

@@ -38,13 +38,7 @@ $isShell = $false
 foreach ($s in $shellTools) {
     if ($toolName -ieq $s) { $isShell = $true; break }
 }
-# Empty tool_name: Cursor payloads sometimes omit it. Treat as shell-candidate
-# so we don't miss edits — the git diff is cheap and a no-op when there's no
-# change. If it's present and not in either list, also fall through to the
-# git check (safe — only unions real diff paths).
-if (-not $isShell -and $toolName) {
-    # Unknown tool — still run; git diff is the source of truth, not the name.
-}
+if (-not $isShell) { exit 0 }
 
 $root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }
@@ -78,10 +72,9 @@ foreach ($e in $existing) {
 }
 $appended = $false
 foreach ($p in $diffPaths) {
-    $rel = ([string]$p).Replace('\', '/').TrimStart('/')
+    $rel = ConvertTo-ScopeRelativePath ([string]$p) $root
     # Drop the contract file and any path outside the repo root.
     if (-not $rel -or $rel -ieq '.scope.json') { continue }
-    if ($rel -match '^(\.\./|/[A-Za-z]:)') { continue }
     $already = $false
     foreach ($f in $kept) {
         if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }

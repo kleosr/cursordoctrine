@@ -21,12 +21,15 @@ set +e
 input="$(read_hook_stdin)"
 [ -n "$input" ] || exit 0
 
-# Skip file-edit tools — afterFileEdit already recorded them. Fall through for
-# unknown/empty tool names (git diff is the source of truth, cheap when clean).
+# Skip file-edit tools — afterFileEdit already recorded them. Run only after
+# known shell-like tools so pre-existing dirty files are not attributed to
+# read/search/tooling events.
 tool_name="$(json_get "$input" tool_name)"
 [ -z "$tool_name" ] && tool_name="$(json_get "$input" name)"
 case "$tool_name" in
     Edit|Replace|Write|MultiEdit|editFile|file:edit|ApplyPatch|insert|str_replace|write|edit) exit 0 ;;
+    Shell|Bash|Execute|shell|bash|RunCommand|run|terminal|cmd|powershell) ;;
+    *) exit 0 ;;
 esac
 
 root="$(resolve_project_root "$input")"
@@ -61,8 +64,16 @@ for e in existing:
 kept_lc = set(s.replace("\\", "/").lstrip("/").lower() for s in kept)
 appended = False
 for line in os.environ["DIFF_OUT"].splitlines():
-    rel = line.replace("\\", "/").lstrip("/")
-    if not rel or rel.lower() == ".scope.json" or rel.startswith("../"):
+    parts = []
+    for part in line.replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            parts = []
+            break
+        parts.append(part)
+    rel = "/".join(parts)
+    if not rel or rel.lower() == ".scope.json":
         continue
     if rel.lower() in kept_lc:
         continue

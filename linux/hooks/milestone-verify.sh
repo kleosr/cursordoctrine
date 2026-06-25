@@ -214,7 +214,17 @@ decomp = scope.get("decomposition") or []
 if not decomp:
     sys.exit(0)
 
-files = [str(f).replace("\\", "/").lstrip("/") for f in (scope.get("files") or [])]
+def norm(p):
+    parts = []
+    for part in str(p).replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            return ""
+        parts.append(part)
+    return "/".join(parts)
+files = [norm(f) for f in (scope.get("files") or [])]
+files = [f for f in files if f]
 if not files:
     sys.exit(0)
 
@@ -305,7 +315,8 @@ for step in decomp:
     sn = step.get("step")
     if not isinstance(sn, int) or sn in verified:
         continue
-    expected = [str(f).replace("\\", "/").lstrip("/") for f in (step.get("expected_files") or [])]
+    expected = [norm(f) for f in (step.get("expected_files") or [])]
+    expected = [f for f in expected if f]
     if not expected:
         continue
     if all(ef.lower() in files_set for ef in expected):

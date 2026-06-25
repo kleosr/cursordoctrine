@@ -45,11 +45,7 @@ foreach ($k in 'file_path', 'path', 'filename', 'absolute_path', 'abs_path') {
     if ($obj.PSObject.Properties[$k] -and $obj.$k) { $editedFile = [string]$obj.$k; break }
 }
 if ($editedFile) {
-    $rel = ConvertTo-FwdPath $editedFile
-    if ($rel.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
-        $rel = $rel.Substring($root.Length + 1)
-    }
-    $rel = $rel.TrimStart('/')
+    $rel = ConvertTo-ScopeRelativePath $editedFile $root
     # Never record the contract file itself, and skip empty paths.
     if ($rel -and $rel -ine '.scope.json') {
         $existing = @()

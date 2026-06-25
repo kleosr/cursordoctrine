@@ -16,7 +16,7 @@
     "preToolUse": [
       {
         "command": "bash ~/.agents/hooks/step0-gate.sh",
-        "matcher": "Write|StrReplace|ApplyPatch",
+        "matcher": "Write|StrReplace|ApplyPatch|Edit|MultiEdit|Replace",
         "timeout": 5,
         "failClosed": false
       }

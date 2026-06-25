@@ -73,13 +73,23 @@ function ourKeys() {
   return [...payloadHookFiles().filter((f) => !f.endsWith('.md')), injectName];
 }
 
+function commandReferencesOurPath(command, key) {
+  if (typeof command !== 'string') return false;
+  const c = command.replaceAll('\\', '/').toLowerCase();
+  const k = key.toLowerCase();
+  if (k === injectName.toLowerCase()) {
+    return c.includes(`~/.cursor/${k}`) || c.includes(`/.cursor/${k}`);
+  }
+  return c.includes(`~/.agents/hooks/${k}`) || c.includes(`/.agents/hooks/${k}`);
+}
+
 function isOurs(command, keys) {
-  return typeof command === 'string' && keys.some((k) => command.includes(k));
+  return typeof command === 'string' && keys.some((k) => commandReferencesOurPath(command, k));
 }
 
 function keyOf(command, keys) {
   if (typeof command !== 'string') return undefined;
-  return keys.find((k) => command.includes(k));
+  return keys.find((k) => commandReferencesOurPath(command, k));
 }
 
 // Detect a STALE entry from a prior install: its command names one of the hook
@@ -247,10 +257,6 @@ function install() {
   if (process.platform === 'darwin') {
     console.log('  note: macOS detected — installing the Linux (bash) hook pack.');
   }
-  if (platform === 'windows' && HOME.includes(' ')) {
-    console.log('  warning: home path contains spaces; hooks.json commands may need manual quoting.');
-  }
-
   const removedPrior = removeOurPack();
   if (removedPrior.length) {
     console.log(`  removed prior install  ${removedPrior.length} item(s)`);
@@ -274,10 +280,18 @@ function install() {
   // hooks.json: pwsh -File does not expand ~, so substitute the real profile
   // path (forward slashes) on Windows — same as INSTALL.md. Bash expands ~.
   let text = readFileSync(join(payload, 'hooks.json'), 'utf8');
-  if (platform === 'windows') {
-    text = text.replaceAll('~/', HOME.replaceAll('\\', '/') + '/');
-  }
   const incoming = JSON.parse(text);
+  if (platform === 'windows') {
+    const homeFwd = HOME.replaceAll('\\', '/');
+    for (const entries of Object.values(incoming.hooks || {})) {
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (entry && typeof entry.command === 'string') {
+          entry.command = entry.command.replace(/-File ~\/([^\s"]+)/g, `-File "${homeFwd}/$1"`);
+        }
+      }
+    }
+  }
   const keys = ourKeys();
 
   let hooksJsonNote = 'written';
@@ -417,8 +431,8 @@ function verify() {
         // Pull the script path out of the command line. Windows: -File <path>;
         // Linux: bash <path>. Then expand ~ and resolve against $HOME.
         let path = '';
-        const mF = cmd.match(/-File\s+([^\s]+)/);
-        if (mF) path = mF[1];
+        const mF = cmd.match(/-File\s+(?:"([^"]+)"|([^\s]+))/);
+        if (mF) path = mF[1] || mF[2];
         if (!path) {
           const mB = cmd.match(/(?:^|\s)bash\s+([^\s]+)/);
           if (mB) path = mB[1];

@@ -60,7 +60,7 @@ default_acceptance='Biome --error-on-warnings + Semgrep --config auto --error pa
 
 if have_jq; then
     intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
-    acceptance="$(printf '%s' "$scope_raw" | jq -r '.acceptance // empty' 2>/dev/null)"
+    acceptance="$(printf '%s' "$scope_raw" | jq -r 'if (.acceptance | type) == "string" then .acceptance else "" end' 2>/dev/null)"
     prompt="$(printf '%s' "$scope_raw" | jq -r '.prompt // empty' 2>/dev/null)"
     files_count="$(printf '%s' "$scope_raw" | jq -r '.files // [] | length' 2>/dev/null)"
 elif have_py; then
@@ -68,7 +68,9 @@ elif have_py; then
 try: print(json.load(sys.stdin).get("intent") or "")
 except Exception: pass' 2>/dev/null)"
     acceptance="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("acceptance") or "")
+try:
+    v=json.load(sys.stdin).get("acceptance")
+    print(v if isinstance(v, str) else "")
 except Exception: pass' 2>/dev/null)"
     prompt="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("prompt") or "")
@@ -83,6 +85,7 @@ intent_draft=false
 acceptance_default=false
 [ -z "$intent" ] && intent_empty=true
 case "$intent" in "[DRAFT]"*) intent_draft=true ;; esac
+[ -z "$acceptance" ] && acceptance_default=true
 [ "$acceptance" = "$default_acceptance" ] && acceptance_default=true
 
 # Read flag: "filesCount:nudgeCount".

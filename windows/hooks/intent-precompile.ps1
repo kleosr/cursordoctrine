@@ -129,6 +129,7 @@ try {
             if (-not $ordered.Contains('decomposition') -or $null -eq $ordered['decomposition']) { $ordered['decomposition'] = @() }
             if (-not $ordered.Contains('verifications') -or $null -eq $ordered['verifications']) { $ordered['verifications'] = @() }
             if (-not $ordered.Contains('files') -or $null -eq $ordered['files']) { $ordered['files'] = @() }
+            if (-not $ordered.Contains('acceptance') -or $null -eq $ordered['acceptance'] -or $ordered['acceptance'].GetType().Name -ne 'String') { $ordered['acceptance'] = '' }
         }
     } else {
         $ordered = New-ResetScope $prompt
@@ -139,8 +140,8 @@ try {
     $intentVal = ''
     if ($ordered.Contains('intent')) { $intentVal = [string]$ordered['intent'] }
     $acceptVal = ''
-    if ($ordered.Contains('acceptance')) { $acceptVal = [string]$ordered['acceptance'] }
-    $needsStep0 = [string]::IsNullOrWhiteSpace($intentVal) -or ($intentVal -match '^\[DRAFT\]') -or ($acceptVal -ieq $defaultAcceptance)
+    if ($ordered.Contains('acceptance') -and $null -ne $ordered['acceptance']) { $acceptVal = [string]$ordered['acceptance'] }
+    $needsStep0 = [string]::IsNullOrWhiteSpace($intentVal) -or ($intentVal -match '^\[DRAFT\]') -or [string]::IsNullOrWhiteSpace($acceptVal) -or ($acceptVal -ieq $defaultAcceptance)
     if ($needsStep0) {
         $cid = Get-SafeConversationId $obj
         if ($cid) {

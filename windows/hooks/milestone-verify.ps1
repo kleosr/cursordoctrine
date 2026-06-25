@@ -100,7 +100,7 @@ if ($decomp.Count -eq 0) {
 # Files touched so far (hook-owned by scope-refresh).
 $files = @()
 if ($sj.PSObject.Properties['files'] -and $sj.files) {
-    $files = @($sj.files) | ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') }
+    $files = @($sj.files | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ })
 }
 if ($files.Count -eq 0) { exit 0 }
 
@@ -153,7 +153,7 @@ foreach ($step in $decomp) {
 
     $expected = @()
     if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
-        $expected = @($step.expected_files) | ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') }
+        $expected = @($step.expected_files | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ })
     }
     if ($expected.Count -eq 0) { continue }
 

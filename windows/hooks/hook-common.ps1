@@ -53,6 +53,26 @@ function ConvertTo-FwdPath([string]$p) {
     return $p.Replace('\', '/')
 }
 
+function ConvertTo-ScopeRelativePath([string]$path, [string]$root) {
+    $p = ConvertTo-FwdPath $path
+    if (-not $p) { return '' }
+    $rootFwd = (ConvertTo-FwdPath $root).TrimEnd('/')
+    if (-not $rootFwd) { return '' }
+
+    $isAbs = ($p -match '^[A-Za-z]:/') -or $p.StartsWith('/')
+    if ($isAbs) {
+        if (-not $p.StartsWith($rootFwd + '/', [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
+        $p = $p.Substring($rootFwd.Length + 1)
+    }
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($part in ($p -split '/')) {
+        if (-not $part -or $part -eq '.') { continue }
+        if ($part -eq '..') { return '' }
+        $parts.Add($part) | Out-Null
+    }
+    return ($parts -join '/')
+}
+
 # Resolve the project root for an event: cwd -> workspace_roots ->
 # CURSOR_PROJECT_DIR -> $PWD (if it looks like a project root). The $PWD
 # fallback exists because Cursor's beforeSubmitPrompt event does NOT include

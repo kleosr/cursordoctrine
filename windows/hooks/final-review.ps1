@@ -100,6 +100,7 @@ function Get-DiffSignature([string]$repoRoot) {
     $sb = New-Object System.Text.StringBuilder
     $sp = Join-Path $repoRoot '.scope.json'
     $hasScope = (Test-Path -LiteralPath $sp)
+    $maxBytes = 1048576
 
     & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
     $hasGit = ($LASTEXITCODE -eq 0)
@@ -133,6 +134,7 @@ function Get-DiffSignature([string]$repoRoot) {
                     $full = Join-Path $repoRoot $f
                     if (Test-Path -LiteralPath $full -PathType Leaf) {
                         try {
+                            if ((Get-Item -LiteralPath $full -ErrorAction SilentlyContinue).Length -gt $maxBytes) { continue }
                             [void]$sb.Append("`n==U:$f==`n")
                             [void]$sb.Append([System.IO.File]::ReadAllText($full))
                         } catch { }
@@ -149,6 +151,7 @@ function Get-DiffSignature([string]$repoRoot) {
             $full = Join-Path $repoRoot $u
             if (Test-Path -LiteralPath $full -PathType Leaf) {
                 try {
+                    if ((Get-Item -LiteralPath $full -ErrorAction SilentlyContinue).Length -gt $maxBytes) { continue }
                     [void]$sb.Append("`n==U:$u==`n")
                     [void]$sb.Append([System.IO.File]::ReadAllText($full))
                 } catch { }
@@ -167,6 +170,7 @@ function Get-DiffSignature([string]$repoRoot) {
                         $full = Join-Path $repoRoot $rp
                         if (Test-Path -LiteralPath $full -PathType Leaf) {
                             try {
+                                if ((Get-Item -LiteralPath $full -ErrorAction SilentlyContinue).Length -gt $maxBytes) { continue }
                                 [void]$sb.Append("`n==F:$rp==`n")
                                 [void]$sb.Append([System.IO.File]::ReadAllText($full))
                             } catch { }
@@ -235,7 +239,7 @@ if (Test-Path -LiteralPath $scopePath) {
             foreach ($f in $sjSc.files) {
                 $s = [string]$f
                 if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
-                $rp = $s.Replace('\', '/').TrimStart('/')
+                $rp = ConvertTo-ScopeRelativePath $s $root
                 if ($rp -and $rp -ine '.scope.json' -and -not $rel.Contains($rp)) { $rel.Add($rp) }
             }
         }
@@ -245,6 +249,17 @@ if (Test-Path -LiteralPath $scopePath) {
         & git -C $root rev-parse --git-dir 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $isGitRepo = $true
+            $dirtySet = @{}
+            foreach ($p in @(& git -C $root diff --name-only HEAD 2>$null) + @(& git -C $root ls-files --others --exclude-standard 2>$null)) {
+                $rp = ConvertTo-ScopeRelativePath ([string]$p) $root
+                if ($rp) { $dirtySet[$rp.ToLowerInvariant()] = $true }
+            }
+            $filtered = New-Object System.Collections.Generic.List[string]
+            foreach ($p in $rel) {
+                if ($dirtySet.ContainsKey(([string]$p).ToLowerInvariant())) { $filtered.Add($p) | Out-Null }
+            }
+            $rel = $filtered
+            if ($rel.Count -eq 0) { Emit-None 'no_diff' }
             $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat') + $rel
             $diffStat = (& git @statArgs 2>$null) -join "`n"
         }
@@ -314,12 +329,13 @@ if (Test-Path -LiteralPath $scopePath) {
             $declared = @($sj.files | Where-Object { $_ -and $_.Trim() -and $_ -notmatch '^\s*<' } |
                            ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
                            Select-Object -Unique)
-            if ($declared.Count -gt 0) {
+                if ($declared.Count -gt 0) {
                 $touchedSet = @{}
                 foreach ($f in ($rel | Where-Object { $_ -ieq '.scope.json' -eq $false })) {
                     $touchedSet[$f.ToLowerInvariant()] = $true
                 }
                 $declaredSet = @{}
+                $declared = @($declared | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ } | Select-Object -Unique)
                 foreach ($f in $declared) { $declaredSet[$f.ToLowerInvariant()] = $true }
                 $missed = @($declared | Where-Object { -not $touchedSet.ContainsKey($_.ToLowerInvariant()) })
                 $extra  = @($rel     | Where-Object { -not($_ -ieq '.scope.json') -and -not $declaredSet.ContainsKey($_.ToLowerInvariant()) })
@@ -358,7 +374,8 @@ if (Test-Path -LiteralPath $scopePath) {
                 if (-not $step -or -not $step.PSObject.Properties['step']) { continue }
                 if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
                     foreach ($ef in $step.expected_files) {
-                        $allExpected[([string]$ef).Replace('\', '/').TrimStart('/').ToLowerInvariant()] = $true
+                        $rpEf = ConvertTo-ScopeRelativePath ([string]$ef) $root
+                        if ($rpEf) { $allExpected[$rpEf.ToLowerInvariant()] = $true }
                     }
                 }
             }
@@ -374,7 +391,7 @@ if (Test-Path -LiteralPath $scopePath) {
                 $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask)' }
                 $expected = @()
                 if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
-                    $expected = @($step.expected_files) | ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') }
+                    $expected = @($step.expected_files | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ })
                 }
                 $missing = @($expected | Where-Object { -not $touchedSetRt.ContainsKey(([string]$_).ToLowerInvariant()) })
                 $verdict = if ($verdictByStep.ContainsKey($sn)) { $verdictByStep[$sn] } else { '(no verdict)' }

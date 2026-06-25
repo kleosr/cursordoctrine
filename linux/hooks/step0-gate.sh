@@ -59,43 +59,6 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 
 if ! have_jq && ! have_py; then allow; fi
 
-tool_input="$(json_get "$input" tool_input)"
-[ -n "$tool_input" ] || allow
-
-if have_py; then
-    eval "$(printf '%s' "$tool_input" | python3 -c '
-import json, sys, shlex
-try:
-    ti = json.load(sys.stdin)
-except Exception:
-  ti = {}
-if not isinstance(ti, dict):
-    ti = {}
-path = ""
-for k in ("path", "file_path", "filename", "absolute_path", "abs_path", "target_file"):
-    v = ti.get(k)
-    if v:
-        path = str(v)
-        break
-print("target_path=" + shlex.quote(path))
-' 2>/dev/null)"
-else
-    target_path="$(printf '%s' "$tool_input" | jq -r '
-  .path // .file_path // .filename // .absolute_path // .abs_path // .target_file // empty
-' 2>/dev/null)"
-fi
-
-[ -n "${target_path:-}" ] || allow
-
-# Normalize to repo-relative path.
-rel="${target_path//\\//}"
-case "$rel" in
-    "$root"/*) rel="${rel#"$root"/}" ;;
-esac
-rel="${rel#/}"
-[ -n "$rel" ] || allow
-[ "$rel" = ".scope.json" ] && allow
-
 if have_jq; then
     intent="$(printf '%s' "$scope_raw" | jq -r '.intent // ""' 2>/dev/null)"
     real_files="$(printf '%s' "$scope_raw" | jq -r '
@@ -107,12 +70,12 @@ if have_jq; then
     ' 2>/dev/null)"
     decomp_count="$(printf '%s' "$scope_raw" | jq -r '.decomposition // [] | length' 2>/dev/null)"
 elif have_py; then
-    read -r intent real_files decomp_count <<<"$(printf '%s' "$scope_raw" | python3 -c '
+    _gate_vals="$(printf '%s' "$scope_raw" | python3 -c '
 import json, sys
 try:
     o = json.load(sys.stdin)
 except Exception:
-    print(" 0 0")
+    print(json.dumps(["", 0, 0]))
     raise SystemExit
 intent = (o.get("intent") or "").strip()
 files = o.get("files") or []
@@ -123,20 +86,70 @@ for e in files:
         continue
     real += 1
 decomp = len(o.get("decomposition") or [])
-print(intent, real, decomp)
+print(json.dumps([intent, real, decomp]))
 ' 2>/dev/null)"
+    intent="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[""])[0])' 2>/dev/null)"
+    real_files="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[0,0])[1])' 2>/dev/null)"
+    decomp_count="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[0,0,0])[2])' 2>/dev/null)"
 fi
 
 intent="$(printf '%s' "${intent:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-if [ -z "$intent" ] || [ "$intent" = "[DRAFT]" ]; then
-    deny "intent is empty — write your one-line Step 0 restatement to .scope.json before editing code."
-fi
-
+intent_empty=false
+if [ -z "$intent" ] || [ "$intent" = "[DRAFT]" ]; then intent_empty=true; fi
 case "${real_files:-0}" in ''|*[!0-9]*) real_files=0 ;; esac
 case "${decomp_count:-0}" in ''|*[!0-9]*) decomp_count=0 ;; esac
 
-if [ "$real_files" -ge 1 ] && [ "$decomp_count" -eq 0 ]; then
-    deny "files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file."
+tool_input="$(json_get "$input" tool_input)"
+[ -n "$tool_input" ] || allow
+
+if have_py; then
+    target_paths="$(printf '%s' "$tool_input" | python3 -c '
+import json, sys
+try:
+    ti = json.load(sys.stdin)
+except Exception:
+  ti = {}
+if not isinstance(ti, dict):
+    ti = {}
+paths = []
+for k in ("path", "file_path", "filename", "absolute_path", "abs_path", "target_file"):
+    v = ti.get(k)
+    if v:
+        paths.append(str(v))
+for e in ti.get("edits") or []:
+    if not isinstance(e, dict):
+        continue
+    for k in ("path", "file_path", "filename", "absolute_path", "abs_path", "target_file"):
+        v = e.get(k)
+        if v:
+            paths.append(str(v))
+            break
+print("\n".join(paths))
+' 2>/dev/null)"
+else
+    target_paths="$(printf '%s' "$tool_input" | jq -r '
+      [
+        (.path // .file_path // .filename // .absolute_path // .abs_path // .target_file // empty),
+        (.edits[]? | .path // .file_path // .filename // .absolute_path // .abs_path // .target_file // empty)
+      ][] | select(. != "")
+' 2>/dev/null)"
 fi
+
+if [ -z "${target_paths:-}" ]; then
+    [ "$intent_empty" = true ] && deny "edit tool target path could not be parsed and intent is empty — fill .scope.json before editing."
+    [ "$real_files" -ge 1 ] && [ "$decomp_count" -eq 0 ] && deny "edit tool target path could not be parsed and decomposition[] is empty after prior file edits."
+    allow
+fi
+
+while IFS= read -r target_path; do
+    [ -n "$target_path" ] || continue
+    rel="$(scope_relative_path "$target_path" "$root")"
+    [ -n "$rel" ] || deny "edit target is outside the resolved project root or could not be normalized."
+    [ "$rel" = ".scope.json" ] && continue
+    [ "$intent_empty" = true ] && deny "intent is empty — write your one-line Step 0 restatement to .scope.json before editing code."
+    [ "$real_files" -ge 1 ] && [ "$decomp_count" -eq 0 ] && deny "files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file."
+done <<EOF
+$target_paths
+EOF
 
 allow

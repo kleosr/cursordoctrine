@@ -137,6 +137,30 @@ resolve_agent_path() {
     esac
 }
 
+scope_relative_path() {
+    local p="$1" root="$2"
+    [ -n "$p" ] && [ -n "$root" ] || return 0
+    p="$(printf '%s' "$p" | tr '\\' '/')"
+    root="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
+    case "$p" in
+        /*)
+            case "$p" in
+                "$root"/*) p="${p#"$root"/}" ;;
+                *) return 0 ;;
+            esac
+            ;;
+    esac
+    local out="" part
+    IFS='/' read -r -a _scope_parts <<< "$p"
+    for part in "${_scope_parts[@]}"; do
+        [ -n "$part" ] || continue
+        [ "$part" = "." ] && continue
+        [ "$part" = ".." ] && return 0
+        if [ -n "$out" ]; then out="$out/$part"; else out="$part"; fi
+    done
+    printf '%s' "$out"
+}
+
 final_review_debug() {
     [ "${FINAL_REVIEW_DEBUG:-}" = "1" ] || return 0
     local reason="$1"

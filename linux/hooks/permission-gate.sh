@@ -17,6 +17,7 @@ set +e
 
 allow() { printf '{"permission":"allow"}'; exit 0; }
 
+[ "${HOOKS_ENFORCE:-}" = "0" ] && allow
 [ "${PERM_GATE_ENFORCE:-}" = "0" ] && allow
 
 input="$(read_hook_stdin)"
@@ -58,7 +59,7 @@ test_deny() {
 
 # Anchored to start OR a command separator so `cd /tmp && rm -rf /` is caught,
 # while `git rm`, `npm run rm-cache`, `echo "rm -rf /"` stay allowed.
-test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*[[:space:]]+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
+test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+([^;&|]*[[:space:]])?-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*([[:space:]]+--[^[:space:]]*)*[[:space:]]+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
 test_deny ':\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:' 'fork-bomb pattern'
 test_deny '(^|[;&|][[:space:]]*)bash[[:space:]]+-c[[:space:]]+[''"]?[[:space:]]*:[[:space:]]*\(\)[[:space:]]*\{' 'fork-bomb pattern via bash -c'
 test_deny 'curl[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
@@ -66,11 +67,17 @@ test_deny 'wget[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|a
 test_deny 'git[[:space:]]+push[[:space:]]+.*--force(-with-lease)?([[:space:]"'"'"']|$)' 'git push --force'
 test_deny 'git[[:space:]]+push[[:space:]]+(-f|--force)([[:space:]"'"'"']|$)' 'git push -f / --force'
 test_deny 'git[[:space:]]+reset[[:space:]]+--hard' 'git reset --hard (data loss)'
-test_deny 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
+if printf '%s' "$cmd" | grep -qE 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f' &&
+   ! printf '%s' "$cmd" | grep -qE 'git[[:space:]]+clean[^;&|]*(-n|--dry-run)'; then
+    deny 'git clean -f (untracked data loss)'
+fi
 test_deny 'dd[[:space:]].*of=/dev/(sd|nvme|hd|xvd)' 'dd to block device'
 test_deny 'mkfs(\.[a-z0-9]+)?[[:space:]]+/dev/' 'mkfs on device'
 test_deny 'chmod[[:space:]]+-R[[:space:]]+777[[:space:]]+/' 'chmod -R 777 on root'
 test_deny 'chown[[:space:]]+-R[[:space:]]+[^[:space:]]+[[:space:]]+/' 'chown -R on root'
-test_deny '^(npm|pnpm|yarn)[[:space:]]+publish([[:space:]]|$)' 'package publish (use ship-hook, not direct publish)'
+if printf '%s' "$cmd" | grep -qE '^(npm|pnpm|yarn)[[:space:]]+publish([[:space:]]|$)' &&
+   ! printf '%s' "$cmd" | grep -qE '^(npm|pnpm|yarn)[[:space:]]+publish[^;&|]*--dry-run'; then
+    deny 'package publish (use ship-hook, not direct publish)'
+fi
 
 allow

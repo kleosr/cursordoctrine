@@ -14,7 +14,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 . "$PSScriptRoot\hook-common.ps1"
 
-if ($env:PERM_GATE_ENFORCE -eq '0') {
+if ($env:HOOKS_ENFORCE -eq '0' -or $env:PERM_GATE_ENFORCE -eq '0') {
     Write-HookJson @{ permission = 'allow' }
     exit 0
 }
@@ -66,19 +66,19 @@ function Deny {
 # --- POSIX-flavored ---------------------------------------------------------
 # Anchored to start OR a command separator so `cd /tmp && rm -rf /` is caught,
 # while `git rm`, `npm run rm-cache`, `echo "rm -rf /"` stay allowed.
-Test-Deny '(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*\s+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
+Test-Deny '(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+(?=[^;&|]*-[a-zA-Z]*[rR])(?=[^;&|]*-[a-zA-Z]*[fF])[^;&|]*\s+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
 Test-Deny ':\(\)\{\s*:\|:&\s*\};:|bash\s+-c\s+["'']*:\s*\(\)\{' 'reverse shell / fork-bomb pattern'
 Test-Deny 'curl\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
 Test-Deny 'wget\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
 Test-Deny 'git\s+push\s+.*--force(-with-lease)?(\s|$)' 'git push --force'
 Test-Deny 'git\s+push\s+(-f|--force)(\s|$)' 'git push -f / --force'
 Test-Deny 'git\s+reset\s+--hard' 'git reset --hard (data loss)'
-Test-Deny 'git\s+clean\s+-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
+Test-Deny 'git\s+clean\s+(?![^;&|]*(?:-n|--dry-run))-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
 Test-Deny 'dd\s.*of=/dev/(sd|nvme|hd|xvd)' 'dd to block device'
 Test-Deny 'mkfs(\.[a-z0-9]+)?\s+/dev/' 'mkfs on device'
 Test-Deny 'chmod\s+-R\s+777\s+/' 'chmod -R 777 on root'
 Test-Deny 'chown\s+-R\s+[^\s]+\s+/' 'chown -R on root'
-Test-Deny '^(npm|pnpm|yarn)\s+publish(\s|$)' 'package publish (use ship-hook, not direct publish)'
+Test-Deny '^(npm|pnpm|yarn)\s+publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
 
 # --- Windows equivalents (the agent shell here IS PowerShell) ---------------
 # iwr/irm | iex is the moral twin of curl|sh.

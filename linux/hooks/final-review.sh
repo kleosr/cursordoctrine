@@ -86,6 +86,7 @@ find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 get_diff_signature() {
     local repo_root="$1" sp="$repo_root/.scope.json"
     local sig=""
+    local max_bytes=1048576
 
     # Helper: hash a string via sha256sum / shasum / md5sum (first available).
     _hash_str() {
@@ -138,7 +139,7 @@ except Exception: pass' 2>/dev/null
                     while IFS= read -r f; do
                         [ -n "$f" ] || continue
                         if ! printf '%s\n' "$tracked" | grep -qxF "$f" 2>/dev/null; then
-                            if [ -f "$repo_root/$f" ]; then
+                            if [ -f "$repo_root/$f" ] && [ "$(wc -c < "$repo_root/$f" 2>/dev/null || echo 0)" -le "$max_bytes" ]; then
                                 sig="${sig}"$'\n'"==U:${f}=="$'\n'"$(cat "$repo_root/$f" 2>/dev/null)"
                             fi
                         fi
@@ -150,7 +151,7 @@ except Exception: pass' 2>/dev/null
             sig="$(git -C "$repo_root" diff HEAD 2>/dev/null)"
             while IFS= read -r u; do
                 [ -n "$u" ] || continue
-                if [ -f "$repo_root/$u" ]; then
+                if [ -f "$repo_root/$u" ] && [ "$(wc -c < "$repo_root/$u" 2>/dev/null || echo 0)" -le "$max_bytes" ]; then
                     sig="${sig}"$'\n'"==U:${u}=="$'\n'"$(cat "$repo_root/$u" 2>/dev/null)"
                 fi
             done < <(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null)
@@ -161,7 +162,7 @@ except Exception: pass' 2>/dev/null
         scope_files="$(_read_scope_files)"
         while IFS= read -r p; do
             [ -n "$p" ] || continue
-            if [ -f "$repo_root/$p" ]; then
+            if [ -f "$repo_root/$p" ] && [ "$(wc -c < "$repo_root/$p" 2>/dev/null || echo 0)" -le "$max_bytes" ]; then
                 sig="${sig}"$'\n'"==F:${p}=="$'\n'"$(cat "$repo_root/$p" 2>/dev/null)"
             fi
         done <<< "$scope_files"
@@ -223,7 +224,7 @@ except Exception: pass' 2>/dev/null)"
         fi
         while IFS= read -r p; do
             [ -n "$p" ] || continue
-            p="$(printf '%s' "$p" | tr '\\' '/' | sed 's|^/||')"
+            p="$(scope_relative_path "$p" "$root")"
             [ "$p" = ".scope.json" ] && continue
             case "$edited" in
                 *"$p"*) ;;
@@ -237,7 +238,20 @@ EOF
     if [ -n "$(printf '%s' "$edited" | grep -v '^$')" ]; then
         if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
             is_git_repo=true
-            mapfile -t stat_files < <(printf '%s' "$edited" | grep -v '^$')
+            dirty="$(git -C "$root" diff HEAD --name-only 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+            filtered=""
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                if printf '%s\n' "$dirty" | grep -qxF "$p" 2>/dev/null; then
+                    filtered="${filtered}${p}"$'\n'
+                fi
+            done <<< "$edited"
+            edited="$filtered"
+            [ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || emit_none no_diff
+            stat_files=()
+            while IFS= read -r p; do
+                [ -n "$p" ] && stat_files+=("$p")
+            done <<< "$edited"
             if [ ${#stat_files[@]} -gt 0 ]; then
                 diff_stat="$(git -C "$root" diff HEAD --stat -- "${stat_files[@]}" 2>/dev/null)"
             fi
@@ -323,7 +337,7 @@ except Exception: pass' 2>/dev/null)"
 
 "
         if [ -n "$declared_json" ]; then
-            declared_norm="$(printf '%s\n' "$declared_json" | sed 's|\\|/|g; s|^/||' | grep -v '^$' | sort -u)"
+            declared_norm="$(printf '%s\n' "$declared_json" | sed 's|\\|/|g; s|^/||; s|^\./||' | grep -v '^$' | sort -u)"
             touched_norm="$(printf '%s\n' "$edited" | grep -v -i '^\.scope\.json$' | grep -v '^$' | sort -u)"
             missed="$(comm -23 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"
             extra="$(comm -13 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"
@@ -361,7 +375,17 @@ try:
 except Exception:
     sys.exit(0)
 decomp = o.get("decomposition") or []
-touched = [l.strip() for l in sys.stdin if l.strip() and l.strip().lower() != ".scope.json"]
+def norm(p):
+    parts = []
+    for part in str(p).replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            return ""
+        parts.append(part)
+    return "/".join(parts)
+touched = [norm(l.strip()) for l in sys.stdin if l.strip() and l.strip().lower() != ".scope.json"]
+touched = [f for f in touched if f]
 if not decomp:
     # CONTRACT GAP: multi-file task with no decomposition. Axis 7 FAILs (not SKIP).
     if len(touched) >= 2:
@@ -377,7 +401,9 @@ all_expected = set()
 for step in decomp:
     if isinstance(step, dict) and step.get("expected_files"):
         for ef in step["expected_files"]:
-            all_expected.add(str(ef).replace("\\", "/").lstrip("/").lower())
+            nef = norm(ef)
+            if nef:
+                all_expected.add(nef.lower())
 leakage = [f for f in touched if f.lower() not in all_expected]
 lines = [f"Decomposition: {len(decomp)} step(s); verdicts recorded: {len(verdict_by_step)}."]
 for step in decomp:
@@ -387,7 +413,8 @@ for step in decomp:
     if not isinstance(sn, int):
         continue
     subtask = step.get("subtask") or "(no subtask)"
-    expected = [str(f).replace("\\", "/").lstrip("/") for f in (step.get("expected_files") or [])]
+    expected = [norm(f) for f in (step.get("expected_files") or [])]
+    expected = [f for f in expected if f]
     missing = [ef for ef in expected if ef.lower() not in touched_set]
     verdict = verdict_by_step.get(sn, "(no verdict)")
     if missing:

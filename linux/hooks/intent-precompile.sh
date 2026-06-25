@@ -144,6 +144,7 @@ write_continuation_scope() {
             | if (.decomposition | type) != "array" then .decomposition = [] else . end
             | if (.verifications | type) != "array" then .verifications = [] else . end
             | if (.files | type) != "array" then .files = [] else . end
+            | if (.acceptance | type) != "string" then .acceptance = "" else . end
             | del(.trace, .allow_growth)
             | with_entries(select(.key | startswith("_") | not))
         ' > "$scope_path" 2>/dev/null
@@ -161,6 +162,8 @@ try:
         o["verifications"] = []
     if not isinstance(o.get("files"), list):
         o["files"] = []
+    if not isinstance(o.get("acceptance"), str):
+        o["acceptance"] = ""
     for k in list(o.keys()):
         if k.startswith("_") or k in ("trace", "allow_growth"):
             del o[k]
@@ -223,6 +226,7 @@ except Exception: pass' 2>/dev/null)"
     needs=false
     [ -z "$intent" ] && needs=true
     case "$intent" in "[DRAFT]"*) needs=true ;; esac
+    [ -z "$acceptance" ] && needs=true
     [ "$acceptance" = "$default_acceptance" ] && needs=true
     [ "$needs" = "true" ] || return 0
     _pdir="$HOME/.cursor/.hooks-pending"
