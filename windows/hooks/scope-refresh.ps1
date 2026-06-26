@@ -46,6 +46,7 @@ foreach ($k in 'file_path', 'path', 'filename', 'absolute_path', 'abs_path') {
 }
 if ($editedFile) {
     $rel = ConvertTo-ScopeRelativePath $editedFile $root
+    if (Test-IsPlanArtifactPath $rel) { exit 0 }
     # Never record the contract file itself, and skip empty paths.
     if ($rel -and $rel -ine '.scope.json') {
         $existing = @()

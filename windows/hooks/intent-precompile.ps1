@@ -40,6 +40,7 @@ $prompt = $prompt.Trim()
 if ([string]::IsNullOrWhiteSpace($prompt)) { exit 0 }
 
 if ($prompt -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)') { exit 0 }
+if ((Test-IsPlanModeEvent $obj) -or (Test-IsPlanOnlyPrompt $prompt)) { exit 0 }
 
 $root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }

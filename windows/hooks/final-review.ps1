@@ -112,7 +112,7 @@ function Get-DiffSignature([string]$repoRoot) {
             $sj2 = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
             if ($sj2.PSObject.Properties['files'] -and $sj2.files) {
                 $files = @($sj2.files |
-                    Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' } |
+                    Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and "$_" -ine '.scope.json' -and -not (Test-IsPlanArtifactPath ([string]$_)) } |
                     ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
                     Select-Object -Unique)
             }
@@ -143,10 +143,17 @@ function Get-DiffSignature([string]$repoRoot) {
             }
         }
     } elseif ($hasGit) {
-        # Non-doctrine git: full diff + untracked contents.
-        $diff = (& git -C $repoRoot diff HEAD 2>$null) -join "`n"
-        if ($diff) { [void]$sb.Append($diff) }
-        foreach ($u in (& git -C $repoRoot ls-files --others --exclude-standard 2>$null)) {
+        # Non-doctrine git: diff + untracked contents, excluding saved plans.
+        $dirtyFiles = New-Object System.Collections.Generic.List[string]
+        foreach ($p in @(& git -C $repoRoot diff HEAD --name-only 2>$null) + @(& git -C $repoRoot ls-files --others --exclude-standard 2>$null)) {
+            $rp = ConvertTo-ScopeRelativePath ([string]$p) $repoRoot
+            if ($rp -and -not (Test-IsPlanArtifactPath $rp) -and -not $dirtyFiles.Contains($rp)) { $dirtyFiles.Add($rp) | Out-Null }
+        }
+        if ($dirtyFiles.Count -gt 0) {
+            $diff = (& git -C $repoRoot diff HEAD -- $dirtyFiles 2>$null) -join "`n"
+            if ($diff) { [void]$sb.Append($diff) }
+        }
+        foreach ($u in $dirtyFiles) {
             if (-not $u) { continue }
             $full = Join-Path $repoRoot $u
             if (Test-Path -LiteralPath $full -PathType Leaf) {
@@ -166,7 +173,7 @@ function Get-DiffSignature([string]$repoRoot) {
                     $s = [string]$f
                     if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
                     $rp = $s.Replace('\', '/').TrimStart('/')
-                    if ($rp -and $rp -ine '.scope.json') {
+                    if ($rp -and $rp -ine '.scope.json' -and -not (Test-IsPlanArtifactPath $rp)) {
                         $full = Join-Path $repoRoot $rp
                         if (Test-Path -LiteralPath $full -PathType Leaf) {
                             try {
@@ -240,7 +247,7 @@ if (Test-Path -LiteralPath $scopePath) {
                 $s = [string]$f
                 if (-not $s -or $s -match '^\s*<' -or $s -match '^\s*$') { continue }
                 $rp = ConvertTo-ScopeRelativePath $s $root
-                if ($rp -and $rp -ine '.scope.json' -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+                if ($rp -and $rp -ine '.scope.json' -and -not (Test-IsPlanArtifactPath $rp) -and -not $rel.Contains($rp)) { $rel.Add($rp) }
             }
         }
     } catch { }
@@ -252,7 +259,7 @@ if (Test-Path -LiteralPath $scopePath) {
             $dirtySet = @{}
             foreach ($p in @(& git -C $root diff --name-only HEAD 2>$null) + @(& git -C $root ls-files --others --exclude-standard 2>$null)) {
                 $rp = ConvertTo-ScopeRelativePath ([string]$p) $root
-                if ($rp) { $dirtySet[$rp.ToLowerInvariant()] = $true }
+                if ($rp -and -not (Test-IsPlanArtifactPath $rp)) { $dirtySet[$rp.ToLowerInvariant()] = $true }
             }
             $filtered = New-Object System.Collections.Generic.List[string]
             foreach ($p in $rel) {
@@ -276,15 +283,17 @@ if (Test-Path -LiteralPath $scopePath) {
         foreach ($l in & git -C $root ls-files --others --exclude-standard 2>$null) {
             if ($l) { $edited.Add($l) }
         }
-        # Capture diff stat for evidence injection.
-        $diffStat = (& git -C $root diff HEAD --stat 2>$null) -join "`n"
         foreach ($f in $edited) {
             $rp = ConvertTo-FwdPath $f
             if ($rp.StartsWith($root + '/', [System.StringComparison] 'OrdinalIgnoreCase')) {
                 $rp = $rp.Substring($root.Length + 1)
             }
             $rp = $rp.TrimStart('/')
-            if ($rp -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+            if ($rp -and -not (Test-IsPlanArtifactPath $rp) -and -not $rel.Contains($rp)) { $rel.Add($rp) }
+        }
+        if ($rel.Count -gt 0) {
+            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat') + $rel
+            $diffStat = (& git @statArgs 2>$null) -join "`n"
         }
     }
 }
@@ -326,7 +335,7 @@ if (Test-Path -LiteralPath $scopePath) {
             $scopeBlock = "Declared acceptance: $($sj.acceptance)`n`n"
         }
         if ($sj.PSObject.Properties['files'] -and $sj.files) {
-            $declared = @($sj.files | Where-Object { $_ -and $_.Trim() -and $_ -notmatch '^\s*<' } |
+            $declared = @($sj.files | Where-Object { $_ -and $_.Trim() -and $_ -notmatch '^\s*<' -and -not (Test-IsPlanArtifactPath ([string]$_)) } |
                            ForEach-Object { ([string]$_).Replace('\', '/').TrimStart('/') } |
                            Select-Object -Unique)
                 if ($declared.Count -gt 0) {
@@ -335,7 +344,7 @@ if (Test-Path -LiteralPath $scopePath) {
                     $touchedSet[$f.ToLowerInvariant()] = $true
                 }
                 $declaredSet = @{}
-                $declared = @($declared | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ } | Select-Object -Unique)
+                $declared = @($declared | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ -and -not (Test-IsPlanArtifactPath ([string]$_)) } | Select-Object -Unique)
                 foreach ($f in $declared) { $declaredSet[$f.ToLowerInvariant()] = $true }
                 $missed = @($declared | Where-Object { -not $touchedSet.ContainsKey($_.ToLowerInvariant()) })
                 $extra  = @($rel     | Where-Object { -not($_ -ieq '.scope.json') -and -not $declaredSet.ContainsKey($_.ToLowerInvariant()) })

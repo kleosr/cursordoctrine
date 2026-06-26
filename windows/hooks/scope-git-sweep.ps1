@@ -68,6 +68,7 @@ $kept = New-Object System.Collections.Generic.List[string]
 foreach ($e in $existing) {
     $s = [string]$e
     if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s) -or ($s.Trim() -ieq '.scope.json')) { continue }
+    if (Test-IsPlanArtifactPath $s) { continue }
     $kept.Add($s) | Out-Null
 }
 $appended = $false
@@ -75,6 +76,7 @@ foreach ($p in $diffPaths) {
     $rel = ConvertTo-ScopeRelativePath ([string]$p) $root
     # Drop the contract file and any path outside the repo root.
     if (-not $rel -or $rel -ieq '.scope.json') { continue }
+    if (Test-IsPlanArtifactPath $rel) { continue }
     $already = $false
     foreach ($f in $kept) {
         if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }

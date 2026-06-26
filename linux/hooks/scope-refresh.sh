@@ -48,6 +48,9 @@ done
 
 if [ -n "$edited_file" ]; then
     rel="$(scope_relative_path "$edited_file" "$root")"
+    if is_plan_artifact_path "$rel"; then
+        exit 0
+    fi
 
     # Never record the contract file itself.
     if [ -n "$rel" ] && [ "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" != ".scope.json" ]; then
