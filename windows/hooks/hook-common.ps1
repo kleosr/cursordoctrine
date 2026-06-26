@@ -73,6 +73,43 @@ function ConvertTo-ScopeRelativePath([string]$path, [string]$root) {
     return ($parts -join '/')
 }
 
+function Test-IsPlanArtifactPath([string]$path) {
+    $p = ConvertTo-FwdPath $path
+    if (-not $p) { return $false }
+    $p = $p.TrimStart('/')
+    return ($p -ieq '.cursor/plans' -or $p.StartsWith('.cursor/plans/', [System.StringComparison]::OrdinalIgnoreCase))
+}
+
+function Test-IsPlanModeEvent($obj) {
+    if (-not $obj) { return $false }
+    foreach ($k in @('composer_mode', 'composerMode', 'agent_mode', 'agentMode', 'cursor_mode', 'cursorMode', 'chat_mode', 'chatMode', 'mode')) {
+        if ($obj.PSObject.Properties[$k] -and $obj.$k) {
+            $v = ([string]$obj.$k).Trim().ToLowerInvariant()
+            if ($v -match '^(plan|planning|plan_mode|planning_mode)$') { return $true }
+        }
+    }
+    foreach ($k in @('is_plan_mode', 'isPlanMode', 'planning')) {
+        if ($obj.PSObject.Properties[$k]) {
+            $raw = $obj.$k
+            if ($raw -is [bool] -and $raw) { return $true }
+            $v = ([string]$raw).Trim().ToLowerInvariant()
+            if ($v -in @('true', '1', 'yes')) { return $true }
+        }
+    }
+    return $false
+}
+
+function Test-IsPlanOnlyPrompt([string]$text) {
+    if (-not $text) { return $false }
+    $implementation = '(?i)\b(implement|build|fix|edit|modify|change|patch|apply|code|ship|execute|wire|refactor|update|make this work|do it)\b'
+    if ($text -match $implementation) { return $false }
+    if ($text -match '(?i)<proposed_plan>') { return $true }
+    if ($text -match '(?i)\b(plan mode|planning mode)\b') { return $true }
+    if ($text -match '(?i)\b(write|draft|propose|produce|generate|outline|create|make)\b.{0,80}\b(plan|implementation plan|spec)\b') { return $true }
+    if ($text -match '(?i)\b(plan|spec)\b.{0,80}\b(only|first|before implementation|before coding)\b') { return $true }
+    return $false
+}
+
 # Resolve the project root for an event: cwd -> workspace_roots ->
 # CURSOR_PROJECT_DIR -> $PWD (if it looks like a project root). The $PWD
 # fallback exists because Cursor's beforeSubmitPrompt event does NOT include
@@ -144,7 +181,7 @@ function Redact-SecretsFromIntent([string]$text) {
 # headers and skip past them so we return the real human turn, not boilerplate.
 function Test-IsHookGeneratedQuery([string]$text) {
     if (-not $text) { return $false }
-    return ($text -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)')
+    return ($text -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)')
 }
 
 # Recover the human request embedded in a hook followup

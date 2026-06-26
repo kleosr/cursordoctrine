@@ -161,6 +161,41 @@ scope_relative_path() {
     printf '%s' "$out"
 }
 
+is_plan_artifact_path() {
+    local p="$1"
+    [ -n "$p" ] || return 1
+    p="$(printf '%s' "$p" | tr '\\' '/' | sed 's|^/*||')"
+    case "$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')" in
+        .cursor/plans|.cursor/plans/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_plan_mode_event() {
+    local input="$1" k v
+    for k in composer_mode composerMode agent_mode agentMode cursor_mode cursorMode chat_mode chatMode mode; do
+        v="$(json_get "$input" "$k" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        case "$v" in plan|planning|plan_mode|planning_mode) return 0 ;; esac
+    done
+    for k in is_plan_mode isPlanMode planning; do
+        v="$(json_get "$input" "$k" | tr '[:upper:]' '[:lower:]')"
+        case "$v" in true|1|yes) return 0 ;; esac
+    done
+    return 1
+}
+
+is_plan_only_prompt() {
+    local text="$1" lc
+    [ -n "$text" ] || return 1
+    lc="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+    printf '%s' "$lc" | grep -Eq '\b(implement|build|fix|edit|modify|change|patch|apply|code|ship|execute|wire|refactor|update|make this work|do it)\b' && return 1
+    printf '%s' "$lc" | grep -Eq '<proposed_plan>' && return 0
+    printf '%s' "$lc" | grep -Eq '\b(plan mode|planning mode)\b' && return 0
+    printf '%s' "$lc" | grep -Eq '\b(write|draft|propose|produce|generate|outline|create|make)\b.{0,80}\b(plan|implementation plan|spec)\b' && return 0
+    printf '%s' "$lc" | grep -Eq '\b(plan|spec)\b.{0,80}\b(only|first|before implementation|before coding)\b' && return 0
+    return 1
+}
+
 final_review_debug() {
     [ "${FINAL_REVIEW_DEBUG:-}" = "1" ] || return 0
     local reason="$1"
@@ -227,7 +262,7 @@ except Exception:
 is_hook_generated_query() {
     local text="$1"
     [ -n "$text" ] || return 1
-    printf '%s' "$text" | grep -qE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)'
+    printf '%s' "$text" | grep -qE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)'
 }
 
 # extract_last_user_query <json> -> text of the last *human* <user_query> in this
@@ -252,7 +287,7 @@ extract_last_user_query() {
     if have_py; then
         printf '%s' "$reversed" | python3 -c '
 import json, re, sys
-HOOK_HDR = re.compile(r"^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)", re.M)
+HOOK_HDR = re.compile(r"^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)", re.M)
 EMBEDDED = re.compile(r"ORIGINAL REQUEST[^\r\n]*\r?\n-{3,}\r?\n(.+?)\r?\n-{3,}", re.S)
 def redact(q):
     q = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", q)
@@ -309,7 +344,7 @@ except Exception:
     printf '%s' "$reversed" |
         grep -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
         sed -E 's@</?user_query>@@g' |
-        grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED)' 2>/dev/null |
+        grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)' 2>/dev/null |
         head -n1 |
         sed -E 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' |
         head -c 2000

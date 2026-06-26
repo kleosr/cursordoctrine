@@ -19,6 +19,11 @@ the prompt in the payload directly. Writes the prompt as `.scope.json`'s
 `verifications[]` (written by `milestone-verify`) and `files[]` (appended by
 `scope-refresh`).
 
+Cursor Plan Mode prompts are skipped. If Cursor exposes a plan/planning mode
+field in the hook payload, that wins; otherwise only obvious plan-only text is
+skipped. Implementation prompts such as "implement the plan" still seed the
+contract.
+
 **Continuation:** update `prompt` only; preserve `intent`, `decomposition[]`,
 `verifications[]`, `files[]`, and `acceptance`.
 
@@ -72,7 +77,8 @@ afterFileEdit output directly, so the stash is delivered by `scope-drain`
 keeps the contract visible as a turn fills with code. Silent when no
 `.scope.json` exists (trivial edits, fresh repos). One state file, no hashes,
 no latches. No matcher — fires on ALL file edits (Write, Edit, MultiEdit,
-ApplyPatch, etc.), not just `Write`. Disable: `SCOPE_REFRESH_ENFORCE=0`.
+ApplyPatch, etc.), not just `Write`. Saved Cursor plans under
+`.cursor/plans/**` are ignored. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
 ## postToolUse — scope-drain (.ps1/.sh) + milestone-verify (.ps1/.sh) + intent-anchor (.ps1/.sh)
 5s each. Three entries run in array order.
@@ -142,6 +148,11 @@ Non-doctrine projects (no `.scope.json`) fall back to
 `git diff --name-only HEAD` + untracked files against the resolved repo root.
 The diff stat is injected as evidence so the model audits with real numbers.
 No per-edit marker files.
+
+Saved Cursor Plan Mode artifacts under `.cursor/plans/**` are ignored in every
+change-surface path (scope-refresh, scope-git-sweep, final-review, and the
+review brake signature). Planning files do not enter `files[]` and do not cause
+a final review by themselves.
 
 Bounded by the per-cid `reviewed-<cid>.flag` verify-revise brake. The flag
 stores a CONTENT-HASH SIGNATURE (SHA256 of `git diff HEAD -- <files[]>` for

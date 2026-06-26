@@ -58,7 +58,8 @@ existing = scope.get("files") or []
 kept = []
 for e in existing:
     s = str(e)
-    if not s or not s.strip() or s.strip().startswith("<") or s.strip().lstrip("/").lower() == ".scope.json":
+    norm_existing = s.strip().replace("\\", "/").lstrip("/").lower()
+    if not s or not s.strip() or s.strip().startswith("<") or norm_existing == ".scope.json" or norm_existing == ".cursor/plans" or norm_existing.startswith(".cursor/plans/"):
         continue
     kept.append(s)
 kept_lc = set(s.replace("\\", "/").lstrip("/").lower() for s in kept)
@@ -74,6 +75,8 @@ for line in os.environ["DIFF_OUT"].splitlines():
         parts.append(part)
     rel = "/".join(parts)
     if not rel or rel.lower() == ".scope.json":
+        continue
+    if rel.lower() == ".cursor/plans" or rel.lower().startswith(".cursor/plans/"):
         continue
     if rel.lower() in kept_lc:
         continue
@@ -99,9 +102,21 @@ diff_out="$(git -C "$root" diff --name-only HEAD 2>/dev/null; git -C "$root" ls-
 
 new_raw="$(printf '%s' "$scope_raw" | jq --rawfile diff <(printf '%s\n' "$diff_out") '
     (.files // []) as $existing |
-    ($existing | map(select(. != "" and (test("^\\s*<") | not) and ((. | ltrimstr("/") | ascii_downcase) != ".scope.json")))) as $kept |
+    ($existing | map(select(
+        . != "" and
+        (test("^\\s*<") | not) and
+        ((. | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) != ".scope.json") and
+        ((. | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) != ".cursor/plans") and
+        (((. | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) | startswith(".cursor/plans/")) | not)
+    ))) as $kept |
     ($kept | map((. | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase))) as $kept_lc |
-    ($diff | split("\n") | map(gsub("\\\\"; "/") | ltrimstr("/") | select(. != "" and (ascii_downcase != ".scope.json") and (startswith("../") | not)))) as $diff_clean |
+    ($diff | split("\n") | map(gsub("\\\\"; "/") | ltrimstr("/") | select(
+        . != "" and
+        (ascii_downcase != ".scope.json") and
+        (ascii_downcase != ".cursor/plans") and
+        ((ascii_downcase | startswith(".cursor/plans/")) | not) and
+        (startswith("../") | not)
+    ))) as $diff_clean |
     (reduce $diff_clean[] as $p ($kept;
         . as $acc |
         ($acc | map(gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) | index($p | ascii_downcase)) as $hit |

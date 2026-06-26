@@ -125,7 +125,7 @@ except Exception: pass' 2>/dev/null
             local scope_files norm_files
             scope_files="$(_read_scope_files)"
             if [ -n "$scope_files" ]; then
-                norm_files="$(printf '%s\n' "$scope_files" | grep -v '^$' | sort -u)"
+                norm_files="$(printf '%s\n' "$scope_files" | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)' | sort -u)"
                 # Build file args array for git diff.
                 local files_args=()
                 while IFS= read -r p; do
@@ -148,13 +148,21 @@ except Exception: pass' 2>/dev/null
             fi
         else
             # Non-doctrine git: full diff + untracked contents.
-            sig="$(git -C "$repo_root" diff HEAD 2>/dev/null)"
+            dirty_files="$(git -C "$repo_root" diff HEAD --name-only 2>/dev/null; git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null)"
+            dirty_files="$(printf '%s\n' "$dirty_files" | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)' | sort -u)"
+            if [ -n "$dirty_files" ]; then
+                local dirty_args=()
+                while IFS= read -r p; do [ -n "$p" ] && dirty_args+=("$p"); done <<< "$dirty_files"
+                if [ ${#dirty_args[@]} -gt 0 ]; then
+                    sig="$(git -C "$repo_root" diff HEAD -- "${dirty_args[@]}" 2>/dev/null)"
+                fi
+            fi
             while IFS= read -r u; do
                 [ -n "$u" ] || continue
                 if [ -f "$repo_root/$u" ] && [ "$(wc -c < "$repo_root/$u" 2>/dev/null || echo 0)" -le "$max_bytes" ]; then
                     sig="${sig}"$'\n'"==U:${u}=="$'\n'"$(cat "$repo_root/$u" 2>/dev/null)"
                 fi
-            done < <(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null)
+            done <<< "$dirty_files"
         fi
     elif [ -f "$sp" ]; then
         # Non-git doctrine: hash file contents from files[].
@@ -162,6 +170,9 @@ except Exception: pass' 2>/dev/null
         scope_files="$(_read_scope_files)"
         while IFS= read -r p; do
             [ -n "$p" ] || continue
+            if is_plan_artifact_path "$p"; then
+                continue
+            fi
             if [ -f "$repo_root/$p" ] && [ "$(wc -c < "$repo_root/$p" 2>/dev/null || echo 0)" -le "$max_bytes" ]; then
                 sig="${sig}"$'\n'"==F:${p}=="$'\n'"$(cat "$repo_root/$p" 2>/dev/null)"
             fi
@@ -226,6 +237,7 @@ except Exception: pass' 2>/dev/null)"
             [ -n "$p" ] || continue
             p="$(scope_relative_path "$p" "$root")"
             [ "$p" = ".scope.json" ] && continue
+            is_plan_artifact_path "$p" && continue
             case "$edited" in
                 *"$p"*) ;;
                 *) edited="${edited}${p}"$'\n' ;;
@@ -239,6 +251,7 @@ EOF
         if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
             is_git_repo=true
             dirty="$(git -C "$root" diff HEAD --name-only 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+            dirty="$(printf '%s\n' "$dirty" | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)')"
             filtered=""
             while IFS= read -r p; do
                 [ -n "$p" ] || continue
@@ -264,8 +277,6 @@ else
         edited_raw="$(git -C "$root" diff HEAD --name-only 2>/dev/null)"
         edited_raw="${edited_raw}
 $(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
-        diff_stat="$(git -C "$root" diff HEAD --stat 2>/dev/null)"
-
         # Dedupe, normalize to repo-relative forward-slash paths.
         root_fwd="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
         while IFS= read -r p; do
@@ -276,6 +287,7 @@ $(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
             esac
             p="${p#/}"
             [ -n "$p" ] || continue
+            is_plan_artifact_path "$p" && continue
             case "$edited" in
                 *"$p"*) ;;
                 *) edited="${edited}${p}"$'\n' ;;
@@ -283,6 +295,13 @@ $(git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
         done <<EOF
 $edited_raw
 EOF
+        stat_files=()
+        while IFS= read -r p; do
+            [ -n "$p" ] && stat_files+=("$p")
+        done <<< "$edited"
+        if [ ${#stat_files[@]} -gt 0 ]; then
+            diff_stat="$(git -C "$root" diff HEAD --stat -- "${stat_files[@]}" 2>/dev/null)"
+        fi
     fi
 fi
 
@@ -337,7 +356,7 @@ except Exception: pass' 2>/dev/null)"
 
 "
         if [ -n "$declared_json" ]; then
-            declared_norm="$(printf '%s\n' "$declared_json" | sed 's|\\|/|g; s|^/||; s|^\./||' | grep -v '^$' | sort -u)"
+            declared_norm="$(printf '%s\n' "$declared_json" | sed 's|\\|/|g; s|^/||; s|^\./||' | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)' | sort -u)"
             touched_norm="$(printf '%s\n' "$edited" | grep -v -i '^\.scope\.json$' | grep -v '^$' | sort -u)"
             missed="$(comm -23 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"
             extra="$(comm -13 <(printf '%s\n' "$declared_norm") <(printf '%s\n' "$touched_norm"))"

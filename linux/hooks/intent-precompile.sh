@@ -45,6 +45,9 @@ prompt="$(printf '%s' "$prompt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 case "$prompt" in
     "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*|"INTENT REFINEMENT REQUIRED"*|"SCOPE REMINDER"*|"VERIFY MILESTONE"*) exit 0 ;;
 esac
+if is_plan_mode_event "$input" || is_plan_only_prompt "$prompt"; then
+    exit 0
+fi
 
 root="$(resolve_project_root "$input")"
 [ -n "$root" ] || exit 0

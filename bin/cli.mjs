@@ -484,6 +484,23 @@ function verify() {
     return true;
   });
 
+  check('merge leaves one cursordoctrine final-review stop hook', () => {
+    const keys = ourKeys();
+    const incoming = JSON.parse(readFileSync(join(payload, 'hooks.json'), 'utf8'));
+    const currentStop = incoming.hooks.stop.find((e) => e.command.includes('final-review'));
+    const duplicateStop = structuredClone(currentStop);
+    const existing = {
+      version: 1,
+      hooks: { stop: [currentStop, duplicateStop, { command: 'bash ~/.agents/hooks/foreign-stop.sh', timeout: 5 }] },
+    };
+    const { merged } = mergeHooks(existing, incoming, keys);
+    const ours = (merged.hooks.stop || []).filter((e) => keyOf(e.command, keys) === keyOf(currentStop.command, keys));
+    const foreign = (merged.hooks.stop || []).filter((e) => e.command && e.command.includes('foreign-stop'));
+    if (ours.length !== 1) return { ok: false, detail: `expected 1 final-review hook, got ${ours.length}` };
+    if (foreign.length !== 1) return { ok: false, detail: 'foreign stop hook was not preserved' };
+    return true;
+  });
+
   check('install removes prior pack before writing new hooks', () => {
     const sandbox = join(HOME, '.cd-verify-install-upgrade');
     const staleName = STALE_HOOK_FILES.find((f) => f.endsWith(platform === 'windows' ? '.ps1' : '.sh'));
@@ -782,6 +799,60 @@ function verify() {
     }
   });
 
+  check('intent-precompile skips Cursor Plan Mode payloads', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-plan-mode');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      runHook(hook('intent-precompile'), {
+        conversation_id: 'pcplan1',
+        cwd: repoDir,
+        composer_mode: 'plan',
+        prompt: 'investigate the auth flow and write a plan',
+      });
+      if (existsSync(scopePath)) return { ok: false, detail: '.scope.json was created for Plan Mode' };
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix the sidebar',
+        intent: 'Fix sidebar layout',
+        decomposition: [],
+        verifications: [],
+        files: ['src/Sidebar.tsx'],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      runHook(hook('intent-precompile'), {
+        conversation_id: 'pcplan1',
+        cwd: repoDir,
+        mode: 'planning',
+        prompt: 'create a detailed implementation plan',
+      });
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (after.prompt !== 'fix the sidebar') return { ok: false, detail: `plan mode overwrote prompt: ${after.prompt}` };
+      if (after.intent !== 'Fix sidebar layout') return { ok: false, detail: `plan mode clobbered intent: ${after.intent}` };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  check('intent-precompile skips obvious plan-only text but not implementation text', () => {
+    const repoDir = join(HOME, '.cd-verify-precompile-plan-text');
+    const scopePath = join(repoDir, '.scope.json');
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(repoDir, { recursive: true });
+      runHook(hook('intent-precompile'), { conversation_id: 'pcplan2', cwd: repoDir, prompt: 'write the plan first' });
+      if (existsSync(scopePath)) return { ok: false, detail: '.scope.json was created for plan-only text' };
+      runHook(hook('intent-precompile'), { conversation_id: 'pcplan2', cwd: repoDir, isPlanMode: 'false', prompt: 'implement the plan' });
+      if (!existsSync(scopePath)) return { ok: false, detail: '.scope.json was not created for implementation text' };
+      const s = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if (s.prompt !== 'implement the plan') return { ok: false, detail: `wrong prompt after implementation text: ${s.prompt}` };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+    }
+  });
+
   check('intent-precompile stashes STEP 0 CONTRACT for scope-drain', () => {
     const cidv = 'npxvpc0';
     const repoDir = join(HOME, '.cd-verify-precompile-step0');
@@ -1046,6 +1117,44 @@ function verify() {
     }
   });
 
+  check('scope-git-sweep ignores Shell-written Cursor plan files', () => {
+    const cidv = 'npxvsgsplan';
+    const sandbox = join(HOME, '.cd-verify-sgs-plan');
+    const scopePath = join(sandbox, '.scope.json');
+    const sandboxEnv = { ...process.env, CURSORDOCTRINE_HOME: HOME, HOME, USERPROFILE: HOME };
+    try {
+      rmSync(sandbox, { recursive: true, force: true });
+      mkdirSync(sandbox, { recursive: true });
+      const git = (args) => spawnSync('git', ['-C', sandbox, ...args], {
+        encoding: 'utf8', windowsHide: true,
+        env: { ...sandboxEnv, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      if (git(['init', '-q']).status !== 0) return { ok: false, detail: 'git init failed' };
+      writeFileSync(join(sandbox, 'README.md'), 'init\n');
+      git(['add', 'README.md']);
+      if (git(['commit', '-q', '-m', 'init']).status !== 0) return { ok: false, detail: 'git commit failed' };
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 't', intent: 't', decomposition: [], verifications: [], files: [], acceptance: 'tests pass',
+      }));
+      mkdirSync(join(sandbox, '.cursor', 'plans'), { recursive: true });
+      writeFileSync(join(sandbox, '.cursor', 'plans', 'next.md'), 'plan\n');
+
+      const payload = JSON.stringify({ conversation_id: cidv, cwd: sandbox, tool_name: 'Shell' });
+      const r = spawnSync(platform === 'windows' ? 'pwsh.exe' : 'bash',
+        platform === 'windows'
+          ? ['-NoProfile', '-File', hook('scope-git-sweep')]
+          : [hook('scope-git-sweep')],
+        { input: payload, encoding: 'utf8', timeout: 20000, windowsHide: true, env: sandboxEnv });
+      if (r.error) return { ok: false, detail: `spawn error: ${r.error.message}` };
+
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if ((after.files || []).length !== 0) return { ok: false, detail: `plan file entered files[]: ${JSON.stringify(after.files)}` };
+      return true;
+    } finally {
+      rmBestEffort(sandbox, { recursive: true, force: true });
+    }
+  });
+
   check('intent-anchor fires on empty intent, silent when no new files, re-fires on new files', () => {
     const cidv = 'npxvia';
     const repoDir = join(HOME, '.cd-verify-ia');
@@ -1200,6 +1309,38 @@ function verify() {
     }
   });
 
+  check('scope refresh ignores saved Cursor plan files', () => {
+    const cidv = 'npxvscopeplan';
+    const repoDir = join(HOME, '.cd-verify-scope-plan');
+    const scopePath = join(repoDir, '.scope.json');
+    const stashPath = join(pendingDir, `scope-${cidv}.txt`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(join(repoDir, '.cursor', 'plans'), { recursive: true });
+      rmBestEffort(stashPath);
+      writeFileSync(scopePath, JSON.stringify({
+        prompt: 'fix sidebar',
+        intent: 'Fix sidebar',
+        decomposition: [],
+        verifications: [],
+        files: [],
+        acceptance: 'tests pass',
+      }), 'utf8');
+      runHook(hook('scope-refresh'), {
+        conversation_id: cidv,
+        cwd: repoDir,
+        file_path: join(repoDir, '.cursor', 'plans', 'fix-sidebar.md'),
+      });
+      const after = JSON.parse(readFileSync(scopePath, 'utf8'));
+      if ((after.files || []).length !== 0) return { ok: false, detail: `plan file entered files[]: ${JSON.stringify(after.files)}` };
+      if (existsSync(stashPath)) return { ok: false, detail: 'scope reminder was stashed for a plan file' };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(stashPath);
+    }
+  });
+
   check('scope refresh stays silent when no .scope.json exists', () => {
     const cidv = 'npxvscope2';
     const repoDir = join(HOME, '.cd-verify-noscope');
@@ -1296,6 +1437,31 @@ function verify() {
       rmBestEffort(flagPath);
       const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir });
       if (out.includes('followup_message')) return { ok: false, detail: 'review fired on a clean repo (no diff)' };
+      return true;
+    } finally {
+      rmBestEffort(repoDir, { recursive: true, force: true });
+      rmBestEffort(flagPath);
+    }
+  });
+
+  check('final review stays quiet when only Cursor plan files changed', () => {
+    const cidv = 'npxvfrplan';
+    const repoDir = join(HOME, '.cd-verify-plan-only');
+    const flagPath = join(pendingDir, `reviewed-${cidv}.flag`);
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(join(repoDir, '.cursor', 'plans'), { recursive: true });
+      const git = (args) => spawnSync('git', ['-C', repoDir, ...args], {
+        encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: 'v', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'v', GIT_COMMITTER_EMAIL: 'a@b.c' },
+      });
+      git(['init', '-q']);
+      writeFileSync(join(repoDir, 'README.md'), 'init\n', 'utf8');
+      git(['add', 'README.md']);
+      git(['commit', '-q', '-m', 'init']);
+      writeFileSync(join(repoDir, '.cursor', 'plans', 'fix.md'), 'plan\n', 'utf8');
+      rmBestEffort(flagPath);
+      const out = runHook(hook('final-review'), { conversation_id: cidv, status: 'completed', cwd: repoDir, composer_mode: 'plan' });
+      if (out.includes('followup_message')) return { ok: false, detail: 'review fired for saved plan-only change' };
       return true;
     } finally {
       rmBestEffort(repoDir, { recursive: true, force: true });
