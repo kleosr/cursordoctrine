@@ -1509,7 +1509,8 @@ function verify() {
   }
   console.log(`  ${scannerOk ? ' ok ' : 'warn'}  anti-slop scanner --help${scannerOk ? '' : ' — unavailable (final review falls back to the checklist)'}`);
 
-  check('sweep runs and emits a structured report', () => {
+  check('sweep runs and emits a structured report when scanner is available', () => {
+    if (!scannerOk) return true;
     // Sweep spawns the scanner in --all --format json and prints a category
     // breakdown. We assert it runs and prints the two anchor lines every
     // outcome shares (sloppy or clean), so a regression in the parser or the
