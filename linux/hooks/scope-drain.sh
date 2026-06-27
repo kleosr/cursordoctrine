@@ -44,6 +44,6 @@ $part"
     fi
 fi
 
-[ -n "$msgs" ] || exit 0
+[ -n "$msgs" ] || { printf '{}'; exit 0; }
 emit_json additional_context "$msgs"
 exit 0

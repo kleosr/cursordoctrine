@@ -117,7 +117,7 @@ function isStaleOurs(command) {
     return STALE_HOOK_FILES.includes(fname);
   }
   if (INJECT_RE.test(command)) {
-    return !doctrineFiles.includes(injectName) ? true : false;
+    return !doctrineFiles.includes(injectName);
   }
   return false;
 }

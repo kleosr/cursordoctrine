@@ -33,7 +33,7 @@ $editTools = @('Edit', 'Replace', 'Write', 'MultiEdit', 'editFile', 'file:edit',
 foreach ($e in $editTools) {
     if ($toolName -ieq $e) { exit 0 }
 }
-$shellTools = @('Shell', 'Bash', 'Execute', 'shell', 'bash', 'RunCommand', 'run', 'terminal', 'cmd', 'powershell')
+$shellTools = @('Shell', 'Bash', 'Execute', 'shell', 'bash', 'RunCommand', 'run', 'terminal', 'cmd', 'powershell', 'pwsh')
 $isShell = $false
 foreach ($s in $shellTools) {
     if ($toolName -ieq $s) { $isShell = $true; break }

@@ -40,6 +40,6 @@ if (Test-Path -LiteralPath $pending) {
     } catch { }
 }
 
-if ($msgs.Count -eq 0) { exit 0 }
+if ($msgs.Count -eq 0) { Write-HookJson @{}; exit 0 }
 Write-HookJson @{ additional_context = ($msgs -join "`n`n") }
 exit 0

@@ -349,6 +349,9 @@ def git(root: str, *args: str) -> str | None:
             capture_output=True, encoding="utf-8", errors="replace",
         )
     except OSError:
+        # FileNotFoundError (git binary not on PATH) or PermissionError. Both
+        # mean "git unavailable" — degrade to None so callers' is_git checks
+        # flip false and the scan reports "not a git repo" instead of crashing.
         return None
     return p.stdout if p.returncode == 0 else ""
 

@@ -51,7 +51,7 @@ blocks. No repo root → silent. Disable: `INTENT_PRECOMPILE_ENFORCE=0`.
 context — the only governing text the agent receives. Short on purpose.
 
 ## preToolUse — step0-gate (.ps1/.sh)
-5s, `failClosed: false`, matcher `Write|StrReplace|ApplyPatch`. Hard Step 0
+5s, `failClosed: false`, matcher `Write|StrReplace|ApplyPatch|Edit|MultiEdit|Replace`. Hard Step 0
 enforcement — the second non-advisory lever (beside `permission-gate`).
 
 **Always allow:** writes targeting `.scope.json` (agent must fill the contract).

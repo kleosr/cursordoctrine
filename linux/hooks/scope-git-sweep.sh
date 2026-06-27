@@ -28,7 +28,7 @@ tool_name="$(json_get "$input" tool_name)"
 [ -z "$tool_name" ] && tool_name="$(json_get "$input" name)"
 case "$tool_name" in
     Edit|Replace|Write|MultiEdit|editFile|file:edit|ApplyPatch|insert|str_replace|write|edit) exit 0 ;;
-    Shell|Bash|Execute|shell|bash|RunCommand|run|terminal|cmd|powershell) ;;
+    Shell|Bash|Execute|shell|bash|RunCommand|run|terminal|cmd|powershell|pwsh) ;;
     *) exit 0 ;;
 esac
 

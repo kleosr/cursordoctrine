@@ -43,7 +43,7 @@ input="$(read_hook_stdin)"
 
 tool_name="$(json_get "$input" tool_name)"
 case "$tool_name" in
-    Write|StrReplace|ApplyPatch|Edit|MultiEdit) ;;
+    Write|StrReplace|ApplyPatch|Edit|MultiEdit|Replace) ;;
     '') ;;
     *) allow ;;
 esac

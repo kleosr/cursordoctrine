@@ -86,6 +86,9 @@ find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 get_diff_signature() {
     local repo_root="$1" sp="$repo_root/.scope.json"
     local sig=""
+    # Untracked files larger than this are skipped from the signature: a 100MB
+    # generated artifact would dominate the hash and slow the brake. Trade-off:
+    # an in-place edit to a >1MB untracked file is invisible to verify-revise.
     local max_bytes=1048576
 
     # Helper: hash a string via sha256sum / shasum / md5sum (first available).

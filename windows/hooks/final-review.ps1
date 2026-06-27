@@ -100,6 +100,9 @@ function Get-DiffSignature([string]$repoRoot) {
     $sb = New-Object System.Text.StringBuilder
     $sp = Join-Path $repoRoot '.scope.json'
     $hasScope = (Test-Path -LiteralPath $sp)
+    # Untracked files larger than this are skipped from the signature: a 100MB
+    # generated artifact would dominate the hash and slow the brake. Trade-off:
+    # an in-place edit to a >1MB untracked file is invisible to verify-revise.
     $maxBytes = 1048576
 
     & git -C $repoRoot rev-parse --git-dir 2>$null | Out-Null
@@ -340,7 +343,7 @@ if (Test-Path -LiteralPath $scopePath) {
                            Select-Object -Unique)
                 if ($declared.Count -gt 0) {
                 $touchedSet = @{}
-                foreach ($f in ($rel | Where-Object { $_ -ieq '.scope.json' -eq $false })) {
+                foreach ($f in ($rel | Where-Object { $_ -ine '.scope.json' })) {
                     $touchedSet[$f.ToLowerInvariant()] = $true
                 }
                 $declaredSet = @{}

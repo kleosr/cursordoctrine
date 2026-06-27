@@ -188,11 +188,14 @@ is_plan_only_prompt() {
     local text="$1" lc
     [ -n "$text" ] || return 1
     lc="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
-    printf '%s' "$lc" | grep -Eq '\b(implement|build|fix|edit|modify|change|patch|apply|code|ship|execute|wire|refactor|update|make this work|do it)\b' && return 1
+    # POSIX-portable word matching: `grep -Ew` and explicit [^[:alnum:]_]
+    # boundaries instead of GNU \b (absent on BSD/macOS grep, where it
+    # silently fails to match and plan detection breaks).
+    printf '%s' "$lc" | grep -Ewq 'implement|build|fix|edit|modify|change|patch|apply|code|ship|execute|wire|refactor|update|make this work|do it' && return 1
     printf '%s' "$lc" | grep -Eq '<proposed_plan>' && return 0
-    printf '%s' "$lc" | grep -Eq '\b(plan mode|planning mode)\b' && return 0
-    printf '%s' "$lc" | grep -Eq '\b(write|draft|propose|produce|generate|outline|create|make)\b.{0,80}\b(plan|implementation plan|spec)\b' && return 0
-    printf '%s' "$lc" | grep -Eq '\b(plan|spec)\b.{0,80}\b(only|first|before implementation|before coding)\b' && return 0
+    printf '%s' "$lc" | grep -Ewq 'plan mode|planning mode' && return 0
+    printf '%s' "$lc" | grep -Eq '(^|[^[:alnum:]_])(write|draft|propose|produce|generate|outline|create|make)([^[:alnum:]_]|$).{0,80}(^|[^[:alnum:]_])(plan|implementation plan|spec)([^[:alnum:]_]|$)' && return 0
+    printf '%s' "$lc" | grep -Eq '(^|[^[:alnum:]_])(plan|spec)([^[:alnum:]_]|$).{0,80}(^|[^[:alnum:]_])(only|first|before implementation|before coding)([^[:alnum:]_]|$)' && return 0
     return 1
 }
 
@@ -341,11 +344,16 @@ except Exception:
     fi
 
     # No python3: best-effort grep, drop hook-generated turns.
+    # Portable [^[:alnum:]_] boundaries (not GNU \b) + full token set matching
+    # the python redaction path above (sk-/ghp_/gho_/key=value were missing,
+    # leaking secrets when python3 was absent).
     printf '%s' "$reversed" |
         grep -oE '<user_query>[^<]*</user_query>' 2>/dev/null |
         sed -E 's@</?user_query>@@g' |
         grep -vE '^[[:space:]]*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)' 2>/dev/null |
         head -n1 |
-        sed -E 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' |
+        sed -E 's/(^|[^[:alnum:]_])npm_[A-Za-z0-9]{10,}([^[:alnum:]_]|$)/\1[REDACTED_NPM_TOKEN]\2/g' |
+        sed -E 's/(^|[^[:alnum:]_])(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})([^[:alnum:]_]|$)/\1[REDACTED_TOKEN]\3/g' |
+        sed -E 's/([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/g' |
         head -c 2000
 }
