@@ -95,7 +95,7 @@ fi
 
 intent="$(printf '%s' "${intent:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 intent_empty=false
-if [ -z "$intent" ] || [ "$intent" = "[DRAFT]" ]; then intent_empty=true; fi
+case "$intent" in ''|'[DRAFT]'|'[DRAFT]'*) intent_empty=true ;; esac
 case "${real_files:-0}" in ''|*[!0-9]*) real_files=0 ;; esac
 case "${decomp_count:-0}" in ''|*[!0-9]*) decomp_count=0 ;; esac
 

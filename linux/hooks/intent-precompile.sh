@@ -53,7 +53,6 @@ root="$(resolve_project_root "$input")"
 [ -n "$root" ] || exit 0
 
 scope_path="$root/.scope.json"
-default_acceptance='Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
 
 # Returns "true" when the new prompt is dissimilar enough to treat as a new task.
 topic_changed() {
@@ -122,10 +121,10 @@ write_reset_scope() {
     if have_jq; then
         jq -nc \
             --arg p "$p" \
-            --arg a "$default_acceptance" \
+            --arg a "$DEFAULT_ACCEPTANCE" \
             '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
     elif have_py; then
-        P="$p" A="$default_acceptance" python3 -c '
+        P="$p" A="$DEFAULT_ACCEPTANCE" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
@@ -230,7 +229,7 @@ except Exception: pass' 2>/dev/null)"
     [ -z "$intent" ] && needs=true
     case "$intent" in "[DRAFT]"*) needs=true ;; esac
     [ -z "$acceptance" ] && needs=true
-    [ "$acceptance" = "$default_acceptance" ] && needs=true
+    [ "$acceptance" = "$DEFAULT_ACCEPTANCE" ] && needs=true
     [ "$needs" = "true" ] || return 0
     _pdir="$HOME/.cursor/.hooks-pending"
     rm -f "$_pdir/intent-anchored-$cid.flag" 2>/dev/null

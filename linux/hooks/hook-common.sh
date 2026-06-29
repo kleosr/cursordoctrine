@@ -2,10 +2,11 @@
 # hook-common.sh - shared helpers for Cursor agent hooks (Linux).
 # Source from sibling scripts:  . "$(dirname "$0")/hook-common.sh"
 #
-# Minimal: only what final-review.sh and inject-doctrine.sh use. No state
-# directory, no .scope.json bookkeeping, no subagent folding. JSON parsing
-# prefers jq; falls back to python3. If neither exists every helper degrades
-# to empty output and the hooks fail open (never block).
+# Shared by all hooks in this pack. JSON parsing prefers jq; falls back to
+# python3. If neither exists every helper degrades to empty output and the
+# hooks fail open (never block).
+
+readonly DEFAULT_ACCEPTANCE='Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
 
 read_hook_stdin() {
     local raw

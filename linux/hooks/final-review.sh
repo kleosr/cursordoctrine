@@ -79,10 +79,6 @@ root="$(resolve_project_root "$input")"
 # Sweep state older than 7 days from sessions that died before their stop hook.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
-# --- verify-revise brake: compare current diff to review-time diff ------------
-# get_diff_signature: content-hash signature of the change surface.
-# Returns a SHA256 hex string (or 'empty'). Unlike a file COUNT, this changes
-# on in-place edits — the dominant revision pattern after a REVISE verdict.
 get_diff_signature() {
     local repo_root="$1" sp="$repo_root/.scope.json"
     local sig=""
@@ -208,15 +204,6 @@ fi
 
 [ "$loop_count" -ge "$loop_limit" ] && emit_none loop_limit
 
-# --- collect changed files (.scope.json files[] primary; git fallback) ---------
-# Priority:
-#   1. .scope.json present → files[] is the authoritative per-session edit
-#      surface (maintained by scope-refresh on every afterFileEdit). Empty
-#      files[] → agent made no session edits → no_diff (read-only turns don't
-#      fire a review). Root fix: previously git diff HEAD was preferred, which
-#      counted pre-existing uncommitted files the agent only READ as "changed
-#      this session".
-#   2. No .scope.json → git diff HEAD + untracked, unchanged.
 diff_stat=""
 is_git_repo=false
 edited=""
