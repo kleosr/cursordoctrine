@@ -107,16 +107,26 @@ if ($files.Count -eq 0) { exit 0 }
 # Verifications recorded so far (hook-owned by this hook).
 $verifications = @()
 if ($sj.PSObject.Properties['verifications'] -and $sj.verifications) { $verifications = @($sj.verifications) }
-$verifiedSteps = @{}
+# Two views: $anyVerdict = any verdict (PENDING/ACCEPT/REVISE) drives the Phase 2
+# emit-once skip; $finalVerdict = ACCEPT/REVISE only drives the Phase 1 guard, so
+# an auto-seeded PENDING does NOT block a scraped ACCEPT/REVISE from upgrading it
+# (the doctrine's "upgraded to ACCEPT/REVISE from chat" promise).
+$anyVerdict = @{}
+$finalVerdict = @{}
 foreach ($v in $verifications) {
-    if ($v -and $v.PSObject.Properties['step']) {
-        try { $verifiedSteps[[int]$v.step] = $true } catch { }
+    if ($v -and $v.PSObject.Properties['step'] -and $v.PSObject.Properties['verdict']) {
+        try {
+            $s = [int]$v.step
+            $anyVerdict[$s] = $true
+            $vd = [string]$v.verdict
+            if ($vd -ieq 'ACCEPT' -or $vd -ieq 'REVISE') { $finalVerdict[$s] = $true }
+        } catch { }
     }
 }
 
 # --- Phase 1: scrape most-recent ACCEPT/REVISE verdict from the transcript ----
 $scraped = Get-LastVerdict $obj
-if ($scraped -and -not $verifiedSteps.ContainsKey($scraped.step)) {
+if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step)) {
     $entry = [PSCustomObject]@{
         step      = $scraped.step
         verdict   = $scraped.verdict
@@ -131,7 +141,11 @@ if ($scraped -and -not $verifiedSteps.ContainsKey($scraped.step)) {
         else { $newVerifs.Add($v) | Out-Null }
     }
     if (-not $replaced) { $newVerifs.Add($entry) | Out-Null }
-    $verifiedSteps[$scraped.step] = $true
+    # Sync $verifications to the just-built list so Phase 2 below appends onto it
+    # instead of the stale top-of-hook copy — otherwise the PENDING write-back
+    # drops this scraped verdict when both phases fire for different steps.
+    $verifications = @($newVerifs.ToArray())
+    $anyVerdict[$scraped.step] = $true; $finalVerdict[$scraped.step] = $true
     try {
         $ordered = [ordered]@{}
         foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
@@ -149,7 +163,7 @@ foreach ($f in $files) { $filesSet[$f.ToLowerInvariant()] = $true }
 foreach ($step in $decomp) {
     if (-not $step -or -not $step.PSObject.Properties['step']) { continue }
     try { $stepNum = [int]$step.step } catch { continue }
-    if ($verifiedSteps.ContainsKey($stepNum)) { continue }
+    if ($anyVerdict.ContainsKey($stepNum)) { continue }
 
     $expected = @()
     if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
