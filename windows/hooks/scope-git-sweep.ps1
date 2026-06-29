@@ -61,7 +61,6 @@ $diffPaths = @(& git -C $root diff --name-only HEAD 2>$null) +
 if (-not $diffPaths -or $diffPaths.Count -eq 0) { exit 0 }
 
 # Reuse scope-refresh's append+prune logic.
-$rootFwd = $root.Replace('\', '/').TrimEnd('/')
 $existing = @()
 if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
 $kept = New-Object System.Collections.Generic.List[string]

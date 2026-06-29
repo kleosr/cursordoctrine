@@ -270,7 +270,7 @@ if (Test-Path -LiteralPath $scopePath) {
             }
             $rel = $filtered
             if ($rel.Count -eq 0) { Emit-None 'no_diff' }
-            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat') + $rel
+            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat', '--') + $rel
             $diffStat = (& git @statArgs 2>$null) -join "`n"
         }
     }
@@ -295,7 +295,7 @@ if (Test-Path -LiteralPath $scopePath) {
             if ($rp -and -not (Test-IsPlanArtifactPath $rp) -and -not $rel.Contains($rp)) { $rel.Add($rp) }
         }
         if ($rel.Count -gt 0) {
-            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat') + $rel
+            $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat', '--') + $rel
             $diffStat = (& git @statArgs 2>$null) -join "`n"
         }
     }
@@ -473,7 +473,7 @@ $churn = $added + $deleted
 
 # Intent classification by keyword: surgical (bug/fix) expects a tiny diff;
 # constructive (add/build/migrate) tolerates more. Neutral uses a mid threshold.
-$intentText = ("$scopeIntent $scopePrompt").ToLower()
+$intentText = ("$scopeIntent $scopePrompt").ToLowerInvariant()
 $taskKind = 'neutral'
 if ($intentText -match 'fix|bug|typo|off-by-one|off by one|wrong|incorrect|broken|hotfix|patch|crash|regression|null pointer|exception') { $taskKind = 'surgical' }
 elseif ($intentText -match 'add|implement|create|build|new feature|migrate|refactor|rewrite|introduce|scaffold|generate|support|enable') { $taskKind = 'constructive' }
