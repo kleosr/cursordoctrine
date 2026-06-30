@@ -62,6 +62,13 @@ if ($env:FINAL_REVIEW_LOOP_LIMIT) {
     try { $loopLimit = [int]$env:FINAL_REVIEW_LOOP_LIMIT } catch { }
 }
 
+# Latch: set when the verify-revise brake already decided to re-review (the
+# post-review signature changed). The change-surface no_diff exits must NOT
+# veto a brake-decided re-review — otherwise a .scope.json-only rewrite (source
+# committed/clean) is detected by the signature but aborted by no_diff, so the
+# updated contract is never re-ingested for verification.
+$brakeReReview = $false
+
 $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
 $flag = Join-Path $pendingDir "reviewed-$cid.flag"
 
@@ -217,6 +224,7 @@ if (Test-Path $flag) {
         $curSig = Get-DiffSignature $root
         if ($curSig -ne $prevSig -and $loopCount -lt $loopLimit) {
             # Agent revised → re-review the new diff. Fall through to emit.
+            $brakeReReview = $true
             $prevShort = if ($prevSig) { $prevSig.Substring(0, [Math]::Min(8, $prevSig.Length)) } else { '(none)' }
             $curShort = $curSig.Substring(0, [Math]::Min(8, $curSig.Length))
             Write-FinalReviewDebug "re_review (prev=$prevShort cur=$curShort loop=$loopCount)"
@@ -266,17 +274,25 @@ if (Test-Path -LiteralPath $scopePath) {
         & git -C $root rev-parse --git-dir 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $isGitRepo = $true
-            $dirtySet = @{}
-            foreach ($p in @(& git -C $root diff --name-only HEAD 2>$null) + @(& git -C $root ls-files --others --exclude-standard 2>$null)) {
-                $rp = ConvertTo-ScopeRelativePath ([string]$p) $root
-                if ($rp -and -not (Test-IsPlanArtifactPath $rp)) { $dirtySet[$rp.ToLowerInvariant()] = $true }
+            # A brake-decided re-review keeps the full session surface (files[])
+            # so the role-trace and declared-note compare against everything
+            # touched this session, not just the currently-dirty subset. Otherwise
+            # a contract-only re-review (source committed/clean, only .scope.json
+            # changed) would falsely mark every expected file "missing" and every
+            # declared file "not touched". The non-brake path filters as before.
+            if (-not $brakeReReview) {
+                $dirtySet = @{}
+                foreach ($p in @(& git -C $root diff --name-only HEAD 2>$null) + @(& git -C $root ls-files --others --exclude-standard 2>$null)) {
+                    $rp = ConvertTo-ScopeRelativePath ([string]$p) $root
+                    if ($rp -and -not (Test-IsPlanArtifactPath $rp)) { $dirtySet[$rp.ToLowerInvariant()] = $true }
+                }
+                $filtered = New-Object System.Collections.Generic.List[string]
+                foreach ($p in $rel) {
+                    if ($dirtySet.ContainsKey(([string]$p).ToLowerInvariant())) { $filtered.Add($p) | Out-Null }
+                }
+                $rel = $filtered
+                if ($rel.Count -eq 0) { Emit-None 'no_diff' }
             }
-            $filtered = New-Object System.Collections.Generic.List[string]
-            foreach ($p in $rel) {
-                if ($dirtySet.ContainsKey(([string]$p).ToLowerInvariant())) { $filtered.Add($p) | Out-Null }
-            }
-            $rel = $filtered
-            if ($rel.Count -eq 0) { Emit-None 'no_diff' }
             $statArgs = @('-C', $root, 'diff', 'HEAD', '--stat', '--') + $rel
             $diffStat = (& git @statArgs 2>$null) -join "`n"
         }
@@ -308,7 +324,7 @@ if (Test-Path -LiteralPath $scopePath) {
     }
 }
 
-if ($rel.Count -eq 0) { Emit-None 'no_diff' }
+if ($rel.Count -eq 0 -and -not $brakeReReview) { Emit-None 'no_diff' }
 
 # --- review prompt body (md REQUIRED — no stale fallback) ---------------------
 $promptFile = Join-Path $HOME '.agents\hooks\final-review.md'
@@ -381,9 +397,18 @@ if (Test-Path -LiteralPath $scopePath) {
             $verifs = @()
             if ($sj.PSObject.Properties['verifications'] -and $sj.verifications) { $verifs = @($sj.verifications) }
             $verdictByStep = @{}
+            $diagnosisByStep = @{}
             foreach ($v in $verifs) {
                 if ($v -and $v.PSObject.Properties['step']) {
-                    try { $verdictByStep[[int]$v.step] = [string]$v.verdict } catch { }
+                    try {
+                        $vStep = [int]$v.step
+                        $verdictByStep[$vStep] = [string]$v.verdict
+                        if ($v.PSObject.Properties['diagnosis'] -and $v.diagnosis) {
+                            $d = ([string]$v.diagnosis).Trim()
+                            if ($d.Length -gt 120) { $d = $d.Substring(0, 120) + '...' }
+                            $diagnosisByStep[$vStep] = $d
+                        }
+                    } catch { }
                 }
             }
             $touchedSetRt = @{}
@@ -437,6 +462,9 @@ if (Test-Path -LiteralPath $scopePath) {
                           elseif ($verdict -eq 'REVISE') { 'REVISE open' }
                           else { 'touched, awaiting verdict' }
                 $rtLines.Add("  step $sn [$status] - $subtask")
+                if ($diagnosisByStep.ContainsKey($sn)) {
+                    $rtLines.Add("      evidence: $($diagnosisByStep[$sn])")
+                }
             }
             if ($malformed -gt 0) {
                 $rtLines.Add("  CONTRACT GAP: $malformed malformed decomposition entry/entries. Each entry MUST be an object { step (int), subtask (one-line), expected_files (array of paths) }. Axis 7 FAILs until fixed.")
@@ -516,6 +544,9 @@ if ($taskKind -eq 'surgical') {
 }
 
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched, +$added/-$deleted ($churn churn). Task kind: $taskKind.`n"
+if ($brakeReReview) {
+    $surfaceBlock += "RE-REVIEW (verify-revise): the contract (.scope.json) changed since the last review. Re-verify the role-trace below against the session work; the diff stat may be empty when the only change was the contract (source edits already committed).`n"
+}
 if ($minFlag) {
     $surfaceBlock += "MINIMALITY FLAG: DISPROPORTIONATE - $minWhy. Axis 4 (minimality): justify every file/line or trim to the faithful minimal edit.`n"
 } else {
