@@ -178,6 +178,10 @@ except Exception: pass' 2>/dev/null
         done <<< "$scope_files"
     fi
 
+    if [ -f "$sp" ]; then
+        sig="${sig}"$'\n'"==SCOPE-JSON=="$'\n'"$(cat "$sp" 2>/dev/null)"
+    fi
+
     _hash_str "$sig"
 }
 
@@ -415,15 +419,27 @@ for step in decomp:
                 all_expected.add(nef.lower())
 leakage = [f for f in touched if f.lower() not in all_expected]
 lines = [f"Decomposition: {len(decomp)} step(s); verdicts recorded: {len(verdict_by_step)}."]
+malformed = 0
 for step in decomp:
     if not isinstance(step, dict):
+        malformed += 1
+        preview = str(step)[:50]
+        lines.append(f"  step ? [MALFORMED - not an object; needs {{step(int), subtask, expected_files}}] - {preview}")
         continue
     sn = step.get("step")
     if not isinstance(sn, int):
+        malformed += 1
+        subtask_m = step.get("subtask") or "(no subtask)"
+        lines.append(f"  step ? [MALFORMED - missing/non-int step] - {subtask_m}")
         continue
-    subtask = step.get("subtask") or "(no subtask)"
     expected = [norm(f) for f in (step.get("expected_files") or [])]
     expected = [f for f in expected if f]
+    if not expected:
+        malformed += 1
+        subtask_m = step.get("subtask") or "(no subtask)"
+        lines.append(f"  step {sn} [MALFORMED - missing expected_files] - {subtask_m}")
+        continue
+    subtask = step.get("subtask") or "(no subtask)"
     missing = [ef for ef in expected if ef.lower() not in touched_set]
     verdict = verdict_by_step.get(sn, "(no verdict)")
     if missing:
@@ -435,6 +451,8 @@ for step in decomp:
     else:
         status = "touched, awaiting verdict"
     lines.append(f"  step {sn} [{status}] - {subtask}")
+if malformed:
+    lines.append(f"  CONTRACT GAP: {malformed} malformed decomposition entry/entries. Each entry MUST be an object {{ step (int), subtask (one-line), expected_files (array of paths) }}. Axis 7 FAILs until fixed.")
 if leakage:
     shown = ", ".join(leakage[:8])
     lines.append(f"  Touched but NOT in any step'\''s expected_files ({len(leakage)}): {shown}")

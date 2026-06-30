@@ -191,6 +191,13 @@ function Get-DiffSignature([string]$repoRoot) {
         } catch { }
     }
 
+    if ($hasScope) {
+        try {
+            $scopeRawForSig = Get-Content -LiteralPath $sp -Raw
+            if ($scopeRawForSig) { [void]$sb.Append("`n==SCOPE-JSON==`n"); [void]$sb.Append($scopeRawForSig) }
+        } catch { }
+    }
+
     $raw = $sb.ToString()
     if ([string]::IsNullOrEmpty($raw)) { return 'empty' }
 
@@ -397,14 +404,32 @@ if (Test-Path -LiteralPath $scopePath) {
             }
             $rtLines = New-Object System.Collections.Generic.List[string]
             $rtLines.Add("Decomposition: $($decomp.Count) step(s); verdicts recorded: $($verdictByStep.Count).")
+            $malformed = 0
             foreach ($step in $decomp) {
-                if (-not $step -or -not $step.PSObject.Properties['step']) { continue }
-                try { $sn = [int]$step.step } catch { continue }
-                $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask)' }
-                $expected = @()
-                if ($step.PSObject.Properties['expected_files'] -and $step.expected_files) {
-                    $expected = @($step.expected_files | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ })
+                if (-not $step -or -not ($step -is [PSCustomObject])) {
+                    $malformed++
+                    $preview = if ($step) { ([string]$step).Substring(0, [Math]::Min(50, ([string]$step).Length)) } else { '(empty/null)' }
+                    $rtLines.Add("  step ? [MALFORMED - not an object; needs {step(int), subtask, expected_files}] - $preview")
+                    continue
                 }
+                if (-not $step.PSObject.Properties['step']) {
+                    $malformed++
+                    $rtLines.Add("  step ? [MALFORMED - missing step field] - (no step)")
+                    continue
+                }
+                try { $sn = [int]$step.step } catch {
+                    $malformed++
+                    $rtLines.Add("  step ? [MALFORMED - step not an int] - $([string]$step.step)")
+                    continue
+                }
+                if (-not ($step.PSObject.Properties['expected_files'] -and $step.expected_files)) {
+                    $malformed++
+                    $subtaskBad = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask)' }
+                    $rtLines.Add("  step $sn [MALFORMED - missing expected_files] - $subtaskBad")
+                    continue
+                }
+                $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask)' }
+                $expected = @($step.expected_files | ForEach-Object { ConvertTo-ScopeRelativePath ([string]$_) $root } | Where-Object { $_ })
                 $missing = @($expected | Where-Object { -not $touchedSetRt.ContainsKey(([string]$_).ToLowerInvariant()) })
                 $verdict = if ($verdictByStep.ContainsKey($sn)) { $verdictByStep[$sn] } else { '(no verdict)' }
                 $status = if ($missing.Count -gt 0) { "missing $($missing.Count) expected" }
@@ -412,6 +437,9 @@ if (Test-Path -LiteralPath $scopePath) {
                           elseif ($verdict -eq 'REVISE') { 'REVISE open' }
                           else { 'touched, awaiting verdict' }
                 $rtLines.Add("  step $sn [$status] - $subtask")
+            }
+            if ($malformed -gt 0) {
+                $rtLines.Add("  CONTRACT GAP: $malformed malformed decomposition entry/entries. Each entry MUST be an object { step (int), subtask (one-line), expected_files (array of paths) }. Axis 7 FAILs until fixed.")
             }
             if ($leakage.Count -gt 0) {
                 $rtLines.Add("  Touched but NOT in any step's expected_files ($($leakage.Count)): " + (($leakage | Select-Object -First 8) -join ', '))
