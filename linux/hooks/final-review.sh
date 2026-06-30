@@ -64,6 +64,13 @@ case "$loop_limit" in
     ''|*[!0-9]*) loop_limit=3 ;;
 esac
 
+# Latch: set when the verify-revise brake already decided to re-review (the
+# post-review signature changed). The change-surface no_diff exits must NOT
+# veto a brake-decided re-review -- otherwise a .scope.json-only rewrite
+# (source committed/clean) is detected by the signature but aborted by no_diff,
+# so the updated contract is never re-ingested for verification.
+brake_re_review=false
+
 pending_dir="$HOME/.cursor/.hooks-pending"
 flag="$pending_dir/reviewed-$cid.flag"
 
@@ -192,6 +199,7 @@ if [ -f "$flag" ]; then
         prev_sig="${prev_sig%%$'\n'*}"
         cur_sig="$(get_diff_signature "$root")"
         if [ "$cur_sig" != "$prev_sig" ] && [ "$loop_count" -lt "$loop_limit" ]; then
+            brake_re_review=true
             prev_short="${prev_sig:0:8}"
             [ -n "$prev_short" ] || prev_short='(none)'
             cur_short="${cur_sig:0:8}"
@@ -244,17 +252,25 @@ EOF
     if [ -n "$(printf '%s' "$edited" | grep -v '^$')" ]; then
         if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
             is_git_repo=true
-            dirty="$(git -C "$root" diff HEAD --name-only 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
-            dirty="$(printf '%s\n' "$dirty" | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)')"
-            filtered=""
-            while IFS= read -r p; do
-                [ -n "$p" ] || continue
-                if printf '%s\n' "$dirty" | grep -qxF "$p" 2>/dev/null; then
-                    filtered="${filtered}${p}"$'\n'
-                fi
-            done <<< "$edited"
-            edited="$filtered"
-            [ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || emit_none no_diff
+            # A brake-decided re-review keeps the full session surface (files[])
+            # so the role-trace and declared-note compare against everything
+            # touched this session, not just the currently-dirty subset. Otherwise
+            # a contract-only re-review (source committed/clean, only .scope.json
+            # changed) would falsely mark every expected file "missing" and every
+            # declared file "not touched". The non-brake path filters as before.
+            if [ "$brake_re_review" != true ]; then
+                dirty="$(git -C "$root" diff HEAD --name-only 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+                dirty="$(printf '%s\n' "$dirty" | grep -v '^$' | grep -viE '^\.cursor/plans(/|$)')"
+                filtered=""
+                while IFS= read -r p; do
+                    [ -n "$p" ] || continue
+                    if printf '%s\n' "$dirty" | grep -qxF "$p" 2>/dev/null; then
+                        filtered="${filtered}${p}"$'\n'
+                    fi
+                done <<< "$edited"
+                edited="$filtered"
+                [ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || emit_none no_diff
+            fi
             stat_files=()
             while IFS= read -r p; do
                 [ -n "$p" ] && stat_files+=("$p")
@@ -299,7 +315,7 @@ EOF
     fi
 fi
 
-[ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || emit_none no_diff
+[ -n "$(printf '%s' "$edited" | grep -v '^$')" ] || [ "$brake_re_review" = true ] || emit_none no_diff
 
 # --- review prompt body (md REQUIRED — no stale fallback) ---------------------
 prompt_file="$HOME/.agents/hooks/final-review.md"
@@ -406,9 +422,15 @@ if not decomp:
     sys.exit(0)
 verifs = o.get("verifications") or []
 verdict_by_step = {}
+diagnosis_by_step = {}
 for v in verifs:
     if isinstance(v, dict) and isinstance(v.get("step"), int):
         verdict_by_step[v["step"]] = str(v.get("verdict") or "")
+        d = str(v.get("diagnosis") or "").strip()
+        if d:
+            if len(d) > 120:
+                d = d[:120] + "..."
+            diagnosis_by_step[v["step"]] = d
 touched_set = set(f.lower() for f in touched)
 all_expected = set()
 for step in decomp:
@@ -451,6 +473,8 @@ for step in decomp:
     else:
         status = "touched, awaiting verdict"
     lines.append(f"  step {sn} [{status}] - {subtask}")
+    if sn in diagnosis_by_step:
+        lines.append(f"      evidence: {diagnosis_by_step[sn]}")
 if malformed:
     lines.append(f"  CONTRACT GAP: {malformed} malformed decomposition entry/entries. Each entry MUST be an object {{ step (int), subtask (one-line), expected_files (array of paths) }}. Axis 7 FAILs until fixed.")
 if leakage:
@@ -558,6 +582,10 @@ case "$task_kind" in
 esac
 
 surface_block="Session footprint: ${unique_files} file(s) touched, +${added}/-${deleted} (${churn} churn). Task kind: ${task_kind}."
+if [ "$brake_re_review" = true ]; then
+    surface_block="${surface_block}
+RE-REVIEW (verify-revise): the contract (.scope.json) changed since the last review. Re-verify the role-trace below against the session work; the diff stat may be empty when the only change was the contract (source edits already committed)."
+fi
 if [ "$min_flag" = true ]; then
     surface_block="${surface_block}
 MINIMALITY FLAG: DISPROPORTIONATE - ${min_why}. Axis 4 (minimality): justify every file/line or trim to the faithful minimal edit."
