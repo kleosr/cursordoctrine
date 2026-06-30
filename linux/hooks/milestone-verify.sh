@@ -19,9 +19,7 @@
 # never decides correctness — only the model does.
 #
 # Silent exits (YAGNI rung 1): .scope.json missing; all steps verified; no
-# expected_files completed; kill switch set; no python3 (verdict-scrape needs
-# regex on transcript text; jq alone is not enough — fail open silently, the
-# doctrine still applies). When decomposition is empty BUT the session has
+# expected_files completed; kill switch set. When decomposition is empty BUT the session has
 # touched >= 1 file, a DECOMPOSE nudge fires instead (per-cid throttle,
 # mirrors intent-anchor) — the doctrine requires decomposition for multi-file
 # tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
@@ -113,8 +111,11 @@ if ! have_py; then
     files_list="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
     [ -n "$files_list" ] || exit 0
 
-    # Build verified-steps set from existing verifications.
+    # Two views: verified_steps = any verdict (PENDING/ACCEPT/REVISE) for the
+    # Phase 2 emit-once skip; final_steps = ACCEPT/REVISE only for the Phase 1
+    # guard, so an auto-seeded PENDING does not block a scraped ACCEPT/REVISE.
     verified_steps="$(printf '%s' "$scope_raw" | jq -r '.verifications[]? | .step' 2>/dev/null)"
+    final_steps="$(printf '%s' "$scope_raw" | jq -r '.verifications[]? | select(.verdict=="ACCEPT" or .verdict=="REVISE") | .step' 2>/dev/null)"
 
     # Phase 1: grep-based verdict scrape from transcript.
     tp="$(json_get "$input" transcript_path)"
@@ -151,7 +152,7 @@ if ! have_py; then
             esac
             sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+' | head -1)"
             # Only record if not already verified.
-            if [ -n "$sv_step" ] && ! printf '%s\n' "$verified_steps" | grep -qx "$sv_step"; then
+            if [ -n "$sv_step" ] && ! printf '%s\n' "$final_steps" | grep -qx "$sv_step"; then
                 # Update .scope.json verifications via jq.
                 new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$sv_step" --arg verb "$sv_verb" '
                     .verifications = ((.verifications // []) | map(select(.step != $sn)))
@@ -161,6 +162,7 @@ if ! have_py; then
                     printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
                     scope_raw="$new_raw"
                     verified_steps="$(printf '%s' "$verified_steps""$'\n'"$sv_step")"
+                    final_steps="$(printf '%s' "$final_steps""$'\n'"$sv_step")"
                 fi
             fi
         fi
@@ -229,10 +231,13 @@ if not files:
     sys.exit(0)
 
 verifs = scope.get("verifications") or []
-verified = set()
+verified = set()        # any verdict (PENDING/ACCEPT/REVISE) — Phase 2 emit-once skip
+final_verdicts = set()  # ACCEPT/REVISE only — Phase 1 guard, so PENDING is upgradeable
 for v in verifs:
     if isinstance(v, dict) and isinstance(v.get("step"), int):
         verified.add(v["step"])
+        if v.get("verdict") in ("ACCEPT", "REVISE"):
+            final_verdicts.add(v["step"])
 
 # --- Phase 1: scrape most-recent ACCEPT/REVISE from assistant turns ---------
 try:
@@ -295,17 +300,20 @@ if tp and os.path.isfile(tp):
                         verdict, step_num = "REVISE", int(m.group(1))
         if verdict is None or step_num is None:
             continue
-        if step_num > 0 and step_num not in verified:
+        if step_num > 0 and step_num not in final_verdicts:
             new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == step_num)]
             new_verifs.append({"step": step_num, "verdict": verdict, "diagnosis": diag})
             scope["verifications"] = new_verifs
             verified.add(step_num)
+            final_verdicts.add(step_num)
             try:
                 with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
                     json.dump(scope, fh, indent=2, ensure_ascii=False)
             except Exception:
                 pass
         break
+
+verifs = scope.get("verifications") or []
 
 # --- Phase 2: emit reminder for first unverified completed milestone --------
 files_set = set(f.lower() for f in files)

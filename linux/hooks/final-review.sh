@@ -79,13 +79,12 @@ root="$(resolve_project_root "$input")"
 # Sweep state older than 7 days from sessions that died before their stop hook.
 find "$pending_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
 
-# --- verify-revise brake: compare current diff to review-time diff ------------
-# get_diff_signature: content-hash signature of the change surface.
-# Returns a SHA256 hex string (or 'empty'). Unlike a file COUNT, this changes
-# on in-place edits — the dominant revision pattern after a REVISE verdict.
 get_diff_signature() {
     local repo_root="$1" sp="$repo_root/.scope.json"
     local sig=""
+    # Untracked files larger than this are skipped from the signature: a 100MB
+    # generated artifact would dominate the hash and slow the brake. Trade-off:
+    # an in-place edit to a >1MB untracked file is invisible to verify-revise.
     local max_bytes=1048576
 
     # Helper: hash a string via sha256sum / shasum / md5sum (first available).
@@ -179,6 +178,10 @@ except Exception: pass' 2>/dev/null
         done <<< "$scope_files"
     fi
 
+    if [ -f "$sp" ]; then
+        sig="${sig}"$'\n'"==SCOPE-JSON=="$'\n'"$(cat "$sp" 2>/dev/null)"
+    fi
+
     _hash_str "$sig"
 }
 
@@ -205,15 +208,6 @@ fi
 
 [ "$loop_count" -ge "$loop_limit" ] && emit_none loop_limit
 
-# --- collect changed files (.scope.json files[] primary; git fallback) ---------
-# Priority:
-#   1. .scope.json present → files[] is the authoritative per-session edit
-#      surface (maintained by scope-refresh on every afterFileEdit). Empty
-#      files[] → agent made no session edits → no_diff (read-only turns don't
-#      fire a review). Root fix: previously git diff HEAD was preferred, which
-#      counted pre-existing uncommitted files the agent only READ as "changed
-#      this session".
-#   2. No .scope.json → git diff HEAD + untracked, unchanged.
 diff_stat=""
 is_git_repo=false
 edited=""
@@ -425,15 +419,27 @@ for step in decomp:
                 all_expected.add(nef.lower())
 leakage = [f for f in touched if f.lower() not in all_expected]
 lines = [f"Decomposition: {len(decomp)} step(s); verdicts recorded: {len(verdict_by_step)}."]
+malformed = 0
 for step in decomp:
     if not isinstance(step, dict):
+        malformed += 1
+        preview = str(step)[:50]
+        lines.append(f"  step ? [MALFORMED - not an object; needs {{step(int), subtask, expected_files}}] - {preview}")
         continue
     sn = step.get("step")
     if not isinstance(sn, int):
+        malformed += 1
+        subtask_m = step.get("subtask") or "(no subtask)"
+        lines.append(f"  step ? [MALFORMED - missing/non-int step] - {subtask_m}")
         continue
-    subtask = step.get("subtask") or "(no subtask)"
     expected = [norm(f) for f in (step.get("expected_files") or [])]
     expected = [f for f in expected if f]
+    if not expected:
+        malformed += 1
+        subtask_m = step.get("subtask") or "(no subtask)"
+        lines.append(f"  step {sn} [MALFORMED - missing expected_files] - {subtask_m}")
+        continue
+    subtask = step.get("subtask") or "(no subtask)"
     missing = [ef for ef in expected if ef.lower() not in touched_set]
     verdict = verdict_by_step.get(sn, "(no verdict)")
     if missing:
@@ -445,6 +451,8 @@ for step in decomp:
     else:
         status = "touched, awaiting verdict"
     lines.append(f"  step {sn} [{status}] - {subtask}")
+if malformed:
+    lines.append(f"  CONTRACT GAP: {malformed} malformed decomposition entry/entries. Each entry MUST be an object {{ step (int), subtask (one-line), expected_files (array of paths) }}. Axis 7 FAILs until fixed.")
 if leakage:
     shown = ", ".join(leakage[:8])
     lines.append(f"  Touched but NOT in any step'\''s expected_files ({len(leakage)}): {shown}")

@@ -46,7 +46,7 @@ $root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }
 
 $scopePath = Join-Path $root '.scope.json'
-$defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
+$defaultAcceptance = $DefaultAcceptance
 
 function Get-PromptTokenSet([string]$p) {
     $normalized = [regex]::Replace($p.ToLowerInvariant(), '[^a-z0-9 ]', ' ')
@@ -100,16 +100,7 @@ try {
         if ($existing.PSObject.Properties['prompt']) { $oldPrompt = [string]$existing.prompt }
         if (Test-TopicChanged $prompt $oldPrompt) {
             $ordered = New-ResetScope $prompt
-            # Clear per-cid nudge throttle flags so the new task gets FRESH
-            # nudges. Without this, a topic change within the same conversation
-            # leaves stale throttle state from the OLD task (lastCount from the
-            # old, larger files[]) that permanently silences intent-anchor and
-            # milestone-verify for the new task whenever the new task's file
-            # count <= the old task's. This was the root cause of intent staying
-            # empty across task switches: the agent got ZERO nudges, not ignored
-            # ones. (intent-anchor/milestone-verify derive the same cid via
-            # Get-SafeConversationId, so deleting these flags resets their
-            # throttle for the new task.)
+            # ponytail: topic change must clear per-cid nudge flags or stale filesCount silences intent-anchor/decompose for the new task
             $cid = Get-SafeConversationId $obj
             if ($cid) {
                 $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
@@ -126,11 +117,15 @@ try {
                 if ($p.Name -in @('trace', 'allow_growth')) { continue }
                 $ordered[$p.Name] = $p.Value
             }
-            if (-not $ordered.Contains('intent')) { $ordered['intent'] = '' }
+            $intentVal = $null
+            if ($ordered.Contains('intent')) { $intentVal = $ordered['intent'] }
+            if ($null -eq $intentVal -or -not ($intentVal -is [string])) { $ordered['intent'] = '' }
             if (-not $ordered.Contains('decomposition') -or $null -eq $ordered['decomposition']) { $ordered['decomposition'] = @() }
             if (-not $ordered.Contains('verifications') -or $null -eq $ordered['verifications']) { $ordered['verifications'] = @() }
             if (-not $ordered.Contains('files') -or $null -eq $ordered['files']) { $ordered['files'] = @() }
-            if (-not $ordered.Contains('acceptance') -or $null -eq $ordered['acceptance'] -or $ordered['acceptance'].GetType().Name -ne 'String') { $ordered['acceptance'] = '' }
+            $acc = $null
+            if ($ordered.Contains('acceptance')) { $acc = $ordered['acceptance'] }
+            if ($null -eq $acc -or -not ($acc -is [string])) { $ordered['acceptance'] = '' }
         }
     } else {
         $ordered = New-ResetScope $prompt

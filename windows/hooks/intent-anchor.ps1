@@ -74,7 +74,7 @@ $intent = ''
 if ($sj.PSObject.Properties['intent']) { $intent = [string]$sj.intent }
 $acceptance = ''
 if ($sj.PSObject.Properties['acceptance'] -and $sj.acceptance -is [string]) { $acceptance = [string]$sj.acceptance }
-$defaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
+$defaultAcceptance = $DefaultAcceptance
 
 $intentEmpty = [string]::IsNullOrWhiteSpace($intent)
 $intentDraft = $intent -match '^\[DRAFT\]'

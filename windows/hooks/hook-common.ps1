@@ -1,8 +1,9 @@
 # hook-common.ps1 - shared helpers for Cursor agent hooks.
 # Dot-source from sibling scripts: . "$PSScriptRoot\hook-common.ps1"
 #
-# Minimal: only what final-review.ps1 and inject-doctrine.ps1 actually use.
-# No state directory, no .scope.json bookkeeping, no subagent folding.
+# Shared by all hooks in this pack. JSON parsing uses native ConvertFrom-Json.
+
+$DefaultAcceptance = 'Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
 
 function Read-HookStdin {
     $ms = [System.IO.MemoryStream]::new()
@@ -160,13 +161,6 @@ function Expand-AgentPaths([string]$text) {
     return $text.Replace('~/', "$homeFwd/")
 }
 
-function Resolve-AgentPath([string]$p) {
-    if (-not $p) { return $p }
-    $p = $p.Trim()
-    if ($p -match '^~[\\/]') { $p = Join-Path $HOME ($p.Substring(2)) }
-    return (ConvertTo-FwdPath $p)
-}
-
 # Strip secrets before re-broadcasting a user prompt in a followup.
 function Redact-SecretsFromIntent([string]$text) {
     if (-not $text) { return $text }
@@ -195,11 +189,16 @@ function Get-EmbeddedOriginalRequest([string]$text) {
     return ''
 }
 
-# Extract the last *human* user <user_query> from a Cursor transcript JSONL.
-# Walks backward, skipping hook-generated turns. Returns '' if none.
-# This is the intent-trace primitive: the final-review followup prepends it so
-# the model must tie every diff hunk to a concrete request. Anything untraceable
-# is a hallucinated requirement.
+function Get-ContentText($content) {
+    if (-not $content) { return '' }
+    if ($content -is [string]) { return $content }
+    $text = ''
+    foreach ($part in $content) {
+        if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
+    }
+    return $text
+}
+
 # Last <user_query> text from the transcript, including hook-generated turns.
 # Used by final-review to detect whether the review follow-up just completed.
 function Get-LastRawUserQueryText($obj) {
@@ -214,16 +213,7 @@ function Get-LastRawUserQueryText($obj) {
             $rec = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
         } catch { continue }
         if (-not $rec -or -not $rec.message) { continue }
-        $content = $rec.message.content
-        if (-not $content) { continue }
-        $text = ''
-        if ($content -is [string]) {
-            $text = $content
-        } else {
-            foreach ($part in $content) {
-                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
-            }
-        }
+        $text = Get-ContentText $rec.message.content
         if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
             return $Matches[1].Trim()
         }
@@ -242,6 +232,11 @@ function Write-FinalReviewDebug([string]$reason) {
     } catch { }
 }
 
+# Extract the last *human* user <user_query> from a Cursor transcript JSONL.
+# Walks backward, skipping hook-generated turns. Returns '' if none.
+# This is the intent-trace primitive: the final-review followup prepends it so
+# the model must tie every diff hunk to a concrete request. Anything untraceable
+# is a hallucinated requirement.
 function Get-LastUserQuery($obj) {
     $tp = ''
     if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
@@ -255,16 +250,7 @@ function Get-LastUserQuery($obj) {
             $rec = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
         } catch { continue }
         if (-not $rec -or -not $rec.message) { continue }
-        $content = $rec.message.content
-        if (-not $content) { continue }
-        $text = ''
-        if ($content -is [string]) {
-            $text = $content
-        } else {
-            foreach ($part in $content) {
-                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
-            }
-        }
+        $text = Get-ContentText $rec.message.content
         if ($text -match '(?s)<user_query>\s*(.+?)\s*</user_query>') {
             $q = $Matches[1].Trim()
             if (Test-IsHookGeneratedQuery $q) {
@@ -309,16 +295,7 @@ function Get-LastVerdict($obj) {
         if (-not $rec) { continue }
         $msg = $rec.message
         if (-not $msg) { $msg = $rec }
-        $content = $msg.content
-        if (-not $content) { continue }
-        $text = ''
-        if ($content -is [string]) {
-            $text = $content
-        } else {
-            foreach ($part in $content) {
-                if ($part.type -eq 'text' -and $part.text) { $text += $part.text }
-            }
-        }
+        $text = Get-ContentText $msg.content
         if (-not $text) { continue }
 
         # Canonical: ACCEPT step N [: diagnosis] / REVISE step N [: diagnosis]

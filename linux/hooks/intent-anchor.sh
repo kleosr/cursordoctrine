@@ -56,8 +56,6 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 # Need python3 OR jq for the field reads. Without either, fail open silently.
 if ! have_jq && ! have_py; then exit 0; fi
 
-default_acceptance='Biome --error-on-warnings + Semgrep --config auto --error pass clean; typecheck/build passes; the described problem no longer reproduces.'
-
 if have_jq; then
     intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
     acceptance="$(printf '%s' "$scope_raw" | jq -r 'if (.acceptance | type) == "string" then .acceptance else "" end' 2>/dev/null)"
@@ -86,7 +84,7 @@ acceptance_default=false
 [ -z "$intent" ] && intent_empty=true
 case "$intent" in "[DRAFT]"*) intent_draft=true ;; esac
 [ -z "$acceptance" ] && acceptance_default=true
-[ "$acceptance" = "$default_acceptance" ] && acceptance_default=true
+[ "$acceptance" = "$DEFAULT_ACCEPTANCE" ] && acceptance_default=true
 
 # Read flag: "filesCount:nudgeCount".
 last_count=-1

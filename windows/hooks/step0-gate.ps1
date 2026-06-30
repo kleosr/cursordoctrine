@@ -38,7 +38,7 @@ $toolName = ''
 if ($obj.PSObject.Properties['tool_name'] -and $obj.tool_name) {
     $toolName = [string]$obj.tool_name
 }
-if ($toolName -and $toolName -notmatch '^(Write|StrReplace|ApplyPatch|Edit|MultiEdit)$') { Allow-Step0 }
+if ($toolName -and $toolName -notmatch '^(Write|StrReplace|ApplyPatch|Edit|MultiEdit|Replace)$') { Allow-Step0 }
 
 $root = Resolve-ProjectRoot $obj
 if (-not $root) { Allow-Step0 }

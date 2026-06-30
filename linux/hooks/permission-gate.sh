@@ -60,11 +60,21 @@ test_deny() {
 # Anchored to start OR a command separator so `cd /tmp && rm -rf /` is caught,
 # while `git rm`, `npm run rm-cache`, `echo "rm -rf /"` stay allowed.
 test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+([^;&|]*[[:space:]])?-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*([[:space:]]+--[^[:space:]]*)*[[:space:]]+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
+# Separate -r and -f flags (rm -r -f / or rm -f -r /). The combined-flag regex
+# above requires r and f adjacent in one token (-rf/-fr) and misses the
+# equally-destructive separate-flag forms. Mirror permission-gate.ps1's
+# two-lookahead coverage. Path must follow the second flag (the common form).
+test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*[^;&|]*[[:space:]]+/' 'destructive rm -rf on absolute path (separate -r/-f flags)'
+test_deny '(^|[;&|][[:space:]]*)(sudo[[:space:]]+)?rm[[:space:]]+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*[[:space:]]+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*[^;&|]*[[:space:]]+/' 'destructive rm -rf on absolute path (separate -f/-r flags)'
 test_deny ':\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:' 'fork-bomb pattern'
 test_deny '(^|[;&|][[:space:]]*)bash[[:space:]]+-c[[:space:]]+[''"]?[[:space:]]*:[[:space:]]*\(\)[[:space:]]*\{' 'fork-bomb pattern via bash -c'
 test_deny 'curl[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
 test_deny 'wget[[:space:]].*\|[[:space:]]*(sudo[[:space:]]*)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
-test_deny 'git[[:space:]]+push[[:space:]]+.*--force(-with-lease)?([[:space:]"'"'"']|$)' 'git push --force'
+# --force-with-lease is the SAFE variant (aborts if remote moved); allow it so
+# users aren't pushed toward the dangerous bare --force. Match --force NOT
+# followed by -with-lease. ERE has no lookahead; "force then whitespace/quote/EOL"
+# excludes "-force-with-lease" because the hyphen continues the token.
+test_deny 'git[[:space:]]+push[[:space:]]+.*--force([[:space:]"'"'"']|$)' 'git push --force (use --force-with-lease for the safe variant)'
 test_deny 'git[[:space:]]+push[[:space:]]+(-f|--force)([[:space:]"'"'"']|$)' 'git push -f / --force'
 test_deny 'git[[:space:]]+reset[[:space:]]+--hard' 'git reset --hard (data loss)'
 if printf '%s' "$cmd" | grep -qE 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f' &&
@@ -75,8 +85,10 @@ test_deny 'dd[[:space:]].*of=/dev/(sd|nvme|hd|xvd)' 'dd to block device'
 test_deny 'mkfs(\.[a-z0-9]+)?[[:space:]]+/dev/' 'mkfs on device'
 test_deny 'chmod[[:space:]]+-R[[:space:]]+777[[:space:]]+/' 'chmod -R 777 on root'
 test_deny 'chown[[:space:]]+-R[[:space:]]+[^[:space:]]+[[:space:]]+/' 'chown -R on root'
-if printf '%s' "$cmd" | grep -qE '^(npm|pnpm|yarn)[[:space:]]+publish([[:space:]]|$)' &&
-   ! printf '%s' "$cmd" | grep -qE '^(npm|pnpm|yarn)[[:space:]]+publish[^;&|]*--dry-run'; then
+# Anchor on start OR a command separator so `cd pkg && npm publish` is caught,
+# not just publish at line start. Mirrors the rm rule's separator logic.
+if printf '%s' "$cmd" | grep -qE '(^|[;&|][[:space:]]*)(npm|pnpm|yarn)[[:space:]]+publish([[:space:]]|$)' &&
+   ! printf '%s' "$cmd" | grep -qE '(npm|pnpm|yarn)[[:space:]]+publish[^;&|]*--dry-run'; then
     deny 'package publish (use ship-hook, not direct publish)'
 fi
 

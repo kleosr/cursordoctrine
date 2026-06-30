@@ -70,7 +70,7 @@ Test-Deny '(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+(?=[^;&|]*-[a-zA-Z]*[rR])(?=[^;&|]*-[a
 Test-Deny ':\(\)\{\s*:\|:&\s*\};:|bash\s+-c\s+["'']*:\s*\(\)\{' 'reverse shell / fork-bomb pattern'
 Test-Deny 'curl\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
 Test-Deny 'wget\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
-Test-Deny 'git\s+push\s+.*--force(-with-lease)?(\s|$)' 'git push --force'
+Test-Deny 'git\s+push\s+.*--force(?!\-with\-lease)(\s|$)' 'git push --force (use --force-with-lease for the safe variant)'
 Test-Deny 'git\s+push\s+(-f|--force)(\s|$)' 'git push -f / --force'
 Test-Deny 'git\s+reset\s+--hard' 'git reset --hard (data loss)'
 Test-Deny 'git\s+clean\s+(?![^;&|]*(?:-n|--dry-run))-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
@@ -78,7 +78,7 @@ Test-Deny 'dd\s.*of=/dev/(sd|nvme|hd|xvd)' 'dd to block device'
 Test-Deny 'mkfs(\.[a-z0-9]+)?\s+/dev/' 'mkfs on device'
 Test-Deny 'chmod\s+-R\s+777\s+/' 'chmod -R 777 on root'
 Test-Deny 'chown\s+-R\s+[^\s]+\s+/' 'chown -R on root'
-Test-Deny '^(npm|pnpm|yarn)\s+publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
+Test-Deny '(?:^|[;&|]\s*)(npm|pnpm|yarn)\s+publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
 
 # --- Windows equivalents (the agent shell here IS PowerShell) ---------------
 # iwr/irm | iex is the moral twin of curl|sh.
