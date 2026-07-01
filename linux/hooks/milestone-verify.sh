@@ -107,6 +107,7 @@ if ! have_py; then
     # Parse decomposition + files + verifications from .scope.json via jq.
     decomp_len="$(printf '%s' "$scope_raw" | jq -r '.decomposition | length' 2>/dev/null)"
     [ "$decomp_len" -gt 0 ] 2>/dev/null || exit 0
+    decomp_steps="$(printf '%s' "$scope_raw" | jq -r '.decomposition[]? | .step' 2>/dev/null)"
 
     files_list="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
     [ -n "$files_list" ] || exit 0
@@ -151,25 +152,29 @@ if ! have_py; then
                 revise)    sv_verb="REVISE" ;;
             esac
             sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+' | head -1)"
-            # Only record if not already verified.
-            if [ -n "$sv_step" ] && ! printf '%s\n' "$final_steps" | grep -qx "$sv_step"; then
+            # Only record if the step is declared in decomposition[] and not
+            # already verified — a scraped step not in decomposition[] is
+            # hallucinated/stale and would pollute verifications[].
+            if [ -n "$sv_step" ] && printf '%s\n' "$decomp_steps" | grep -qx "$sv_step" && ! printf '%s\n' "$final_steps" | grep -qx "$sv_step"; then
                 # Update .scope.json verifications via jq.
                 new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$sv_step" --arg verb "$sv_verb" '
                     .verifications = ((.verifications // []) | map(select(.step != $sn)))
                     + [{"step": $sn, "verdict": $verb, "diagnosis": ""}]
                 ' 2>/dev/null)"
                 if [ -n "$new_raw" ]; then
-                    printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                    write_scope_json_atomic "$scope_path" "$new_raw"
                     scope_raw="$new_raw"
-                    verified_steps="$(printf '%s' "$verified_steps""$'\n'"$sv_step")"
-                    final_steps="$(printf '%s' "$final_steps""$'\n'"$sv_step")"
+                    verified_steps="$(printf '%s\n%s' "$verified_steps" "$sv_step")"
+                    final_steps="$(printf '%s\n%s' "$final_steps" "$sv_step")"
                 fi
             fi
         fi
     fi
 
     # Phase 2: detect unverified completed milestone via jq.
-    msg="$(printf '%s' "$scope_raw" | jq -r --argjson verified ("[$(printf '%s\n' "$verified_steps" | grep -v '^$' | paste -sd,)]") '
+    _verified_csv="$(printf '%s\n' "$verified_steps" | grep -v '^$' | paste -sd,)"
+    _verified_json="[${_verified_csv}]"
+    msg="$(printf '%s' "$scope_raw" | jq -r --argjson verified "$_verified_json" '
         (.files // []) as $files |
         ($files | map(ltrimstr("/") | ascii_downcase)) as $files_lc |
         ([.decomposition[]?] as $decomp |
@@ -192,7 +197,7 @@ if ! have_py; then
             + [{"step": $sn, "verdict": "PENDING", "diagnosis": "auto: all expected_files touched"}]
         ' 2>/dev/null)"
         if [ -n "$new_raw" ]; then
-            printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+            write_scope_json_atomic "$scope_path" "$new_raw"
         fi
     fi
     if [ -n "$msg" ]; then
@@ -207,6 +212,22 @@ fi
 msg="$(SCOPE_RAW="$scope_raw" SCOPE_PATH="$scope_path" INPUT="$input" python3 -c '
 import json, os, re, sys
 
+# Atomic .scope.json write: write temp then os.replace. Fixes the truncation
+# bug where open("w") truncates the live file before json.dump, so a failed
+# write empties the whole contract. ponytail: no cross-process lock here (the
+# shell paths use write_scope_json_atomic for that); ceiling = two python
+# hooks writing concurrently. Upgrade = flock the temp+replace.
+def atomic_write_scope(scope):
+    path = os.environ["SCOPE_PATH"]
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(scope, fh, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        try: os.remove(tmp)
+        except Exception: pass
+
 try:
     scope = json.loads(os.environ["SCOPE_RAW"])
 except Exception:
@@ -215,6 +236,7 @@ except Exception:
 decomp = scope.get("decomposition") or []
 if not decomp:
     sys.exit(0)
+decomp_steps = set(d.get("step") for d in decomp if isinstance(d, dict) and isinstance(d.get("step"), int))
 
 def norm(p):
     parts = []
@@ -279,38 +301,33 @@ if tp and os.path.isfile(tp):
                     text += p["text"]
         if not text:
             continue
-        # Try canonical first, then ACCEPTED/REVISED, then loosened step-N phrasings.
-        verdict = step_num = diag = None
-        m = pattern_canonical.search(text)
-        if m:
-            verdict, step_num, diag = m.group(1).upper(), int(m.group(2)), (m.group(3) or "").strip()
-        else:
-            m = pattern_ed.search(text)
-            if m:
-                verb = m.group(1).upper()
-                verdict = "ACCEPT" if verb == "ACCEPTED" else "REVISE"
-                step_num, diag = int(m.group(2)), (m.group(3) or "").strip()
-            else:
-                m = pattern_step_accept.search(text)
-                if m:
-                    verdict, step_num = "ACCEPT", int(m.group(1))
-                else:
-                    m = pattern_step_revise.search(text)
-                    if m:
-                        verdict, step_num = "REVISE", int(m.group(1))
-        if verdict is None or step_num is None:
+        # Strip fenced code blocks so verdict keywords inside examples/quoted
+        # output are not scraped as real verdicts.
+        text = re.sub(r"```.*?```", "", text, flags=re.S)
+        # Rightmost verdict wins: the model may revise within one turn.
+        candidates = []
+        for m in pattern_canonical.finditer(text):
+            candidates.append((m.start(), m.group(1).upper(), int(m.group(2)), (m.group(3) or "").strip()))
+        for m in pattern_ed.finditer(text):
+            verb = m.group(1).upper()
+            candidates.append((m.start(), "ACCEPT" if verb == "ACCEPTED" else "REVISE", int(m.group(2)), (m.group(3) or "").strip()))
+        for m in pattern_step_accept.finditer(text):
+            candidates.append((m.start(), "ACCEPT", int(m.group(1)), ""))
+        for m in pattern_step_revise.finditer(text):
+            candidates.append((m.start(), "REVISE", int(m.group(1)), ""))
+        if not candidates:
             continue
-        if step_num > 0 and step_num not in final_verdicts:
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        _, verdict, step_num, diag = candidates[0]
+        # Only record verdicts for declared steps; a scraped step not in
+        # decomposition[] is hallucinated/stale and would pollute verifications[].
+        if step_num > 0 and step_num not in final_verdicts and step_num in decomp_steps:
             new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == step_num)]
             new_verifs.append({"step": step_num, "verdict": verdict, "diagnosis": diag})
             scope["verifications"] = new_verifs
             verified.add(step_num)
             final_verdicts.add(step_num)
-            try:
-                with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
-                    json.dump(scope, fh, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
+            atomic_write_scope(scope)
         break
 
 verifs = scope.get("verifications") or []
@@ -328,17 +345,10 @@ for step in decomp:
     if not expected:
         continue
     if all(ef.lower() in files_set for ef in expected):
-        # Auto-PENDING: record before emitting so verifications[] is never
-        # blank once a milestone is reached. The model's later ACCEPT/REVISE
-        # (Phase 1) upgrades PENDING -> ACCEPT/REVISE.
         new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == sn)]
         new_verifs.append({"step": sn, "verdict": "PENDING", "diagnosis": "auto: all expected_files touched"})
         scope["verifications"] = new_verifs
-        try:
-            with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
-                json.dump(scope, fh, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        atomic_write_scope(scope)
         subtask = step.get("subtask") or "(no subtask declared)"
         total = len(decomp)
         expected_list = ", ".join(expected)

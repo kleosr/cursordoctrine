@@ -125,8 +125,14 @@ foreach ($v in $verifications) {
 }
 
 # --- Phase 1: scrape most-recent ACCEPT/REVISE verdict from the transcript ----
+# Steps the agent actually declared — a scraped verdict for a step that is NOT
+# in decomposition[] is ignored (hallucinated or stale step number), so it does
+# not pollute verifications[] with entries the milestone logic will never clear.
+$decompSteps = @{}
+foreach ($d in $decomp) { if ($d -and $d.PSObject.Properties['step']) { try { $decompSteps[[int]$d.step] = $true } catch { } } }
+
 $scraped = Get-LastVerdict $obj
-if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step)) {
+if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step) -and $decompSteps.ContainsKey($scraped.step)) {
     $entry = [PSCustomObject]@{
         step      = $scraped.step
         verdict   = $scraped.verdict
@@ -151,7 +157,7 @@ if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step)) {
         foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
         $ordered['verifications'] = @($newVerifs.ToArray())
         $json = $ordered | ConvertTo-Json -Depth 8
-        [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-ScopeJsonAtomic $scopePath $json
         $sj = $json | ConvertFrom-Json
     } catch { }
 }
@@ -195,7 +201,7 @@ foreach ($step in $decomp) {
         foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
         $ordered['verifications'] = @($newVerifs.ToArray())
         $json = $ordered | ConvertTo-Json -Depth 8
-        [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-ScopeJsonAtomic $scopePath $json
     } catch { }
 
     $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask declared)' }

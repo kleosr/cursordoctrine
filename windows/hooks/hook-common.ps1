@@ -232,6 +232,53 @@ function Write-FinalReviewDebug([string]$reason) {
     } catch { }
 }
 
+# Atomic, crash-safe .scope.json write: serialize concurrent writers with a
+# short-retry lock sentinel, write to a temp file, then rename over the target.
+# Closes the read-modify-write race where parallel postToolUse hooks (Cursor may
+# dispatch them concurrently for parallel tool calls) each overwrote the other's
+# update, plus the half-written-file risk of a plain WriteAllText on crash.
+# ponytail: lock ceiling = stale sentinel left by a hard-killed process is swept
+# after 10s; not a true OS mutex. Upgrade = named mutex keyed on the file path.
+function Write-ScopeJsonAtomic([string]$path, [string]$json) {
+    if (-not $path) { return }
+    # Refuse empty content: an empty .scope.json is always a transform failure,
+    # never a valid state. Guarding here makes truncation impossible even if a
+    # caller forgets to check the transform output before writing.
+    if (-not $json) { return }
+    $dir = Split-Path -Parent $path
+    if (-not $dir) { return }
+    $lock = "$path.lock"
+    $stale = Get-Item -LiteralPath $lock -ErrorAction SilentlyContinue
+    if ($stale -and ((Get-Date) - $stale.LastWriteTime).TotalSeconds -gt 10) {
+        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+    }
+    $fs = $null
+    $acquired = $false
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try {
+            $fs = [System.IO.File]::Open($lock, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $acquired = $true
+            break
+        } catch {
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    if (-not $acquired) { return }
+    try {
+        $tmp = "$path.tmp"
+        [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
+        # Move-Item -Force does an atomic rename-with-overwrite on the same
+        # volume (MoveFileEx MOVEFILE_REPLACE_EXISTING). File.Replace rejects a
+        # null backup name on this .NET and File.Move refuses an existing dest.
+        Move-Item -LiteralPath $tmp -Destination $path -Force -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath "$path.tmp" -Force -ErrorAction SilentlyContinue
+    } finally {
+        if ($fs) { $fs.Close() }
+        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Extract the last *human* user <user_query> from a Cursor transcript JSONL.
 # Walks backward, skipping hook-generated turns. Returns '' if none.
 # This is the intent-trace primitive: the final-review followup prepends it so
@@ -272,15 +319,8 @@ function Get-LastUserQuery($obj) {
 # transcript. Returns $null if none. Used by milestone-verify (postToolUse) to
 # record the agent's per-step verdict into .scope.json's verifications[] without
 # requiring the agent to write the file itself. Walks backward through assistant
-# records; the first match (most recent) wins.
-#
-# Pattern set (canonical first, then loosened phrasings). The canonical
-# "ACCEPT step N" / "REVISE step N" form is still the doctrine-taught phrasing
-# and stays the primary match so existing transcripts and verify() fixtures
-# scrape unchanged. The loosened alternates catch casual model phrasings
-# ("step N looks good", "step N accepted", "step N needs work") that previously
-# left verifications[] blank. First regex to match (in order) wins; verdict verb
-# is normalized to ACCEPT/REVISE before writing.
+# records; the first turn with a verdict wins. Within that turn, the RIGHTMOST
+# verdict wins (the model may revise "ACCEPT" -> "REVISE" in one message).
 function Get-LastVerdict($obj) {
     $tp = ''
     if ($obj -and $obj.PSObject.Properties['transcript_path']) { $tp = [string]$obj.transcript_path }
@@ -297,34 +337,42 @@ function Get-LastVerdict($obj) {
         if (-not $msg) { $msg = $rec }
         $text = Get-ContentText $msg.content
         if (-not $text) { continue }
-
-        # Canonical: ACCEPT step N [: diagnosis] / REVISE step N [: diagnosis]
-        if ($text -match '(?mi)\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$') {
-            $verdict = $Matches[1].ToUpperInvariant()
-            try { $stepNum = [int]$Matches[2] } catch { continue }
-            $diag = ''
-            if ($Matches.Count -ge 4 -and $Matches[3]) { $diag = ([string]$Matches[3]).Trim() }
-            return @{ verdict = $verdict; step = $stepNum; diagnosis = $diag }
-        }
-        # Loosened: "ACCEPTED step N" / "REVISED step N"
-        if ($text -match '(?mi)\b(ACCEPTED|REVISED)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$') {
-            $verb = $Matches[1].ToUpperInvariant()
-            $verdict = if ($verb -eq 'ACCEPTED') { 'ACCEPT' } else { 'REVISE' }
-            try { $stepNum = [int]$Matches[2] } catch { continue }
-            $diag = ''
-            if ($Matches.Count -ge 4 -and $Matches[3]) { $diag = ([string]$Matches[3]).Trim() }
-            return @{ verdict = $verdict; step = $stepNum; diagnosis = $diag }
-        }
-        # Loosened: "step N <accepting-phrase>" — accept/approve/done/complete/good/ok/pass
-        if ($text -match '(?mi)\bstep\s+(\d+)\s+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)\b') {
-            try { $stepNum = [int]$Matches[1] } catch { continue }
-            return @{ verdict = 'ACCEPT'; step = $stepNum; diagnosis = '' }
-        }
-        # Loosened: "step N <rejecting-phrase>" — revise/fail/broken/needs fix
-        if ($text -match '(?mi)\bstep\s+(\d+)\s+(revise[ds]?|needs?\s+fix|fails?|failed|broken|reject(?:ed)?)\b') {
-            try { $stepNum = [int]$Matches[1] } catch { continue }
-            return @{ verdict = 'REVISE'; step = $stepNum; diagnosis = '' }
-        }
+        $v = Get-LastVerdictFromText $text
+        if ($v) { return $v }
     }
     return $null
+}
+
+# Returns the rightmost verdict in a single assistant turn's text, or $null.
+# Strips fenced code blocks first so verdict keywords shown inside examples or
+# quoted output are not scraped as real verdicts. Collects every match of the
+# canonical, ACCEPTED/REVISED, and loosened step-N phrasings, then picks the one
+# with the largest start index — the last verdict the model uttered.
+function Get-LastVerdictFromText([string]$text) {
+    if (-not $text) { return $null }
+    $stripped = [regex]::Replace($text, '(?s)```.*?```', '')
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($m in [regex]::Matches($stripped, '(?i)\b(ACCEPT|REVISE)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$')) {
+        try { $sn = [int]$m.Groups[2].Value } catch { continue }
+        $diag = if ($m.Groups[3].Success) { ([string]$m.Groups[3].Value).Trim() } else { '' }
+        $candidates.Add([pscustomobject]@{ Index = $m.Index; Verdict = $m.Groups[1].Value.ToUpperInvariant(); Step = $sn; Diagnosis = $diag })
+    }
+    foreach ($m in [regex]::Matches($stripped, '(?i)\b(ACCEPTED|REVISED)\s+step\s+(\d+)(?:\s*[:\-]\s*(.+?))?\s*$')) {
+        try { $sn = [int]$m.Groups[2].Value } catch { continue }
+        $verb = $m.Groups[1].Value.ToUpperInvariant()
+        $vd = if ($verb -eq 'ACCEPTED') { 'ACCEPT' } else { 'REVISE' }
+        $diag = if ($m.Groups[3].Success) { ([string]$m.Groups[3].Value).Trim() } else { '' }
+        $candidates.Add([pscustomobject]@{ Index = $m.Index; Verdict = $vd; Step = $sn; Diagnosis = $diag })
+    }
+    foreach ($m in [regex]::Matches($stripped, '(?i)\bstep\s+(\d+)\s+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)\b')) {
+        try { $sn = [int]$m.Groups[1].Value } catch { continue }
+        $candidates.Add([pscustomobject]@{ Index = $m.Index; Verdict = 'ACCEPT'; Step = $sn; Diagnosis = '' })
+    }
+    foreach ($m in [regex]::Matches($stripped, '(?i)\bstep\s+(\d+)\s+(revise[ds]?|needs?\s+fix|fails?|failed|broken|reject(?:ed)?)\b')) {
+        try { $sn = [int]$m.Groups[1].Value } catch { continue }
+        $candidates.Add([pscustomobject]@{ Index = $m.Index; Verdict = 'REVISE'; Step = $sn; Diagnosis = '' })
+    }
+    if ($candidates.Count -eq 0) { return $null }
+    $last = $candidates | Sort-Object Index -Descending | Select-Object -First 1
+    return @{ verdict = $last.Verdict; step = $last.Step; diagnosis = $last.Diagnosis }
 }

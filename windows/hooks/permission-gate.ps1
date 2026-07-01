@@ -64,21 +64,39 @@ function Deny {
 }
 
 # --- POSIX-flavored ---------------------------------------------------------
-# Anchored to start OR a command separator so `cd /tmp && rm -rf /` is caught,
-# while `git rm`, `npm run rm-cache`, `echo "rm -rf /"` stay allowed.
-Test-Deny '(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+(?=[^;&|]*-[a-zA-Z]*[rR])(?=[^;&|]*-[a-zA-Z]*[fF])[^;&|]*\s+/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
+# (?m): ^ matches start of each line, so `cd /tmp\nrm -rf /` (newline-separated)
+# is caught on the rm line. Mirrors grep's per-line ^ on the bash side. Quote-
+# tolerant path (`rm -rf "/"`) and token-boundary flags (no false positive on
+# `rm -f /tmp/data-r` — the two-lookahead form matched a hyphenated path
+# segment ending in `r` plus a real `-f`; the three-pattern form below requires
+# r and f in actual flag tokens).
+Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+([^;&|]*\s)?-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*(\s+--\S+)*\s+["'']?/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
+Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*[^;&|]*\s+["'']?/' 'destructive rm -rf on absolute path (separate -r/-f flags)'
+Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*[^;&|]*\s+["'']?/' 'destructive rm -rf on absolute path (separate -f/-r flags)'
 Test-Deny ':\(\)\{\s*:\|:&\s*\};:|bash\s+-c\s+["'']*:\s*\(\)\{' 'reverse shell / fork-bomb pattern'
-Test-Deny 'curl\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
-Test-Deny 'wget\s.*\|\s*(sudo\s*)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
+# sudo may carry flags between sudo and the shell (`sudo -E bash`); tolerate
+# them so a single intervening flag no longer bypasses the rule.
+Test-Deny 'curl\s.*\|\s*(sudo(\s+-\S+)*\s+)?(bash|sh|zsh|dash|ash)' 'curl piped to shell'
+Test-Deny 'wget\s.*\|\s*(sudo(\s+-\S+)*\s+)?(bash|sh|zsh|dash|ash)' 'wget piped to shell'
+# Process substitution is the no-`|` twin of curl|sh; same threat model.
+Test-Deny '<\(\s*(curl|wget)\s' 'curl/wget via process substitution piped to shell'
+# Quote-tolerant so `git push '-f' origin main` is caught, not just the bare form;
+# the trailing class allows the closing quote right after the flag.
 Test-Deny 'git\s+push\s+.*--force(?!\-with\-lease)(\s|$)' 'git push --force (use --force-with-lease for the safe variant)'
-Test-Deny 'git\s+push\s+(-f|--force)(\s|$)' 'git push -f / --force'
+Test-Deny 'git\s+push\s+["'']?(-f|--force)(\s|["'']|$)' 'git push -f / --force'
 Test-Deny 'git\s+reset\s+--hard' 'git reset --hard (data loss)'
-Test-Deny 'git\s+clean\s+(?![^;&|]*(?:-n|--dry-run))-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
+# Tolerate intervening flags before -f (`git clean -d -f`) so the destructive
+# flag does not have to be the first token after `clean `.
+Test-Deny 'git\s+clean\s+(?![^;&|]*(?:-n|--dry-run))[^;&|]*-[a-zA-Z]*f' 'git clean -f (untracked data loss)'
 Test-Deny 'dd\s.*of=/dev/(sd|nvme|hd|xvd)' 'dd to block device'
 Test-Deny 'mkfs(\.[a-z0-9]+)?\s+/dev/' 'mkfs on device'
 Test-Deny 'chmod\s+-R\s+777\s+/' 'chmod -R 777 on root'
-Test-Deny 'chown\s+-R\s+[^\s]+\s+/' 'chown -R on root'
-Test-Deny '(?:^|[;&|]\s*)(npm|pnpm|yarn)\s+publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
+# Tolerate a `--` end-of-options separator before the target path.
+Test-Deny 'chown\s+-R\s+[^\s]+\s+(--\s+)?/' 'chown -R on root'
+# (?m) so a newline-separated `cd pkg\nnpm publish` is caught on the publish
+# line. Allow npm global flags before the subcommand (`npm --loglevel=error
+# publish`) without matching `npm run publish-x`.
+Test-Deny '(?m)(?:^|[;&|]\s*)(npm|pnpm|yarn)\s+(-\S+\s+)*publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
 
 # --- Windows equivalents (the agent shell here IS PowerShell) ---------------
 # iwr/irm | iex is the moral twin of curl|sh.

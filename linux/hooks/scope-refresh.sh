@@ -55,12 +55,12 @@ if [ -n "$edited_file" ]; then
         if have_jq; then
             new_raw="$(printf '%s' "$scope_raw" | jq --arg f "$rel" '
                 .files = (
-                    ((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not) and ((. | ltrimstr("/") | ascii_downcase) != ".scope.json"))))
-                    + ([(.files // []) | map(ltrimstr("/") | ascii_downcase) | index($f | ltrimstr("/") | ascii_downcase)] | map(select(. != null)) | length as $present
+                    ((.files // []) | map(select(type == "string" and . != "" and (test("^\\s*<TODO") | not) and ((. | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) != ".scope.json"))))
+                    + ([(.files // []) | map(gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase) | index($f | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase)] | map(select(. != null)) | length as $present
                        | if $present == 0 then [$f] else [] end)
                 )' 2>/dev/null)"
             if [ -n "$new_raw" ] && [ "$new_raw" != "$scope_raw" ]; then
-                printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                write_scope_json_atomic "$scope_path" "$new_raw"
                 scope_raw="$new_raw"
             fi
         elif have_py; then
@@ -78,7 +78,7 @@ try:
 except Exception:
     pass' 2>/dev/null)"
             if [ -n "$new_raw" ] && [ "$new_raw" != "$scope_raw" ]; then
-                printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+                write_scope_json_atomic "$scope_path" "$new_raw"
                 scope_raw="$new_raw"
             fi
         fi

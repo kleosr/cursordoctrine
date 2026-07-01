@@ -67,7 +67,23 @@ if ($sj.PSObject.Properties['files'] -and $sj.files) {
 
 $decompCount = 0
 if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) {
-    $decompCount = @($sj.decomposition).Count
+    foreach ($d in @($sj.decomposition)) {
+        if (-not $d) { continue }
+        $sub = ''
+        if ($d -is [string]) { $sub = $d }
+        elseif ($d.PSObject.Properties['subtask'] -and $d.subtask) { $sub = [string]$d.subtask }
+        if (-not [string]::IsNullOrWhiteSpace($sub) -and $sub -notmatch '^\s*<TODO') { $decompCount++ }
+    }
+}
+
+# Normalized files[] set for the "second DISTINCT file" check (bug fix: re-editing
+# the same file must not be blocked, only editing a new file without decomposition).
+$filesLower = @{}
+if ($sj.PSObject.Properties['files'] -and $sj.files) {
+    foreach ($e in @($sj.files)) {
+        $s = ([string]$e).Replace('\', '/').TrimStart('/').ToLowerInvariant()
+        if ($s) { $filesLower[$s] = $true }
+    }
 }
 
 $ti = $null
@@ -79,17 +95,21 @@ if ($obj.PSObject.Properties['tool_input'] -and $obj.tool_input) {
         $ti = $rawTi
     }
 }
-if (-not $ti) { Allow-Step0 }
+# Do NOT fail open on a malformed/absent tool_input: fall through to the
+# no-paths branch, which denies when intent is empty. A bad tool_input must
+# not bypass Step 0 (it was the Windows-only gate bypass).
 
 $targetPaths = New-Object System.Collections.Generic.List[string]
-foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
-    if ($ti.PSObject.Properties[$k] -and $ti.$k) { $targetPaths.Add([string]$ti.$k) | Out-Null }
-}
-if ($ti.PSObject.Properties['edits'] -and $ti.edits) {
-    foreach ($edit in @($ti.edits)) {
-        if (-not $edit) { continue }
-        foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
-            if ($edit.PSObject.Properties[$k] -and $edit.$k) { $targetPaths.Add([string]$edit.$k) | Out-Null; break }
+if ($ti) {
+    foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
+        if ($ti.PSObject.Properties[$k] -and $ti.$k) { $targetPaths.Add([string]$ti.$k) | Out-Null }
+    }
+    if ($ti.PSObject.Properties['edits'] -and $ti.edits) {
+        foreach ($edit in @($ti.edits)) {
+            if (-not $edit) { continue }
+            foreach ($k in @('path', 'file_path', 'filename', 'absolute_path', 'abs_path', 'target_file')) {
+                if ($edit.PSObject.Properties[$k] -and $edit.$k) { $targetPaths.Add([string]$edit.$k) | Out-Null; break }
+            }
         }
     }
 }
@@ -106,8 +126,9 @@ foreach ($targetPath in $targetPaths) {
     if ($intentEmpty) {
         Deny-Step0 'intent is empty — write your one-line Step 0 restatement to .scope.json before editing code.'
     }
-    if ($realFiles -ge 1 -and $decompCount -eq 0) {
-        Deny-Step0 'files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file.'
+    $alreadyRecorded = $filesLower.ContainsKey($rel.ToLowerInvariant())
+    if (-not $alreadyRecorded -and $realFiles -ge 1 -and $decompCount -eq 0) {
+        Deny-Step0 'about to edit a second distinct file and decomposition[] is empty — declare steps in .scope.json before editing another file.'
     }
 }
 
