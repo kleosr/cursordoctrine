@@ -117,14 +117,14 @@ print("true" if changed(os.environ.get("NEW_P", ""), os.environ.get("OLD_P", "")
 }
 
 write_reset_scope() {
-    local p="$1"
+    local p="$1" new_raw
     if have_jq; then
-        jq -nc \
+        new_raw="$(jq -nc \
             --arg p "$p" \
             --arg a "$DEFAULT_ACCEPTANCE" \
-            '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' > "$scope_path" 2>/dev/null
+            '{prompt: $p, intent: "", decomposition: [], verifications: [], files: [], acceptance: $a}' 2>/dev/null)"
     elif have_py; then
-        P="$p" A="$DEFAULT_ACCEPTANCE" python3 -c '
+        new_raw="$(P="$p" A="$DEFAULT_ACCEPTANCE" python3 -c '
 import json, os
 print(json.dumps({
     "prompt": os.environ["P"],
@@ -133,14 +133,15 @@ print(json.dumps({
     "verifications": [],
     "files": [],
     "acceptance": os.environ["A"],
-}, indent=2, ensure_ascii=False))' > "$scope_path" 2>/dev/null
+}, indent=2, ensure_ascii=False))' 2>/dev/null)"
     fi
+    [ -n "$new_raw" ] && write_scope_json_atomic "$scope_path" "$new_raw"
 }
 
 write_continuation_scope() {
-    local p="$1" raw="$2"
+    local p="$1" raw="$2" new_raw
     if have_jq; then
-        printf '%s' "$raw" | jq --arg p "$p" '
+        new_raw="$(printf '%s' "$raw" | jq --arg p "$p" '
             .prompt = $p
             | if (.intent | type) != "string" then .intent = "" else . end
             | if (.decomposition | type) != "array" then .decomposition = [] else . end
@@ -149,9 +150,9 @@ write_continuation_scope() {
             | if (.acceptance | type) != "string" then .acceptance = "" else . end
             | del(.trace, .allow_growth)
             | with_entries(select(.key | startswith("_") | not))
-        ' > "$scope_path" 2>/dev/null
+        ' 2>/dev/null)"
     elif have_py; then
-        P="$p" python3 -c '
+        new_raw="$(P="$p" python3 -c '
 import json, os, sys
 try:
     o = json.load(sys.stdin)
@@ -171,8 +172,9 @@ try:
             del o[k]
     print(json.dumps(o, indent=2, ensure_ascii=False))
 except Exception:
-    pass' <<< "$raw" > "$scope_path" 2>/dev/null
+    pass' <<< "$raw" 2>/dev/null)"
     fi
+    [ -n "$new_raw" ] && write_scope_json_atomic "$scope_path" "$new_raw"
 }
 
 if [ -f "$scope_path" ]; then

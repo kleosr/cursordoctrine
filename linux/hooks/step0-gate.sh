@@ -68,7 +68,12 @@ if have_jq; then
         (. != ".scope.json")
       )] | length
     ' 2>/dev/null)"
-    decomp_count="$(printf '%s' "$scope_raw" | jq -r '.decomposition // [] | length' 2>/dev/null)"
+    decomp_count="$(printf '%s' "$scope_raw" | jq -r '
+      [.decomposition[]? |
+        ((.subtask // (. | tostring)) | tostring) as $s |
+        select(($s | test("^\\s*$") | not) and ($s | test("^\\s*<TODO") | not))
+      ] | length
+    ' 2>/dev/null)"
 elif have_py; then
     _gate_vals="$(printf '%s' "$scope_raw" | python3 -c '
 import json, sys
@@ -85,12 +90,33 @@ for e in files:
     if not s or s.startswith("<TODO") or s == ".scope.json":
         continue
     real += 1
-decomp = len(o.get("decomposition") or [])
+decomp = 0
+for d in (o.get("decomposition") or []):
+    sub = d if isinstance(d, str) else (d.get("subtask") if isinstance(d, dict) else None)
+    sub = str(sub or "").strip()
+    if sub and not sub.startswith("<TODO"):
+        decomp += 1
 print(json.dumps([intent, real, decomp]))
 ' 2>/dev/null)"
     intent="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[""])[0])' 2>/dev/null)"
     real_files="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[0,0])[1])' 2>/dev/null)"
     decomp_count="$(printf '%s' "$_gate_vals" | python3 -c 'import json,sys; print((json.load(sys.stdin)+[0,0,0])[2])' 2>/dev/null)"
+fi
+
+# Normalized lowercased files[] list for the "second DISTINCT file" check
+# (bug fix: re-editing the same file must not be blocked).
+files_list_lc=""
+if have_jq; then
+    files_list_lc="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty | (. | tostring | gsub("\\\\"; "/") | ltrimstr("/") | ascii_downcase)' 2>/dev/null)"
+elif have_py; then
+    files_list_lc="$(printf '%s' "$scope_raw" | python3 -c '
+import json, sys
+try: o = json.load(sys.stdin)
+except Exception: sys.exit(0)
+for f in (o.get("files") or []):
+    s = str(f).replace("\\","/").lstrip("/").lower()
+    if s: print(s)
+' 2>/dev/null)"
 fi
 
 intent="$(printf '%s' "${intent:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -100,7 +126,8 @@ case "${real_files:-0}" in ''|*[!0-9]*) real_files=0 ;; esac
 case "${decomp_count:-0}" in ''|*[!0-9]*) decomp_count=0 ;; esac
 
 tool_input="$(json_get "$input" tool_input)"
-[ -n "$tool_input" ] || allow
+# Do NOT allow on empty tool_input: fall through to the no-paths branch, which
+# denies when intent is empty. A bad/absent tool_input must not bypass Step 0.
 
 if have_py; then
     target_paths="$(printf '%s' "$tool_input" | python3 -c '
@@ -147,7 +174,10 @@ while IFS= read -r target_path; do
     [ -n "$rel" ] || deny "edit target is outside the resolved project root or could not be normalized."
     [ "$rel" = ".scope.json" ] && continue
     [ "$intent_empty" = true ] && deny "intent is empty — write your one-line Step 0 restatement to .scope.json before editing code."
-    [ "$real_files" -ge 1 ] && [ "$decomp_count" -eq 0 ] && deny "files[] already has 1 entry and decomposition[] is empty — declare steps in .scope.json before editing another file."
+    rel_lc="$(printf '%s' "$rel" | tr 'A-Z' 'a-z')"
+    already=false
+    if [ -n "$files_list_lc" ] && printf '%s\n' "$files_list_lc" | grep -qxF "$rel_lc"; then already=true; fi
+    [ "$already" = false ] && [ "$real_files" -ge 1 ] && [ "$decomp_count" -eq 0 ] && deny "about to edit a second distinct file and decomposition[] is empty — declare steps in .scope.json before editing another file."
 done <<EOF
 $target_paths
 EOF

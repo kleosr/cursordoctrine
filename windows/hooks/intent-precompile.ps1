@@ -131,7 +131,7 @@ try {
         $ordered = New-ResetScope $prompt
     }
     $json = $ordered | ConvertTo-Json -Depth 8
-    [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+    Write-ScopeJsonAtomic $scopePath $json
 
     $intentVal = ''
     if ($ordered.Contains('intent')) { $intentVal = [string]$ordered['intent'] }

@@ -49,7 +49,7 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 if have_py; then
     diff_out="$(git -C "$root" diff --name-only HEAD 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
     [ -n "$diff_out" ] || exit 0
-    new_raw="$(SCOPE_RAW="$scope_raw" SCOPE_PATH="$scope_path" DIFF_OUT="$diff_out" python3 -c '
+    new_raw="$(SCOPE_RAW="$scope_raw" DIFF_OUT="$diff_out" python3 -c '
 import json, os, sys
 try:
     scope = json.loads(os.environ["SCOPE_RAW"])
@@ -88,12 +88,9 @@ for line in os.environ["DIFF_OUT"].splitlines():
 if not appended:
     sys.exit(0)
 scope["files"] = kept
-try:
-    with open(os.environ["SCOPE_PATH"], "w", encoding="utf-8") as fh:
-        json.dump(scope, fh, indent=2, ensure_ascii=False)
-except Exception:
-    pass
+print(json.dumps(scope, indent=2, ensure_ascii=False))
 ' 2>/dev/null)"
+    [ -n "$new_raw" ] && write_scope_json_atomic "$scope_path" "$new_raw"
     exit 0
 fi
 
@@ -127,5 +124,5 @@ new_raw="$(printf '%s' "$scope_raw" | jq --rawfile diff <(printf '%s\n' "$diff_o
     if ($union | length) > ($existing | length) then .files = $union else empty end
 ' 2>/dev/null)"
 [ -n "$new_raw" ] || exit 0
-printf '%s' "$new_raw" > "$scope_path" 2>/dev/null
+write_scope_json_atomic "$scope_path" "$new_raw"
 exit 0

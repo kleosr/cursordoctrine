@@ -16,7 +16,27 @@ read_hook_stdin() {
 }
 
 have_jq() { command -v jq >/dev/null 2>&1; }
-have_py() { command -v python3 >/dev/null 2>&1 && python3 -c '' >/dev/null 2>&1; }
+
+__detect_python() {
+    if command -v python3 >/dev/null 2>&1 && command python3 -c '' >/dev/null 2>&1; then
+        PY=python3
+        return
+    fi
+    if command -v python >/dev/null 2>&1 && command python -c '' >/dev/null 2>&1; then
+        PY=python
+        return
+    fi
+    PY=
+}
+__detect_python
+have_py() { [ -n "${PY:-}" ]; }
+
+# ponytail: Windows Git Bash ships a broken `python3` Store stub; shim it to
+# `python` so the ~55 `python3` call sites work without editing each. Ceiling:
+# single-process shim. Upgrade: install real python3 and drop this.
+if [ "${PY:-}" = python ]; then
+    python3() { command python "$@"; }
+fi
 
 json_get() {
     local json="$1" key="$2"
@@ -51,6 +71,59 @@ try:
 except Exception:
     pass' "$key" 2>/dev/null
     fi
+}
+
+# ponytail: dependency-free extraction of a top-level "key":"value" string
+# field, used when neither jq nor python3 is present so permission-gate keeps
+# matching the command field instead of going blind on the raw JSON envelope.
+# Ceiling = value contains an escaped quote (\"), an escaped solidus (\/), or
+# spans multiple lines; upgrade = require jq/python3 at install time.
+json_get_string_native() {
+    local json="$1" key="$2"
+    [ -n "$json" ] || return 0
+    printf '%s' "$json" |
+        sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" |
+        head -n1
+}
+
+# Atomic, crash-safe .scope.json write: mkdir lock (portable atomic primitive),
+# write a temp file, mv -f over the target. Closes (a) the truncation/data-loss
+# bug where `> "$scope_path"` / open("w") truncates BEFORE the transform runs,
+# so a failed jq/python leaves an empty file; and (b) the read-modify-write race
+# where parallel postToolUse hooks each overwrote the other's update.
+# ponytail: lock ceiling = stale lockdir left by a hard-killed process is swept
+# after 10s; not flock(2). Upgrade = flock where available.
+write_scope_json_atomic() {
+    local path="$1" content="$2"
+    [ -n "$path" ] || return 0
+    # Refuse empty content: an empty .scope.json is always a transform failure,
+    # never a valid state. Guarding here makes truncation impossible even if a
+    # caller forgets to check the transform output before writing.
+    [ -n "$content" ] || return 0
+    local dir
+    dir="$(dirname "$path")"
+    [ -n "$dir" ] || return 0
+    local lock="$path.lock"
+    if [ -d "$lock" ]; then
+        local lock_mtime now age
+        lock_mtime="$(date -r "$lock" +%s 2>/dev/null || echo 0)"
+        now="$(date +%s 2>/dev/null || echo 0)"
+        age=$(( now - lock_mtime ))
+        [ "$age" -gt 10 ] 2>/dev/null && rm -rf "$lock" 2>/dev/null
+    fi
+    local acquired=false i=0
+    while [ "$i" -lt 10 ]; do
+        if mkdir "$lock" 2>/dev/null; then acquired=true; break; fi
+        sleep 0.05 2>/dev/null || sleep 1
+        i=$(( i + 1 ))
+    done
+    [ "$acquired" = true ] || return 0
+    local tmp="$path.tmp.$$"
+    if ! printf '%s' "$content" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null; rm -rf "$lock" 2>/dev/null; return 0
+    fi
+    mv -f "$tmp" "$path" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    rm -rf "$lock" 2>/dev/null
 }
 
 # emit_json <key> <value>  -> compact, ASCII-escaped {"key":"value"} on stdout
@@ -144,6 +217,19 @@ scope_relative_path() {
     p="$(printf '%s' "$p" | tr '\\' '/')"
     root="$(printf '%s' "$root" | tr '\\' '/' | sed 's|/*$||')"
     case "$p" in
+        [A-Za-z]:/*)
+            # Windows drive-absolute paths live on a case-insensitive filesystem,
+            # so match the root prefix case-insensitively (parity with the PS
+            # twin's OrdIgnoreCase). Strip by length to preserve the relative
+            # part's original casing.
+            local p_lc root_lc rootlen
+            p_lc="$(printf '%s' "$p" | tr 'A-Z' 'a-z')"
+            root_lc="$(printf '%s' "$root" | tr 'A-Z' 'a-z')"
+            rootlen="${#root_lc}"
+            if [ "$p_lc" = "$root_lc" ]; then p=""
+            elif [ "${p_lc:0:$((rootlen+1))}" = "$root_lc/" ]; then p="${p:$((rootlen+1))}"
+            else return 0; fi
+            ;;
         /*)
             case "$p" in
                 "$root"/*) p="${p#"$root"/}" ;;

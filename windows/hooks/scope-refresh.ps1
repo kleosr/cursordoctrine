@@ -80,7 +80,7 @@ if ($editedFile) {
                 foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
                 $ordered['files'] = @($kept.ToArray())
                 $json = $ordered | ConvertTo-Json -Depth 8
-                [System.IO.File]::WriteAllText($scopePath, $json, [System.Text.UTF8Encoding]::new($false))
+                Write-ScopeJsonAtomic $scopePath $json
                 # Refresh $sj so the stash reflects the updated files[].
                 $sj = $json | ConvertFrom-Json
             } catch { }
