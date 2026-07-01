@@ -1,6 +1,6 @@
 # Hooks — operational reference
 
-Nine hooks, seven events. The `hooks.json` files (`windows/`, `linux/`) are
+Ten agent hooks plus `inject-doctrine` across seven events. The `hooks.json` files (`windows/`, `linux/`) are
 spec-clean: only the documented Cursor options (`command`, `timeout`,
 `loop_limit`, `failClosed`, `matcher`). Aligns with https://cursor.com/docs/hooks.
 
@@ -80,14 +80,20 @@ no latches. No matcher — fires on ALL file edits (Write, Edit, MultiEdit,
 ApplyPatch, etc.), not just `Write`. Saved Cursor plans under
 `.cursor/plans/**` are ignored. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
-## postToolUse — scope-drain (.ps1/.sh) + milestone-verify (.ps1/.sh) + intent-anchor (.ps1/.sh)
-5s each. Three entries run in array order.
+## postToolUse — scope-drain + scope-git-sweep + milestone-verify + intent-anchor (.ps1/.sh)
+5s each. Four entries run in array order.
 
 **scope-drain:** Drains the per-cid `scope-<cid>.txt` stash (written by
 `scope-refresh`) and/or `precompile-<cid>.txt` (written by `intent-precompile`)
 into `additional_context`. One-shot: each stash is deleted on read. Fires on
 every postToolUse but emits nothing when no stash is present (most fires, between
 edits, are silent). Disable: `SCOPE_REFRESH_ENFORCE=0`.
+
+**scope-git-sweep:** After Shell/Bash tool calls, unions git-changed paths into
+`files[]` that were modified after the per-cid `session-start-<cid>.txt`
+timestamp (written at `sessionStart` by `inject-doctrine` and on first prompt by
+`intent-precompile`). Pre-session dirty/untracked files are ignored. Never emits
+`additional_context` — only maintains `files[]`. Disable: `SCOPE_REFRESH_ENFORCE=0`.
 
 **milestone-verify (doctrine-ultra):** Tri-role Verifier. When `.scope.json`
 declares a non-empty `decomposition[]` AND a step's `expected_files[]` are all
@@ -100,7 +106,7 @@ verdict and writes it into `verifications[]` (hook-owned).
 Silent when: `.scope.json` missing; all steps already verified; no
 expected_files completed; kill switch set; (Linux) no python3 available
 (verdict-scrape needs regex on transcript text). When `decomposition[]` is
-empty BUT the session has touched >= 1 file, a `DECOMPOSE` nudge fires
+empty BUT the session has touched >= 2 files, a `DECOMPOSE` nudge fires
 instead of going silent: the doctrine requires decomposition for multi-file
 tasks, and this closes the gap where an agent touches many files with zero
 steps declared. Per-cid flag throttle (mirrors intent-anchor) re-nudges only
@@ -179,4 +185,3 @@ that aren't in any step's `expected_files` are flagged as cross-step leakage.
 When `decomposition[]` is empty on a MULTI-FILE task (>=2 files), a CONTRACT
 GAP block is injected and axis 7 FAILs (not SKIP) until a plan is declared —
 only a genuine single-file one-liner SKIPs axis 7 (YAGNI rung 1).
-Empty decomposition → axis skipped (YAGNI rung 1).

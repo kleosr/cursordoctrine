@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # inject-doctrine.sh - Cursor sessionStart injection (Linux).
 #
-# Emits {"additional_context": "<doctrine>"} as compact, ASCII-escaped JSON
-# (jq -a / python ensure_ascii), so multi-byte characters in the doctrine can
-# never be mangled by encoding layers.
-#
-# Fail open: missing files or any error -> "{}" (valid, empty). Never block
-# or crash session start.
+# Emits {"additional_context": "<doctrine>"} as compact, ASCII-escaped JSON.
+# Writes session-start-<cid>.txt so scope-git-sweep can filter by mtime.
+# Fail open: missing files or any error -> "{}" (valid, empty).
 
 set +e
 . "$HOME/.agents/hooks/hook-common.sh" 2>/dev/null || {
     cat >/dev/null; printf '{}'; exit 0; }
 
-# Drain stdin (Cursor sends session metadata) so the pipe never blocks.
-cat >/dev/null
+input="$(read_hook_stdin)"
+[ -n "$input" ] && write_session_start_stamp "$input"
 
 if [ -f "$HOME/.cursor/doctrine.md" ]; then
     context="$(cat "$HOME/.cursor/doctrine.md")"

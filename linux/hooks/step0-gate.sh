@@ -170,8 +170,8 @@ fi
 
 while IFS= read -r target_path; do
     [ -n "$target_path" ] || continue
-    rel="$(scope_relative_path "$target_path" "$root")"
-    [ -n "$rel" ] || deny "edit target is outside the resolved project root or could not be normalized."
+    rel="$(scope_relative_any_root "$target_path" "$input")"
+    [ -n "$rel" ] || deny "edit target is outside all workspace roots or could not be normalized."
     [ "$rel" = ".scope.json" ] && continue
     [ "$intent_empty" = true ] && deny "intent is empty — write your one-line Step 0 restatement to .scope.json before editing code."
     rel_lc="$(printf '%s' "$rel" | tr 'A-Z' 'a-z')"

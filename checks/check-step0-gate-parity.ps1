@@ -73,6 +73,25 @@ try {
     if ($ps -ne 'ALLOW') { $failures += "PS control: real decomp + 2nd file got $ps (want ALLOW)" }
     if ($sh -ne 'ALLOW') { $failures += "SH control: real decomp + 2nd file got $sh (want ALLOW)" }
 
+    $rootA = Join-Path $tmp 'ws-a'
+    $rootB = Join-Path $tmp 'ws-b'
+    New-Item -ItemType Directory -Path $rootA -Force | Out-Null
+    New-Item -ItemType Directory -Path $rootB -Force | Out-Null
+    Write-Scope $rootA '{"prompt":"p","intent":"do task","files":["a.ts"],"decomposition":[{"step":1,"subtask":"b in ws-b","expected_files":["b.ts"]}]}'
+    $targetB = Join-Path $rootB 'b.ts'
+    $payloadMulti = @{
+        tool_name = 'Write'
+        tool_input = @{ path = $targetB }
+        cwd = $rootA
+        workspace_roots = @($rootA, $rootB)
+    } | ConvertTo-Json -Compress
+    $ps = Invoke-PsGate $payloadMulti $rootA
+    $sh = Invoke-ShGate $payloadMulti $rootA
+    $ok = ($ps -eq 'ALLOW') -and ($sh -eq 'ALLOW')
+    Write-Host ("{0} [multi-root edit in second workspace] PS={1} SH={2} expect=ALLOW" -f $(if($ok){'PASS'}else{'FAIL'}), $ps, $sh)
+    if ($ps -ne 'ALLOW') { $failures += "PS B6: multi-root second workspace got $ps (want ALLOW)" }
+    if ($sh -ne 'ALLOW') { $failures += "SH B6: multi-root second workspace got $sh (want ALLOW)" }
+
     if ($failures.Count -gt 0) {
         Write-Host ""; Write-Host "FAILURES:"
         $failures | ForEach-Object { Write-Host " - $_" }

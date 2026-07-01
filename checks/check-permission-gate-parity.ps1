@@ -43,6 +43,12 @@ $cases = @(
     @{ cmd = 'npm run publish-script';         expect = 'ALLOW'; note = 'control: npm run publish-x stays allowed' }
     @{ cmd = 'echo "rm -rf /"';                expect = 'ALLOW'; note = 'control: echo of dangerous text stays allowed' }
     @{ cmd = 'git rm --cached file';           expect = 'ALLOW'; note = 'control: git rm stays allowed' }
+    @{ cmd = 'git push origin main -f';        expect = 'DENY';  note = 'B1: push -f after remote/branch' }
+    @{ cmd = 'FOO=1 rm -rf /etc';              expect = 'DENY';  note = 'B1: env-prefix before rm' }
+    @{ cmd = 'NODE_ENV=production npm publish'; expect = 'DENY'; note = 'B1: env-prefix before publish' }
+    @{ cmd = 'rm -rf ~/x';                     expect = 'DENY';  note = 'B1: tilde home path' }
+    @{ cmd = 'git push --force-with-lease';    expect = 'ALLOW'; note = 'control: force-with-lease allowed' }
+    @{ cmd = 'git status';                     expect = 'ALLOW'; note = 'control: git status allowed' }
 )
 
 $failures = @()

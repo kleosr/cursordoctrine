@@ -111,18 +111,7 @@ get_diff_signature() {
 
     # Read files[] from .scope.json into a normalized newline-separated list.
     _read_scope_files() {
-        if have_jq; then
-            jq -r '.files[]? // empty' "$sp" 2>/dev/null
-        elif have_py; then
-            python3 -c '
-import json
-try:
-    for f in (json.load(open("'"$sp"'")).get("files") or []):
-        s = str(f).strip()
-        if s and not s.startswith("<") and s != ".scope.json":
-            print(s.replace("\\\\", "/").lstrip("/"))
-except Exception: pass' 2>/dev/null
-        fi
+        read_scope_file_lines "$sp"
     }
 
     if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
@@ -225,16 +214,7 @@ if [ -f "$scope_path" ]; then
     # Doctrine project: files[] is the authoritative session-edit surface.
     scope_raw_sc="$(cat "$scope_path" 2>/dev/null)"
     if [ -n "$scope_raw_sc" ]; then
-        if have_jq; then
-            sc_files="$(printf '%s' "$scope_raw_sc" | jq -r '.files[]? // empty' 2>/dev/null)"
-        elif have_py; then
-            sc_files="$(printf '%s' "$scope_raw_sc" | python3 -c 'import json,sys
-try:
-    for f in (json.load(sys.stdin).get("files") or []):
-        s = str(f).strip()
-        if s and not s.startswith("<"): print(s)
-except Exception: pass' 2>/dev/null)"
-        fi
+        sc_files="$(read_scope_file_lines "$scope_path")"
         while IFS= read -r p; do
             [ -n "$p" ] || continue
             p="$(scope_relative_path "$p" "$root")"
@@ -341,27 +321,10 @@ scope_prompt=""
 if [ -f "$scope_path" ]; then
     scope_raw="$(cat "$scope_path" 2>/dev/null)"
     if [ -n "$scope_raw" ]; then
-        if have_jq; then
-            scope_prompt="$(printf '%s' "$scope_raw" | jq -r '.prompt // empty' 2>/dev/null)"
-            scope_intent="$(printf '%s' "$scope_raw" | jq -r '.intent // empty' 2>/dev/null)"
-            scope_acceptance="$(printf '%s' "$scope_raw" | jq -r '.acceptance // empty' 2>/dev/null)"
-            declared_json="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
-        elif have_py; then
-            scope_prompt="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("prompt") or "")
-except Exception: pass' 2>/dev/null)"
-            scope_intent="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("intent") or "")
-except Exception: pass' 2>/dev/null)"
-            scope_acceptance="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("acceptance") or "")
-except Exception: pass' 2>/dev/null)"
-            declared_json="$(printf '%s' "$scope_raw" | python3 -c 'import json,sys
-try:
-    for f in (json.load(sys.stdin).get("files") or []):
-        if f and not str(f).strip().startswith("<"): print(f)
-except Exception: pass' 2>/dev/null)"
-        fi
+        scope_prompt="$(scope_json_string_field "$scope_raw" prompt)"
+        scope_intent="$(scope_json_string_field "$scope_raw" intent)"
+        scope_acceptance="$(scope_json_string_field "$scope_raw" acceptance)"
+        declared_json="$(read_scope_file_lines "$scope_path")"
         [ -n "$scope_acceptance" ] && scope_block="Declared acceptance: ${scope_acceptance}
 
 "
@@ -530,9 +493,10 @@ fi
 file_list="$(printf '%s' "$edited" | grep -v '^$' | head -n 30 | sed 's/^/  /')"
 unique_files="$(printf '%s' "$edited" | grep -c -v '^$')"
 
-# Minimality signal: diff churn is the Levenshtein analog. No ground-truth
-# minimal edit exists in production, so we flag VOLUME disproportionate to
-# the intent's scope and let axis 4 judge whether the change is faithful.
+# Minimality signal, two layers. Volume: numstat churn. Shape: token
+# rewrite-ratio + structural delta from minimality.py (see block below).
+# No ground-truth minimal edit exists in production, so thresholds key off
+# the intent's task kind and axis 4 judges whether the change is faithful.
 added=0; deleted=0
 if [ "$is_git_repo" = true ] && [ -n "$edited" ]; then
     # Build an array from the newline-separated $edited so paths with spaces
@@ -562,26 +526,104 @@ elif printf '%s' "$intent_lc" | grep -Eq 'add|implement|create|build|new feature
     task_kind=constructive
 fi
 
+# Minimal-edit metrics (nrehiew, "Coding Models Are Doing Too Much"):
+# rewrite-ratio = 1 - token similarity vs HEAD (Levenshtein analog, 0..1);
+# structural delta = branch/bool/try constructs added vs HEAD (the
+# Added-Cognitive-Complexity analog; a faithful value fix adds ~0).
+# Computed by minimality.py when python3/python is on PATH - same optional-python
+# posture as the anti-slop scanner; no python -> volume-only, unchanged.
+# Calibration, Table 1 of the post: faithful frontier fixes sit at
+# 0.06-0.08 normalized distance, over-editors at 0.33-0.44; ~0 vs 1.5-3.8
+# added complexity. Surgical cutoffs 0.15 / +2 sit between the bands.
+worst_ratio="-1"; worst_file=""; struct_delta=0; metrics_line=""
+min_py="$(dirname "$0")/minimality.py"
+py_cmd=""
+if command -v python3 >/dev/null 2>&1 && command python3 -c '' >/dev/null 2>&1; then
+    py_cmd=python3
+elif command -v python >/dev/null 2>&1 && command python -c '' >/dev/null 2>&1; then
+    py_cmd=python
+fi
+if [ -n "$py_cmd" ] && [ "$is_git_repo" = true ] && [ -n "$edited" ] && [ -f "$min_py" ]; then
+    edited_arr=()
+    while IFS= read -r _p; do [ -n "$_p" ] && edited_arr+=("$_p"); done <<< "$edited"
+    if [ "${#edited_arr[@]}" -gt 0 ]; then
+        # Use only the first 20 files to keep the metric fast.
+        min_args=("$min_py" "$root" "${edited_arr[@]:0:20}")
+        while IFS= read -r ln; do
+            case "$ln" in
+                SUMMARY$'\t'*)
+                    summary_fields="${ln#SUMMARY$'\t'}"
+                    worst_ratio="$(printf '%s' "$summary_fields" | cut -f1)"
+                    worst_file="$(printf '%s' "$summary_fields" | cut -f2)"
+                    struct_delta="$(printf '%s' "$summary_fields" | cut -f3)"
+                    ;;
+            esac
+        done <<< "$($py_cmd "${min_args[@]}" 2>/dev/null)"
+    fi
+fi
+ratio_text="n/a"
+if printf '%s' "$worst_ratio" | grep -Eq '^-?[0-9.]+$'; then
+    if awk "BEGIN { exit !($worst_ratio <= 0) }" 2>/dev/null; then
+        ratio_text="0.00"
+    else
+        ratio_text="$(printf '%.2f' "$worst_ratio" 2>/dev/null || printf '%s' "$worst_ratio")"
+    fi
+fi
+delta_text="$struct_delta"
+[ "$struct_delta" -ge 0 ] 2>/dev/null && delta_text="+$struct_delta"
+if [ -n "$ratio_text" ] || [ "$struct_delta" -ne 0 ] 2>/dev/null; then
+    worst_note=""
+    [ -n "$worst_file" ] && worst_note=" ($worst_file)"
+    metrics_line="Minimal-edit metrics: worst rewrite-ratio ${ratio_text}${worst_note}; structural delta ${delta_text} (branches/bools/try added vs HEAD). A faithful fix keeps rewrite-ratio near 0.00 and delta ~0."
+fi
+
 min_flag=false; min_why=""
-case "$task_kind" in
-    surgical)
-        if [ "$unique_files" -gt 3 ] || [ "$churn" -gt 30 ]; then
-            min_flag=true; min_why="bug/fix task but ${unique_files} file(s) / ${churn} line(s) churn"
-        fi
-        ;;
-    constructive)
-        if [ "$unique_files" -gt 10 ] || [ "$churn" -gt 400 ]; then
-            min_flag=true; min_why="large blast radius: ${unique_files} file(s) / ${churn} line(s)"
-        fi
-        ;;
-    *)
-        if [ "$unique_files" -gt 5 ] || [ "$churn" -gt 150 ]; then
-            min_flag=true; min_why="${unique_files} file(s) / ${churn} line(s) - justify each or trim"
-        fi
-        ;;
-esac
+reasons=""
+add_reason() {
+    if [ -z "$reasons" ]; then
+        reasons="$1"
+    else
+        reasons="${reasons}; $1"
+    fi
+}
+if [ "$task_kind" = "surgical" ]; then
+    if [ "$unique_files" -gt 3 ] || [ "$churn" -gt 30 ]; then
+        add_reason "${unique_files} file(s) / ${churn} line(s) churn"
+    fi
+    if awk "BEGIN { exit !($worst_ratio > 0.15) }" 2>/dev/null; then
+        add_reason "rewrite-ratio ${ratio_text} on ${worst_file}"
+    fi
+    if [ "$struct_delta" -gt 2 ] 2>/dev/null; then
+        add_reason "structural delta ${delta_text} the fix did not require"
+    fi
+    if [ -n "$reasons" ]; then
+        min_flag=true; min_why="bug/fix task but ${reasons}"
+    fi
+elif [ "$task_kind" = "constructive" ]; then
+    if [ "$unique_files" -gt 10 ] || [ "$churn" -gt 400 ]; then
+        add_reason "large blast radius: ${unique_files} file(s) / ${churn} line(s)"
+    fi
+    if awk "BEGIN { exit !($worst_ratio > 0.6) }" 2>/dev/null; then
+        add_reason "rewrote most of existing ${worst_file} (rewrite-ratio ${ratio_text})"
+    fi
+    if [ -n "$reasons" ]; then
+        min_flag=true; min_why="${reasons}"
+    fi
+else
+    if [ "$unique_files" -gt 5 ] || [ "$churn" -gt 150 ]; then
+        add_reason "${unique_files} file(s) / ${churn} line(s)"
+    fi
+    if awk "BEGIN { exit !($worst_ratio > 0.35) }" 2>/dev/null || [ "$struct_delta" -gt 8 ] 2>/dev/null; then
+        add_reason "rewrite-ratio ${ratio_text} / structural delta ${delta_text}"
+    fi
+    if [ -n "$reasons" ]; then
+        min_flag=true; min_why="${reasons} - justify each or trim"
+    fi
+fi
 
 surface_block="Session footprint: ${unique_files} file(s) touched, +${added}/-${deleted} (${churn} churn). Task kind: ${task_kind}."
+[ -n "$metrics_line" ] && surface_block="${surface_block}
+${metrics_line}"
 if [ "$brake_re_review" = true ]; then
     surface_block="${surface_block}
 RE-REVIEW (verify-revise): the contract (.scope.json) changed since the last review. Re-verify the role-trace below against the session work; the diff stat may be empty when the only change was the contract (source edits already committed)."

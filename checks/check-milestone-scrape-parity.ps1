@@ -17,6 +17,15 @@ function Write-Transcript([string]$path, [string]$assistantText) {
     [System.IO.File]::WriteAllText($path, ($rec | ConvertTo-Json -Depth 6 -Compress) + "`n", $utf8)
 }
 
+function Write-TranscriptLines([string]$path, [string[]]$assistantTexts) {
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($text in $assistantTexts) {
+        $rec = @{ role = 'assistant'; message = @{ role = 'assistant'; content = @(@{ type = 'text'; text = $text }) } }
+        [void]$sb.AppendLine(($rec | ConvertTo-Json -Depth 6 -Compress))
+    }
+    [System.IO.File]::WriteAllText($path, $sb.ToString(), $utf8)
+}
+
 function Read-Verifications([string]$dir) {
     $p = Join-Path $dir '.scope.json'
     if (-not (Test-Path $p)) { return $null }
@@ -45,10 +54,12 @@ New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 $tpA = Join-Path $tmp 'ta.jsonl'
 $tpB = Join-Path $tmp 'tb.jsonl'
 $tpC = Join-Path $tmp 'tc.jsonl'
+$tpF = Join-Path $tmp 'tf.jsonl'
 $tmpFwd = $tmp -replace '\\','/'
 $tpAFwd = $tpA -replace '\\','/'
 $tpBFwd = $tpB -replace '\\','/'
 $tpCFwd = $tpC -replace '\\','/'
+$tpFFwd = $tpF -replace '\\','/'
 $failures = @()
 
 try {
@@ -102,13 +113,70 @@ No real verdict yet.
         if (-not $ok) { $failures += "$plat C: fenced 'ACCEPT step 1' was scraped (should be stripped)" }
     }
 
+    # --- Case D: REVISE upgrades to ACCEPT when model fixes ---
+    Write-Scope $tmp '{"prompt":"p","intent":"do task","decomposition":[{"step":1,"subtask":"a","expected_files":["a.ts"]}],"verifications":[{"step":1,"verdict":"REVISE","diagnosis":"broken"}],"files":["a.ts"],"acceptance":"ok"}'
+    Write-Transcript $tpA "ACCEPT step 1"
+    foreach ($plat in 'PS','SH') {
+        Write-Scope $tmp '{"prompt":"p","intent":"do task","decomposition":[{"step":1,"subtask":"a","expected_files":["a.ts"]}],"verifications":[{"step":1,"verdict":"REVISE","diagnosis":"broken"}],"files":["a.ts"],"acceptance":"ok"}'
+        $p = Make-Payload "cD$plat" $tpAFwd $tmpFwd
+        if ($plat -eq 'PS') { Invoke-PsHook $p } else { Invoke-ShHook $p }
+        $v = Read-Verifications $tmp
+        $entry = $null
+        if ($v) { $entry = $v | Where-Object { $_.step -eq 1 } | Select-Object -First 1 }
+        $got = if ($entry) { $entry.verdict } else { '(none)' }
+        $ok = $entry -and $entry.verdict -eq 'ACCEPT'
+        Write-Host ("{0} [D REVISE to ACCEPT] {1}={2} expect=ACCEPT" -f $(if($ok){'PASS'}else{'FAIL'}), $plat, $got)
+        if (-not $ok) { $failures += "$plat D: REVISE->ACCEPT got $got" }
+    }
+
+    # --- Case E: canonical verdict with prose after (B3) ---
+    Write-Transcript $tpB "ACCEPT step 2`nNow moving to step 3..."
+    foreach ($plat in 'PS','SH') {
+        Reset-Scope $tmp
+        $scope = Get-Content (Join-Path $tmp '.scope.json') -Raw | ConvertFrom-Json
+        $scope.decomposition = @(@{ step = 2; subtask = 'b'; expected_files = @('b.ts') })
+        $scope | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $tmp '.scope.json')
+        $p = Make-Payload "cE$plat" $tpBFwd $tmpFwd
+        if ($plat -eq 'PS') { Invoke-PsHook $p } else { Invoke-ShHook $p }
+        $v = Read-Verifications $tmp
+        $entry = $null
+        if ($v) { $entry = $v | Where-Object { $_.step -eq 2 } | Select-Object -First 1 }
+        $got = if ($entry) { $entry.verdict } else { '(none)' }
+        $ok = $entry -and $entry.verdict -eq 'ACCEPT'
+        Write-Host ("{0} [E mid-line ACCEPT] {1}={2} expect=ACCEPT" -f $(if($ok){'PASS'}else{'FAIL'}), $plat, $got)
+        if (-not $ok) { $failures += "$plat E: mid-line ACCEPT got $got" }
+    }
+
+    # --- Case F: final-review report turn is ignored (B12) ---
+    $report = @'
+- **0 Intent trace**: PASS
+- **7 Role-trace**: FAIL - step 2 revise open, fixing now
+
+    **Verdict**: REVISE
+
+ACCEPT step 1
+'@
+    Write-TranscriptLines $tpF @("ACCEPT step 1", $report)
+    foreach ($plat in 'PS','SH') {
+        Reset-Scope $tmp
+        $p = Make-Payload "cF$plat" $tpFFwd $tmpFwd
+        if ($plat -eq 'PS') { Invoke-PsHook $p } else { Invoke-ShHook $p }
+        $v = Read-Verifications $tmp
+        $entry = $null
+        if ($v) { $entry = $v | Where-Object { $_.step -eq 1 } | Select-Object -First 1 }
+        $got = if ($entry) { $entry.verdict } else { '(none)' }
+        $ok = $entry -and $entry.verdict -eq 'ACCEPT'
+        Write-Host ("{0} [F report turn ignored] {1}={2} expect=ACCEPT" -f $(if($ok){'PASS'}else{'FAIL'}), $plat, $got)
+        if (-not $ok) { $failures += "$plat F: report turn contaminated verdicts got $got" }
+    }
+
     if ($failures.Count -gt 0) {
         Write-Host ""; Write-Host "FAILURES:"
         $failures | ForEach-Object { Write-Host " - $_" }
         exit 1
     }
     Write-Host ""
-    Write-Host "ALL PASS: milestone-verify rightmost-match + decomp-validation + fence-strip verified on both platforms."
+    Write-Host "ALL PASS: milestone-verify rightmost-match + decomp-validation + fence-strip + report-turn-filter (B12) verified on both platforms."
     exit 0
 }
 finally {

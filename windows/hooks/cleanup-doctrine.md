@@ -12,9 +12,10 @@ anything breaks, back the change out and flag it for manual review instead of
 
 Work category-by-category in this fixed order (cheapest, highest-precision
 first — exact wins before judgement calls). After EACH category, re-run
-`python <scanner> --all --root .` and confirm that category's count dropped to
-zero before moving on. If a count did not drop, STOP that category (the scanner
-is the source of truth — do not hand-wave a residual as "fixed").
+`python <scanner> --all --root .` and confirm that category's findings are either
+zero or every remaining finding carries a one-line WHY. If your fixes did not move
+a non-zero count, stop that category — the scanner is the source of truth; do not
+hand-wave a residual as "fixed".
 
   1. EXACT DUPLICATES (body_clones + name_clones): identical or
      same-named functions across files. Pick ONE canonical definition, re-point
