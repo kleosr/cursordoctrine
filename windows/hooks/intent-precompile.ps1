@@ -39,7 +39,14 @@ if ($obj.PSObject.Properties['prompt']) { $prompt = [string]$obj.prompt }
 $prompt = $prompt.Trim()
 if ([string]::IsNullOrWhiteSpace($prompt)) { exit 0 }
 
-if ($prompt -match '(?m)^\s*(FINAL REVIEW \(end of implementation\)|SUBAGENT FINAL REVIEW|SELF-REVIEW|INTENT ANCHOR|INTENT REFINEMENT REQUIRED|SCOPE REMINDER|VERIFY MILESTONE)') { exit 0 }
+$forceNewTask = $false
+if ($prompt -match '^\s*(/new\b|new\s+task:)\s*(.*)$') {
+    $prompt = $Matches[2].Trim()
+    if ([string]::IsNullOrWhiteSpace($prompt)) { exit 0 }
+    $forceNewTask = $true
+}
+
+if (Test-IsHookGeneratedQuery $prompt) { exit 0 }
 if ((Test-IsPlanModeEvent $obj) -or (Test-IsPlanOnlyPrompt $prompt)) { exit 0 }
 
 $root = Resolve-ProjectRoot $obj
@@ -48,8 +55,10 @@ if (-not $root) { exit 0 }
 $scopePath = Join-Path $root '.scope.json'
 $defaultAcceptance = $DefaultAcceptance
 
+Ensure-SessionStartStamp $obj
+
 function Get-PromptTokenSet([string]$p) {
-    $normalized = [regex]::Replace($p.ToLowerInvariant(), '[^a-z0-9 ]', ' ')
+    $normalized = [regex]::Replace($p.ToLowerInvariant(), '[^\p{L}\p{Nd} ]', ' ')
     $set = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($t in ($normalized -split '\s+')) {
         if ($t) { [void]$set.Add($t) }
@@ -98,7 +107,7 @@ try {
     if ($existing) {
         $oldPrompt = ''
         if ($existing.PSObject.Properties['prompt']) { $oldPrompt = [string]$existing.prompt }
-        if (Test-TopicChanged $prompt $oldPrompt) {
+        if ($forceNewTask -or (Test-TopicChanged $prompt $oldPrompt)) {
             $ordered = New-ResetScope $prompt
             # ponytail: topic change must clear per-cid nudge flags or stale filesCount silences intent-anchor/decompose for the new task
             $cid = Get-SafeConversationId $obj
@@ -131,7 +140,12 @@ try {
         $ordered = New-ResetScope $prompt
     }
     $json = $ordered | ConvertTo-Json -Depth 8
-    Write-ScopeJsonAtomic $scopePath $json
+    if (Test-Path -LiteralPath $scopePath) {
+        $replacement = $json
+        Update-ScopeJson $scopePath { param($scope); return ($replacement | ConvertFrom-Json) } | Out-Null
+    } else {
+        Write-ScopeJsonAtomic $scopePath $json
+    }
 
     $intentVal = ''
     if ($ordered.Contains('intent')) { $intentVal = [string]$ordered['intent'] }

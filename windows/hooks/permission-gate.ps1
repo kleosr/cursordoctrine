@@ -34,9 +34,14 @@ if ($inputText) {
     } catch {
         $cmd = ''
     }
-    # Belt-and-braces: if stdin was not the documented JSON shape, still gate
-    # on the raw text rather than waving everything through.
-    if (-not $cmd) { $cmd = $inputText }
+    # Belt-and-braces: extract command from malformed JSON; never gate on the raw
+    # envelope (leaks conversation_id / transcript_path into deny UI).
+    if (-not $cmd -and $inputText -match '"command"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"') {
+        $cmd = $Matches[1] -replace '\\"', '"' -replace '\\/', '/'
+    }
+    if (-not $cmd -and $inputText -and $inputText -notmatch '^\s*\{') {
+        $cmd = $inputText.Trim()
+    }
 }
 
 if (-not $cmd) {
@@ -54,6 +59,7 @@ function Deny {
     # Truncate the echo: the command can be a multi-hundred-char one-liner and
     # the UI message only needs enough to identify it.
     $shown = if ($cmd.Length -gt 400) { $cmd.Substring(0, 400) + '...' } else { $cmd }
+    $shown = Redact-SecretsFromIntent $shown
     $userMsg = "BLOCKED by permission-gate: $Reason`n`nCommand: $shown`n`nIf this is genuinely intended, run it yourself in your terminal."
     Write-HookJson @{
         permission    = 'deny'
@@ -70,9 +76,11 @@ function Deny {
 # `rm -f /tmp/data-r` — the two-lookahead form matched a hyphenated path
 # segment ending in `r` plus a real `-f`; the three-pattern form below requires
 # r and f in actual flag tokens).
-Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+([^;&|]*\s)?-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*(\s+--\S+)*\s+["'']?/' 'destructive rm -rf on absolute path (use relative paths or be more specific)'
-Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*[^;&|]*\s+["'']?/' 'destructive rm -rf on absolute path (separate -r/-f flags)'
-Test-Deny '(?m)(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*[^;&|]*\s+["'']?/' 'destructive rm -rf on absolute path (separate -f/-r flags)'
+$cmdAnchor = '(?:^|[;&|]\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*'
+$rmDestPath = '["'']?(/|~(/|["'']|\s|$))'
+Test-Deny "(?m)${cmdAnchor}(?:sudo\s+)?rm\s+([^;&|]*\s)?-[a-zA-Z]*([rR][fF]|[fF][rR])[a-zA-Z]*(\s+--\S+)*\s+${rmDestPath}" 'destructive rm -rf on absolute or home path (use relative paths or be more specific)'
+Test-Deny "(?m)${cmdAnchor}(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*[^;&|]*\s+${rmDestPath}" 'destructive rm -rf on absolute or home path (separate -r/-f flags)'
+Test-Deny "(?m)${cmdAnchor}(?:sudo\s+)?rm\s+[^;&|]*-[a-zA-Z]*[fF][a-zA-Z]*\s+[^;&|]*-[a-zA-Z]*[rR][a-zA-Z]*[^;&|]*\s+${rmDestPath}" 'destructive rm -rf on absolute or home path (separate -f/-r flags)'
 Test-Deny ':\(\)\{\s*:\|:&\s*\};:|bash\s+-c\s+["'']*:\s*\(\)\{' 'reverse shell / fork-bomb pattern'
 # sudo may carry flags between sudo and the shell (`sudo -E bash`); tolerate
 # them so a single intervening flag no longer bypasses the rule.
@@ -83,7 +91,8 @@ Test-Deny '<\(\s*(curl|wget)\s' 'curl/wget via process substitution piped to she
 # Quote-tolerant so `git push '-f' origin main` is caught, not just the bare form;
 # the trailing class allows the closing quote right after the flag.
 Test-Deny 'git\s+push\s+.*--force(?!\-with\-lease)(\s|$)' 'git push --force (use --force-with-lease for the safe variant)'
-Test-Deny 'git\s+push\s+["'']?(-f|--force)(\s|["'']|$)' 'git push -f / --force'
+Test-Deny 'git\s+push\s+["'']?(-f|--force)(\s|["'']|$)' 'git push -f / --force immediately after push'
+Test-Deny 'git\s+push\b[^;&|]*\s["'']?-f["'']?(\s|["'']|$|[;&|])' 'git push with -f flag (use --force-with-lease for the safe variant)'
 Test-Deny 'git\s+reset\s+--hard' 'git reset --hard (data loss)'
 # Tolerate intervening flags before -f (`git clean -d -f`) so the destructive
 # flag does not have to be the first token after `clean `.
@@ -96,7 +105,7 @@ Test-Deny 'chown\s+-R\s+[^\s]+\s+(--\s+)?/' 'chown -R on root'
 # (?m) so a newline-separated `cd pkg\nnpm publish` is caught on the publish
 # line. Allow npm global flags before the subcommand (`npm --loglevel=error
 # publish`) without matching `npm run publish-x`.
-Test-Deny '(?m)(?:^|[;&|]\s*)(npm|pnpm|yarn)\s+(-\S+\s+)*publish(?![^;&|]*--dry-run)(\s|$)' 'package publish (use ship-hook, not direct publish)'
+Test-Deny "(?m)${cmdAnchor}(npm|pnpm|yarn)\s+(-\S+\s+)*publish(?![^;&|]*--dry-run)(\s|$)" 'package publish (use ship-hook, not direct publish)'
 
 # --- Windows equivalents (the agent shell here IS PowerShell) ---------------
 # iwr/irm | iex is the moral twin of curl|sh.

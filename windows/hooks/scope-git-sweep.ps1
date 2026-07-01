@@ -43,6 +43,8 @@ if (-not $isShell) { exit 0 }
 $root = Resolve-ProjectRoot $obj
 if (-not $root) { exit 0 }
 
+if (-not (Get-SessionStartUtc $obj)) { exit 0 }
+
 $scopePath = Join-Path $root '.scope.json'
 if (-not (Test-Path -LiteralPath $scopePath)) { exit 0 }
 
@@ -56,44 +58,33 @@ try {
 if (-not $sj) { exit 0 }
 
 # Union of tracked-changed + untracked paths relative to $root.
-$diffPaths = @(& git -C $root diff --name-only HEAD 2>$null) +
-             @(& git -C $root ls-files --others --exclude-standard 2>$null)
+# ponytail: mtime filter uses session-start stamp; git checkout on the current
+# branch can bump mtimes and cause brief over-inclusion, not under-inclusion.
+$diffPaths = @(& git -C $root -c core.quotepath=off diff --name-only HEAD 2>$null) +
+             @(& git -C $root -c core.quotepath=off ls-files --others --exclude-standard 2>$null)
 if (-not $diffPaths -or $diffPaths.Count -eq 0) { exit 0 }
 
-# Reuse scope-refresh's append+prune logic.
+$sessionPaths = New-Object System.Collections.Generic.List[string]
+foreach ($p in $diffPaths) {
+    if (-not $p) { continue }
+    $fullPath = Join-Path $root ([string]$p)
+    if (Test-PathModifiedSinceSession $fullPath $obj) {
+        $sessionPaths.Add([string]$p) | Out-Null
+    }
+}
+if ($sessionPaths.Count -eq 0) { exit 0 }
+$diffPaths = @($sessionPaths.ToArray())
+
+# Reuse scope-refresh's append+prune logic via Merge-ScopeFiles.
 $existing = @()
 if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
-$kept = New-Object System.Collections.Generic.List[string]
-foreach ($e in $existing) {
-    $s = [string]$e
-    if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s) -or ($s.Trim() -ieq '.scope.json')) { continue }
-    if (Test-IsPlanArtifactPath $s) { continue }
-    $kept.Add($s) | Out-Null
-}
-$appended = $false
-foreach ($p in $diffPaths) {
-    $rel = ConvertTo-ScopeRelativePath ([string]$p) $root
-    # Drop the contract file and any path outside the repo root.
-    if (-not $rel -or $rel -ieq '.scope.json') { continue }
-    if (Test-IsPlanArtifactPath $rel) { continue }
-    $already = $false
-    foreach ($f in $kept) {
-        if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }
-    }
-    if (-not $already) {
-        $kept.Add($rel) | Out-Null
-        $appended = $true
-    }
-}
+$merged = Merge-ScopeFiles $existing $diffPaths $root
+if (-not $merged.Appended) { exit 0 }
 
-if (-not $appended) { exit 0 }
-
-try {
-    $ordered = [ordered]@{}
-    foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
-    $ordered['files'] = @($kept.ToArray())
-    $json = $ordered | ConvertTo-Json -Depth 8
-    Write-ScopeJsonAtomic $scopePath $json
-} catch { }
+Update-ScopeJson $scopePath {
+    param($scope)
+    $scope.files = $merged.Files
+    return $scope
+} | Out-Null
 
 exit 0

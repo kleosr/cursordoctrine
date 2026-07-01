@@ -1,19 +1,11 @@
 # inject-doctrine.ps1 - Cursor sessionStart injection.
 #
 # Emits {"additional_context": "<doctrine>"} via Write-HookJson (pure-ASCII JSON).
+# Writes session-start-<cid>.txt so scope-git-sweep can filter by mtime.
 # Fail open: missing files or any error -> "{}" (valid, empty). Never block or
 # crash session start.
 
 $ErrorActionPreference = 'SilentlyContinue'
-
-function Emit-EmptyJson {
-    $bytes = [System.Text.Encoding]::ASCII.GetBytes('{}')
-    $stdout = [Console]::OpenStandardOutput()
-    $stdout.Write($bytes, 0, $bytes.Length)
-    $stdout.Flush()
-}
-
-$null = [Console]::In.ReadToEnd()
 
 $hookCommon = Join-Path $HOME '.agents\hooks\hook-common.ps1'
 if (-not (Test-Path -LiteralPath $hookCommon)) {
@@ -22,26 +14,36 @@ if (-not (Test-Path -LiteralPath $hookCommon)) {
 try {
     if (Test-Path -LiteralPath $hookCommon) { . $hookCommon }
 } catch {
-    Emit-EmptyJson
+    Write-Output '{}'
     exit 0
 }
 if (-not (Get-Command Write-HookJson -ErrorAction SilentlyContinue)) {
-    Emit-EmptyJson
+    Write-Output '{}'
     exit 0
 }
 
+$inputText = Read-HookStdin
+$obj = $null
+if ($inputText) {
+    try { $obj = $inputText | ConvertFrom-Json } catch { $obj = $null }
+}
+if ($obj) { Write-SessionStartStamp $obj }
+
 try {
-    $doctrinePath = Join-Path $PSScriptRoot 'doctrine.md'
+    $doctrinePath = Join-Path $HOME '.cursor\doctrine.md'
+    if (-not (Test-Path -LiteralPath $doctrinePath)) {
+        $doctrinePath = Join-Path $PSScriptRoot 'doctrine.md'
+    }
     $context = ''
     if (Test-Path -LiteralPath $doctrinePath) {
         $context = (Get-Content -Raw -LiteralPath $doctrinePath).Trim()
     }
 
-    if (-not $context) { Emit-EmptyJson; exit 0 }
+    if (-not $context) { Write-Output '{}'; exit 0 }
 
     Write-HookJson @{ additional_context = $context }
 } catch {
-    Emit-EmptyJson
+    Write-Output '{}'
 }
 
 exit 0

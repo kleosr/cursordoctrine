@@ -512,9 +512,10 @@ if ([string]::IsNullOrWhiteSpace($scopeIntent) -or $scopeIntent -match '^\[DRAFT
 $fileList = ($rel | Select-Object -First 30) -join "`n  "
 $uniqueFiles = @($rel | Select-Object -Unique).Count
 
-# Minimality signal: diff churn is the Levenshtein analog. No ground-truth
-# minimal edit exists in production, so we flag VOLUME disproportionate to
-# the intent's scope and let axis 4 judge whether the change is faithful.
+# Minimality signal, two layers. Volume: numstat churn. Shape: token
+# rewrite-ratio + structural delta from minimality.py (see block below).
+# No ground-truth minimal edit exists in production, so thresholds key off
+# the intent's task kind and axis 4 judges whether the change is faithful.
 $added = 0; $deleted = 0
 if ($isGitRepo -and $rel.Count -gt 0) {
     $numstatArgs = @('-C', $root, 'diff', '--numstat', 'HEAD', '--') + $rel
@@ -534,16 +535,56 @@ $taskKind = 'neutral'
 if ($intentText -match 'fix|bug|typo|off-by-one|off by one|wrong|incorrect|broken|hotfix|patch|crash|regression|null pointer|exception') { $taskKind = 'surgical' }
 elseif ($intentText -match 'add|implement|create|build|new feature|migrate|refactor|rewrite|introduce|scaffold|generate|support|enable') { $taskKind = 'constructive' }
 
+# Minimal-edit metrics (nrehiew, "Coding Models Are Doing Too Much"):
+# rewrite-ratio = 1 - token similarity vs HEAD (Levenshtein analog, 0..1);
+# structural delta = branch/bool/try constructs added vs HEAD (the
+# Added-Cognitive-Complexity analog; a faithful value fix adds ~0).
+# Computed by minimality.py when python is on PATH - same optional-python
+# posture as the anti-slop scanner; no python -> volume-only, unchanged.
+# Calibration, Table 1 of the post: faithful frontier fixes sit at
+# 0.06-0.08 normalized distance, over-editors at 0.33-0.44; ~0 vs 1.5-3.8
+# added complexity. Surgical cutoffs 0.15 / +2 sit between the bands.
+$invCulture = [System.Globalization.CultureInfo]::InvariantCulture
+$worstRatio = -1.0; $worstFile = ''; $structDelta = 0; $metricsLine = ''
+$minPy = Join-Path $PSScriptRoot 'minimality.py'
+$pyCmd = ''
+foreach ($c in 'python', 'python3') { if (Get-Command $c -ErrorAction SilentlyContinue) { $pyCmd = $c; break } }
+if ($pyCmd -and $isGitRepo -and $rel.Count -gt 0 -and (Test-Path -LiteralPath $minPy)) {
+    $minArgs = @($minPy, $root) + @($rel | Select-Object -First 20)
+    foreach ($ln in (& $pyCmd @minArgs 2>$null)) {
+        if ($ln -match "^SUMMARY\t(-?[0-9.]+)\t(.*)\t(-?\d+)$") {
+            try { $worstRatio = [double]::Parse($Matches[1], $invCulture) } catch { }
+            $worstFile = $Matches[2]
+            try { $structDelta = [int]$Matches[3] } catch { }
+        }
+    }
+}
+$ratioText = if ($worstRatio -ge 0) { $worstRatio.ToString('0.00', $invCulture) } else { 'n/a' }
+$deltaText = if ($structDelta -ge 0) { "+$structDelta" } else { "$structDelta" }
+if ($worstRatio -ge 0 -or $structDelta -ne 0) {
+    $worstNote = if ($worstFile) { " ($worstFile)" } else { '' }
+    $metricsLine = "Minimal-edit metrics: worst rewrite-ratio $ratioText$worstNote; structural delta $deltaText (branches/bools/try added vs HEAD). A faithful fix keeps rewrite-ratio near 0.00 and delta ~0.`n"
+}
+
 $minFlag = $false; $minWhy = ''
+$reasons = New-Object System.Collections.Generic.List[string]
 if ($taskKind -eq 'surgical') {
-    if ($uniqueFiles -gt 3 -or $churn -gt 30) { $minFlag = $true; $minWhy = "bug/fix task but $uniqueFiles file(s) / $churn line(s) churn" }
+    if ($uniqueFiles -gt 3 -or $churn -gt 30) { $reasons.Add("$uniqueFiles file(s) / $churn line(s) churn") | Out-Null }
+    if ($worstRatio -gt 0.15) { $reasons.Add("rewrite-ratio $ratioText on $worstFile") | Out-Null }
+    if ($structDelta -gt 2) { $reasons.Add("structural delta $deltaText the fix did not require") | Out-Null }
+    if ($reasons.Count -gt 0) { $minFlag = $true; $minWhy = 'bug/fix task but ' + ($reasons -join '; ') }
 } elseif ($taskKind -eq 'constructive') {
-    if ($uniqueFiles -gt 10 -or $churn -gt 400) { $minFlag = $true; $minWhy = "large blast radius: $uniqueFiles file(s) / $churn line(s)" }
+    if ($uniqueFiles -gt 10 -or $churn -gt 400) { $reasons.Add("large blast radius: $uniqueFiles file(s) / $churn line(s)") | Out-Null }
+    if ($worstRatio -gt 0.6) { $reasons.Add("rewrote most of existing $worstFile (rewrite-ratio $ratioText)") | Out-Null }
+    if ($reasons.Count -gt 0) { $minFlag = $true; $minWhy = ($reasons -join '; ') }
 } else {
-    if ($uniqueFiles -gt 5 -or $churn -gt 150) { $minFlag = $true; $minWhy = "$uniqueFiles file(s) / $churn line(s) - justify each or trim" }
+    if ($uniqueFiles -gt 5 -or $churn -gt 150) { $reasons.Add("$uniqueFiles file(s) / $churn line(s)") | Out-Null }
+    if ($worstRatio -gt 0.35 -or $structDelta -gt 8) { $reasons.Add("rewrite-ratio $ratioText / structural delta $deltaText") | Out-Null }
+    if ($reasons.Count -gt 0) { $minFlag = $true; $minWhy = ($reasons -join '; ') + ' - justify each or trim' }
 }
 
 $surfaceBlock = "Session footprint: $uniqueFiles file(s) touched, +$added/-$deleted ($churn churn). Task kind: $taskKind.`n"
+if ($metricsLine) { $surfaceBlock += $metricsLine }
 if ($brakeReReview) {
     $surfaceBlock += "RE-REVIEW (verify-revise): the contract (.scope.json) changed since the last review. Re-verify the role-trace below against the session work; the diff stat may be empty when the only change was the contract (source edits already committed).`n"
 }

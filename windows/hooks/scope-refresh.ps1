@@ -51,39 +51,11 @@ if ($editedFile) {
     if ($rel -and $rel -ine '.scope.json') {
         $existing = @()
         if ($sj.PSObject.Properties['files'] -and $sj.files) { $existing = @($sj.files) }
-        $kept = New-Object System.Collections.Generic.List[string]
-        foreach ($e in $existing) {
-            $s = [string]$e
-            if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s) -or ($s.Trim() -ieq '.scope.json')) { continue }
-            $kept.Add($s) | Out-Null
-        }
-        $already = $false
-        foreach ($f in $kept) {
-            if (([string]$f).Replace('\', '/').TrimStart('/') -ieq $rel) { $already = $true; break }
-        }
-        if (-not $already) {
-            $kept.Add($rel) | Out-Null
-        }
-        # Write back if the pruned list differs from the original (count or
-        # content), OR we just appended. This is what makes re-edits clean up
-        # placeholders instead of preserving them indefinitely.
-        $changed = (-not $already) -or ($kept.Count -ne $existing.Count)
-        if (-not $changed) {
-            for ($i = 0; $i -lt $kept.Count; $i++) {
-                if ([string]$kept[$i] -ne [string]$existing[$i]) { $changed = $true; break }
+        $merged = Merge-ScopeFiles $existing @($rel) $root
+        if ($merged.Changed) {
+            if (Update-ScopeJson $scopePath { param($scope); $scope.files = $merged.Files; return $scope }) {
+                try { $sj = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json } catch { }
             }
-        }
-        if ($changed) {
-            try {
-                # Preserve field order; only replace files[].
-                $ordered = [ordered]@{}
-                foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
-                $ordered['files'] = @($kept.ToArray())
-                $json = $ordered | ConvertTo-Json -Depth 8
-                Write-ScopeJsonAtomic $scopePath $json
-                # Refresh $sj so the stash reflects the updated files[].
-                $sj = $json | ConvertFrom-Json
-            } catch { }
         }
     }
 }

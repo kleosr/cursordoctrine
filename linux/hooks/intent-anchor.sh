@@ -87,20 +87,15 @@ case "$intent" in "[DRAFT]"*) intent_draft=true ;; esac
 [ "$acceptance" = "$DEFAULT_ACCEPTANCE" ] && acceptance_default=true
 
 # Read flag: "filesCount:nudgeCount".
-last_count=-1
-nudge_count=0
-if [ -f "$flag" ]; then
-    flag_data="$(cat "$flag" 2>/dev/null)"
-    last_count="$(printf '%s' "$flag_data" | cut -d: -f1 | tr -dc '0-9-')"
-    nudge_count="$(printf '%s' "$flag_data" | cut -d: -f2 | tr -dc '0-9')"
-    [ -n "$last_count" ] || last_count=-1
-    [ -n "$nudge_count" ] || nudge_count=0
-fi
+_nudge="$(read_nudge_flag "$flag")"
+last_count="${_nudge%%:*}"
+nudge_count="${_nudge#*:}"
+[ -z "$last_count" ] && last_count=-1
+[ -z "$nudge_count" ] && nudge_count=0
 
 # Both filled → contract complete. Store count and stay silent permanently.
 if [ "$intent_empty" = "false" ] && [ "$intent_draft" = "false" ] && [ "$acceptance_default" = "false" ]; then
-    mkdir -p "$pending_dir" 2>/dev/null
-    printf '%s:0' "${files_count:-0}" > "$flag" 2>/dev/null
+    write_nudge_flag "$flag" "${files_count:-0}" 0
     exit 0
 fi
 
@@ -117,8 +112,7 @@ fi
 
 # Contract incomplete AND new files AND under cap → emit.
 nudge_count=$((nudge_count + 1))
-mkdir -p "$pending_dir" 2>/dev/null
-printf '%s:%s' "${files_count:-0}" "$nudge_count" > "$flag" 2>/dev/null
+write_nudge_flag "$flag" "${files_count:-0}" "$nudge_count"
 
 msg='INTENT ANCHOR: the .scope.json contract is incomplete. The harness can only re-inject what you write — fill the agent-owned fields now:'
 if [ "$intent_empty" = "true" ]; then

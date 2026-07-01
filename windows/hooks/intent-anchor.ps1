@@ -61,14 +61,9 @@ if ($sj.PSObject.Properties['files'] -and $sj.files) { $filesCount = @($sj.files
 
 $lastCount = -1
 $nudgeCount = 0
-if (Test-Path $flag) {
-    try {
-        $flagData = (Get-Content $flag -Raw -ErrorAction SilentlyContinue).Trim()
-        $parts = $flagData -split ':'
-        if ($parts.Count -ge 1) { $lastCount = [int]$parts[0] }
-        if ($parts.Count -ge 2) { $nudgeCount = [int]$parts[1] }
-    } catch { }
-}
+$nudge = Read-NudgeFlag $flag
+$lastCount = $nudge.LastCount
+$nudgeCount = $nudge.NudgeCount
 
 $intent = ''
 if ($sj.PSObject.Properties['intent']) { $intent = [string]$sj.intent }
@@ -82,8 +77,7 @@ $acceptanceDefault = [string]::IsNullOrWhiteSpace($acceptance) -or ($acceptance 
 
 # Both filled → contract complete. Store count and stay silent permanently.
 if (-not ($intentEmpty -or $intentDraft -or $acceptanceDefault)) {
-    New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-Content -LiteralPath $flag -Value "${filesCount}:0" -ErrorAction SilentlyContinue
+    Write-NudgeFlag $flag $filesCount 0
     exit 0
 }
 
@@ -96,9 +90,7 @@ if ($nudgeCount -ge $nudgeCap) { exit 0 }
 
 # Contract incomplete AND new files since last nudge AND under cap → emit.
 $nudgeCount++
-# Store count BEFORE emitting so a crash can't re-fire for the same set.
-New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-Set-Content -LiteralPath $flag -Value "${filesCount}:${nudgeCount}" -ErrorAction SilentlyContinue
+Write-NudgeFlag $flag $filesCount $nudgeCount
 
 $prompt = ''
 if ($sj.PSObject.Properties['prompt']) { $prompt = [string]$sj.prompt }

@@ -42,9 +42,14 @@ prompt="$(json_get "$input" prompt)"
 prompt="$(printf '%s' "$prompt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 [ -n "$prompt" ] || exit 0
 
+force_new=false
 case "$prompt" in
-    "FINAL REVIEW (end of implementation)"*|"SUBAGENT FINAL REVIEW"*|"SELF-REVIEW"*|"INTENT ANCHOR"*|"INTENT REFINEMENT REQUIRED"*|"SCOPE REMINDER"*|"VERIFY MILESTONE"*) exit 0 ;;
+    /new*|/new\ *) force_new=true; prompt="${prompt#/new}"; prompt="$(printf '%s' "$prompt" | sed 's/^[[:space:]]*//')" ;;
+    new\ task:*) force_new=true; prompt="${prompt#new task:}"; prompt="$(printf '%s' "$prompt" | sed 's/^[[:space:]]*//')" ;;
 esac
+[ -n "$prompt" ] || exit 0
+
+if is_hook_generated_query "$prompt"; then exit 0; fi
 if is_plan_mode_event "$input" || is_plan_only_prompt "$prompt"; then
     exit 0
 fi
@@ -54,6 +59,8 @@ root="$(resolve_project_root "$input")"
 
 scope_path="$root/.scope.json"
 
+ensure_session_start_stamp "$input"
+
 # Returns "true" when the new prompt is dissimilar enough to treat as a new task.
 topic_changed() {
     local new_p="$1" old_p="$2"
@@ -62,7 +69,7 @@ topic_changed() {
 import os, re, sys
 
 def tokens(p):
-    return set(t for t in re.sub(r"[^a-z0-9 ]", " ", p.lower()).split() if t)
+    return set(t for t in re.sub(r"[^\w]", " ", p.lower(), flags=re.UNICODE).split() if t)
 
 def changed(new_p, old_p):
     if not (old_p or "").strip():
@@ -185,7 +192,7 @@ if [ -f "$scope_path" ]; then
 try: print(json.load(sys.stdin).get("prompt") or "")
 except Exception: pass' 2>/dev/null)"
     fi
-    if [ "$(topic_changed "$prompt" "$old_prompt")" = "true" ]; then
+    if [ "$force_new" = true ] || [ "$(topic_changed "$prompt" "$old_prompt")" = "true" ]; then
         write_reset_scope "$prompt"
         # Clear per-cid nudge throttle flags so the new task gets FRESH nudges.
         # Without this, a topic change within the same conversation leaves stale

@@ -24,7 +24,7 @@
 #
 # Silent exits (YAGNI rung 1): .scope.json missing; all steps already verified;
 # no expected_files completed; kill switch set. When decomposition is empty BUT
-# the session has touched >= 1 file, a DECOMPOSE nudge fires instead (per-cid
+# the session has touched >= 2 files, a DECOMPOSE nudge fires instead (per-cid
 # throttle, mirrors intent-anchor) — the doctrine requires decomposition for
 # multi-file tasks. Never blocks. Disable: HOOKS_ENFORCE=0 or MILESTONE_VERIFY_ENFORCE=0.
 
@@ -48,7 +48,7 @@ try {
 if (-not $sj) { exit 0 }
 
 # Need a decomposition array. Empty/missing = YAGNI rung 1 — BUT if the
-# session has touched >= 1 file, the task is likely multi-step and the
+# session has touched >= 2 files, the task is likely multi-step and the
 # doctrine REQUIRES decomposition. Nudge the agent (per-cid throttle mirrors
 # intent-anchor), then silent. Closes the gap where a session touches many
 # files with zero steps declared (the doctrine's multi-file rule unenforced).
@@ -61,19 +61,13 @@ if ($decomp.Count -eq 0) {
     if ($sj.PSObject.Properties['files'] -and $sj.files) {
         $realFiles = @($sj.files | Where-Object { $_ -and "$_".Trim() -and "$_" -notmatch '^\s*<' -and ("$_".Trim()) -ine '.scope.json' })
     }
-    if ($realFiles.Count -ge 1) {
+    if ($realFiles.Count -ge 2) {
         $cid = Get-SafeConversationId $obj
         $pendingDir = Join-Path $HOME '.cursor\.hooks-pending'
         $dflag = Join-Path $pendingDir "decompose-$cid.flag"
-        $lastCount = -1
-        $nudgeCount = 0
-        if (Test-Path $dflag) {
-            try {
-                $parts = (Get-Content $dflag -Raw -ErrorAction SilentlyContinue).Trim() -split ':'
-                if ($parts.Count -ge 1) { $lastCount = [int]$parts[0] }
-                if ($parts.Count -ge 2) { $nudgeCount = [int]$parts[1] }
-            } catch { }
-        }
+        $nudge = Read-NudgeFlag $dflag
+        $lastCount = $nudge.LastCount
+        $nudgeCount = $nudge.NudgeCount
         $fc = $realFiles.Count
         # Effectively unlimited (was 8 — exhausted mid-session on a 30-file
         # task, leaving decomposition empty with no further signal). A contract
@@ -87,8 +81,7 @@ if ($decomp.Count -eq 0) {
         # Re-nudge only when files[] grew since last nudge AND under the cap.
         if (($lastCount -lt 0 -or $fc -gt $lastCount) -and $nudgeCount -lt $decomposeCap) {
             $nudgeCount++
-            New-Item -ItemType Directory -Path $pendingDir -Force -ErrorAction SilentlyContinue | Out-Null
-            Set-Content -LiteralPath $dflag -Value "${fc}:${nudgeCount}" -ErrorAction SilentlyContinue
+            Write-NudgeFlag $dflag $fc $nudgeCount
             $sample = (($realFiles | Select-Object -First 5) -join ', ')
             $msg = "DECOMPOSE: this session has touched $fc file(s) ($sample) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $nudgeCount of $decomposeCap). The final review's axis 7 will FAIL on a multi-file task with no decomposition."
             Write-HookJson @{ additional_context = $msg }
@@ -107,21 +100,27 @@ if ($files.Count -eq 0) { exit 0 }
 # Verifications recorded so far (hook-owned by this hook).
 $verifications = @()
 if ($sj.PSObject.Properties['verifications'] -and $sj.verifications) { $verifications = @($sj.verifications) }
-# Two views: $anyVerdict = any verdict (PENDING/ACCEPT/REVISE) drives the Phase 2
-# emit-once skip; $finalVerdict = ACCEPT/REVISE only drives the Phase 1 guard, so
-# an auto-seeded PENDING does NOT block a scraped ACCEPT/REVISE from upgrading it
-# (the doctrine's "upgraded to ACCEPT/REVISE from chat" promise).
+# Two views: $anyVerdict = any verdict drives Phase 2 emit-once skip;
+# $recordedVerdict = step→verdict string for Phase 1 upgrade guard (ACCEPT is
+# terminal; PENDING/REVISE may upgrade when scraped differs).
 $anyVerdict = @{}
-$finalVerdict = @{}
+$recordedVerdict = @{}
 foreach ($v in $verifications) {
     if ($v -and $v.PSObject.Properties['step'] -and $v.PSObject.Properties['verdict']) {
         try {
             $s = [int]$v.step
             $anyVerdict[$s] = $true
-            $vd = [string]$v.verdict
-            if ($vd -ieq 'ACCEPT' -or $vd -ieq 'REVISE') { $finalVerdict[$s] = $true }
+            $recordedVerdict[$s] = [string]$v.verdict
         } catch { }
     }
+}
+
+function Test-AllowVerdictUpgrade($recorded, [int]$stepNum, [string]$scrapedVerdict) {
+    if (-not $recorded.ContainsKey($stepNum)) { return $true }
+    $rv = $recorded[$stepNum]
+    if ($rv -ieq 'ACCEPT') { return $false }
+    if ($rv -ieq $scrapedVerdict) { return $false }
+    return $true
 }
 
 # --- Phase 1: scrape most-recent ACCEPT/REVISE verdict from the transcript ----
@@ -132,7 +131,7 @@ $decompSteps = @{}
 foreach ($d in $decomp) { if ($d -and $d.PSObject.Properties['step']) { try { $decompSteps[[int]$d.step] = $true } catch { } } }
 
 $scraped = Get-LastVerdict $obj
-if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step) -and $decompSteps.ContainsKey($scraped.step)) {
+if ($scraped -and $decompSteps.ContainsKey($scraped.step) -and (Test-AllowVerdictUpgrade $recordedVerdict $scraped.step $scraped.verdict)) {
     $entry = [PSCustomObject]@{
         step      = $scraped.step
         verdict   = $scraped.verdict
@@ -151,15 +150,12 @@ if ($scraped -and -not $finalVerdict.ContainsKey($scraped.step) -and $decompStep
     # instead of the stale top-of-hook copy — otherwise the PENDING write-back
     # drops this scraped verdict when both phases fire for different steps.
     $verifications = @($newVerifs.ToArray())
-    $anyVerdict[$scraped.step] = $true; $finalVerdict[$scraped.step] = $true
-    try {
-        $ordered = [ordered]@{}
-        foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
-        $ordered['verifications'] = @($newVerifs.ToArray())
-        $json = $ordered | ConvertTo-Json -Depth 8
-        Write-ScopeJsonAtomic $scopePath $json
-        $sj = $json | ConvertFrom-Json
-    } catch { }
+    $anyVerdict[$scraped.step] = $true
+    $recordedVerdict[$scraped.step] = $scraped.verdict
+    $phase1Verifs = @($newVerifs.ToArray())
+    if (Update-ScopeJson $scopePath { param($scope); $scope.verifications = $phase1Verifs; return $scope }) {
+        try { $sj = Get-Content -LiteralPath $scopePath -Raw | ConvertFrom-Json } catch { }
+    }
 }
 
 # --- Phase 2: emit reminder for first unverified completed milestone --------
@@ -196,13 +192,8 @@ foreach ($step in $decomp) {
     $newVerifs = New-Object System.Collections.Generic.List[object]
     foreach ($v in $verifications) { $newVerifs.Add($v) | Out-Null }
     $newVerifs.Add($entry) | Out-Null
-    try {
-        $ordered = [ordered]@{}
-        foreach ($p in $sj.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
-        $ordered['verifications'] = @($newVerifs.ToArray())
-        $json = $ordered | ConvertTo-Json -Depth 8
-        Write-ScopeJsonAtomic $scopePath $json
-    } catch { }
+    $phase2Verifs = @($newVerifs.ToArray())
+    Update-ScopeJson $scopePath { param($scope); $scope.verifications = $phase2Verifs; return $scope } | Out-Null
 
     $subtask = if ($step.PSObject.Properties['subtask'] -and $step.subtask) { [string]$step.subtask } else { '(no subtask declared)' }
     $expectedList = $expected -join ', '

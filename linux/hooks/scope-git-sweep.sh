@@ -37,6 +37,8 @@ esac
 root="$(resolve_project_root "$input")"
 [ -n "$root" ] || exit 0
 
+get_session_start_epoch "$input" >/dev/null 2>&1 || exit 0
+
 scope_path="$root/.scope.json"
 [ -f "$scope_path" ] || exit 0
 
@@ -47,9 +49,19 @@ scope_raw="$(cat "$scope_path" 2>/dev/null)"
 
 # Prefer python3 (matches the other Linux hooks' preferred path); fall back to jq.
 if have_py; then
-    diff_out="$(git -C "$root" diff --name-only HEAD 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+    diff_out="$(git -C "$root" -c core.quotepath=off diff --name-only HEAD 2>/dev/null; git -C "$root" -c core.quotepath=off ls-files --others --exclude-standard 2>/dev/null)"
     [ -n "$diff_out" ] || exit 0
-    new_raw="$(SCOPE_RAW="$scope_raw" DIFF_OUT="$diff_out" python3 -c '
+    filtered=""
+    while IFS= read -r _line; do
+        [ -z "$_line" ] && continue
+        _fp="$root/$_line"
+        _fp="${_fp//\\//}"
+        path_modified_since_session "$_fp" "$input" && filtered="${filtered}${_line}"$'\n'
+    done <<EOF
+$diff_out
+EOF
+    [ -n "$filtered" ] || exit 0
+    new_raw="$(SCOPE_RAW="$scope_raw" DIFF_OUT="$filtered" python3 -c '
 import json, os, sys
 try:
     scope = json.loads(os.environ["SCOPE_RAW"])
@@ -96,10 +108,20 @@ fi
 
 # jq fallback (no python3). Union diff paths into files[], same prune filter.
 have_jq || exit 0
-diff_out="$(git -C "$root" diff --name-only HEAD 2>/dev/null; git -C "$root" ls-files --others --exclude-standard 2>/dev/null)"
+diff_out="$(git -C "$root" -c core.quotepath=off diff --name-only HEAD 2>/dev/null; git -C "$root" -c core.quotepath=off ls-files --others --exclude-standard 2>/dev/null)"
 [ -n "$diff_out" ] || exit 0
+filtered=""
+while IFS= read -r _line; do
+    [ -z "$_line" ] && continue
+    _fp="$root/$_line"
+    _fp="${_fp//\\//}"
+    path_modified_since_session "$_fp" "$input" && filtered="${filtered}${_line}"$'\n'
+done <<EOF
+$diff_out
+EOF
+[ -n "$filtered" ] || exit 0
 
-new_raw="$(printf '%s' "$scope_raw" | jq --rawfile diff <(printf '%s\n' "$diff_out") '
+new_raw="$(printf '%s' "$scope_raw" | jq --rawfile diff <(printf '%s' "$filtered") '
     (.files // []) as $existing |
     ($existing | map(select(
         . != "" and

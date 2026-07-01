@@ -65,15 +65,15 @@ except Exception: print(0)' 2>/dev/null)"
 fi
 _dl="${_dl:-0}"; _rfc="${_rfc:-0}"
 if [ "$_dl" -eq 0 ] 2>/dev/null; then
-    if [ "$_rfc" -ge 1 ] 2>/dev/null; then
+    if [ "$_rfc" -ge 2 ] 2>/dev/null; then
         _cid="$(safe_conversation_id "$input")"
         _pdir="$HOME/.cursor/.hooks-pending"
         _dflag="$_pdir/decompose-$_cid.flag"
-        _lc=-1; _nc=0
-        if [ -f "$_dflag" ]; then
-            _lc="$(cut -d: -f1 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _lc="${_lc:--1}"
-            _nc="$(cut -d: -f2 "$_dflag" 2>/dev/null | tr -dc '0-9')"; _nc="${_nc:-0}"
-        fi
+        _nudge="$(read_nudge_flag "$_dflag")"
+        _lc="${_nudge%%:*}"
+        _nc="${_nudge#*:}"
+        [ -z "$_lc" ] && _lc=-1
+        [ -z "$_nc" ] && _nc=0
         _fc="$_rfc"
         # Effectively unlimited (was 8 — exhausted mid-session on a 30-file
         # task, leaving decomposition empty with no further signal). A contract
@@ -89,8 +89,7 @@ if [ "$_dl" -eq 0 ] 2>/dev/null; then
         if [ "$_nc" -ge "$_decompose_cap" ] 2>/dev/null; then _fire=false; fi
         if [ "$_fire" = true ]; then
             _nc=$((_nc + 1))
-            mkdir -p "$_pdir" 2>/dev/null
-            printf '%s:%s' "$_rfc" "$_nc" > "$_dflag" 2>/dev/null
+            write_nudge_flag "$_dflag" "$_rfc" "$_nc"
             emit_json additional_context "DECOMPOSE: this session has touched $_rfc file(s) but .scope.json has no decomposition[]. The doctrine requires decomposition for any multi-step or multi-file task. Declare it now: each entry needs step (int), subtask (one-line string), and expected_files (array of paths). This nudge re-fires on each new file until decomposition is filled (nudge $_nc of $_decompose_cap). The final review's axis 7 will FAIL on a multi-file task with no decomposition."
             exit 0
         fi
@@ -99,114 +98,9 @@ if [ "$_dl" -eq 0 ] 2>/dev/null; then
     exit 0
 fi
 
-# --- jq-only path (no python3): verdict scrape + milestone detect -----------
-# When python3 is missing, use jq for JSON + grep for transcript scraping.
-# This is less robust (no multiline content extraction from JSONL) but catches
-# the common case where the verdict appears as a plain string in the transcript.
-if ! have_py; then
-    # Parse decomposition + files + verifications from .scope.json via jq.
-    decomp_len="$(printf '%s' "$scope_raw" | jq -r '.decomposition | length' 2>/dev/null)"
-    [ "$decomp_len" -gt 0 ] 2>/dev/null || exit 0
-    decomp_steps="$(printf '%s' "$scope_raw" | jq -r '.decomposition[]? | .step' 2>/dev/null)"
+have_py || exit 0
 
-    files_list="$(printf '%s' "$scope_raw" | jq -r '.files[]? // empty' 2>/dev/null)"
-    [ -n "$files_list" ] || exit 0
-
-    # Two views: verified_steps = any verdict (PENDING/ACCEPT/REVISE) for the
-    # Phase 2 emit-once skip; final_steps = ACCEPT/REVISE only for the Phase 1
-    # guard, so an auto-seeded PENDING does not block a scraped ACCEPT/REVISE.
-    verified_steps="$(printf '%s' "$scope_raw" | jq -r '.verifications[]? | .step' 2>/dev/null)"
-    final_steps="$(printf '%s' "$scope_raw" | jq -r '.verifications[]? | select(.verdict=="ACCEPT" or .verdict=="REVISE") | .step' 2>/dev/null)"
-
-    # Phase 1: grep-based verdict scrape from transcript.
-    tp="$(json_get "$input" transcript_path)"
-    if [ -n "$tp" ] && [ -f "$tp" ]; then
-        # Read transcript backward, find last ACCEPT/REVISE step N in assistant turns.
-        if command -v tac >/dev/null 2>&1; then
-            reversed="$(tac "$tp" 2>/dev/null)"
-        else
-            reversed="$(awk '{a[NR]=$0} END {for(i=NR;i>=1;i--) print a[i]}' "$tp" 2>/dev/null)"
-        fi
-        # Scrape verdict backward: canonical ACCEPT/REVISE step N, then
-        # ACCEPTED/REVISED, then loosened "step N <phrase>" forms.
-        scraped_verdict="$(printf '%s' "$reversed" | grep -oE '(ACCEPT|REVISE)[[:space:]]+step[[:space:]]+[0-9]+' | head -1 2>/dev/null)"
-        sv_kind=canonical
-        if [ -z "$scraped_verdict" ]; then
-            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE '(ACCEPTED|REVISED)[[:space:]]+step[[:space:]]+[0-9]+' | head -1 2>/dev/null)"
-            sv_kind=ed
-        fi
-        if [ -z "$scraped_verdict" ]; then
-            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE 'step[[:space:]]+[0-9]+[[:space:]]+(accepted|approved|done|complete[ds]?|looks good|good|ok|passes?|passed)' | head -1 2>/dev/null)"
-            sv_kind=accept
-        fi
-        if [ -z "$scraped_verdict" ]; then
-            scraped_verdict="$(printf '%s' "$reversed" | grep -oiE 'step[[:space:]]+[0-9]+[[:space:]]+(revise[ds]?|needs?[[:space:]]+fix|fails?|failed|broken|reject(ed)?)' | head -1 2>/dev/null)"
-            sv_kind=revise
-        fi
-        if [ -n "$scraped_verdict" ]; then
-            case "$sv_kind" in
-                canonical) sv_verb="$(printf '%s' "$scraped_verdict" | grep -oiE '^(ACCEPT|REVISE)' | tr '[:lower:]' '[:upper:]')" ;;
-                ed)        v="$(printf '%s' "$scraped_verdict" | grep -oiE '^(ACCEPTED|REVISED)' | tr '[:lower:]' '[:upper:]')"
-                           sv_verb="$(if [ "$v" = "ACCEPTED" ]; then printf ACCEPT; else printf REVISE; fi)" ;;
-                accept)    sv_verb="ACCEPT" ;;
-                revise)    sv_verb="REVISE" ;;
-            esac
-            sv_step="$(printf '%s' "$scraped_verdict" | grep -oE '[0-9]+' | head -1)"
-            # Only record if the step is declared in decomposition[] and not
-            # already verified — a scraped step not in decomposition[] is
-            # hallucinated/stale and would pollute verifications[].
-            if [ -n "$sv_step" ] && printf '%s\n' "$decomp_steps" | grep -qx "$sv_step" && ! printf '%s\n' "$final_steps" | grep -qx "$sv_step"; then
-                # Update .scope.json verifications via jq.
-                new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$sv_step" --arg verb "$sv_verb" '
-                    .verifications = ((.verifications // []) | map(select(.step != $sn)))
-                    + [{"step": $sn, "verdict": $verb, "diagnosis": ""}]
-                ' 2>/dev/null)"
-                if [ -n "$new_raw" ]; then
-                    write_scope_json_atomic "$scope_path" "$new_raw"
-                    scope_raw="$new_raw"
-                    verified_steps="$(printf '%s\n%s' "$verified_steps" "$sv_step")"
-                    final_steps="$(printf '%s\n%s' "$final_steps" "$sv_step")"
-                fi
-            fi
-        fi
-    fi
-
-    # Phase 2: detect unverified completed milestone via jq.
-    _verified_csv="$(printf '%s\n' "$verified_steps" | grep -v '^$' | paste -sd,)"
-    _verified_json="[${_verified_csv}]"
-    msg="$(printf '%s' "$scope_raw" | jq -r --argjson verified "$_verified_json" '
-        (.files // []) as $files |
-        ($files | map(ltrimstr("/") | ascii_downcase)) as $files_lc |
-        ([.decomposition[]?] as $decomp |
-        ($decomp | length) as $total |
-        first(
-            $decomp[] |
-            select(.step as $sn | $verified | index($sn) | not) |
-            select((.expected_files // []) | length > 0) |
-            select(all((.expected_files // [])[]; (. | ltrimstr("/") | ascii_downcase) as $ef | $files_lc | index($ef))) |
-            "VERIFY MILESTONE step \(.step) of \($total)\n  subtask: \(.subtask // "(no subtask declared)")\n  expected_files: \((.expected_files // []) | join(", ")) (all touched; recorded as PENDING in verifications[])\n  Emit \"ACCEPT step \(.step)\" to proceed, or \"REVISE step \(.step): <one-line diagnosis>\" to repair."
-        ) // empty
-    ' 2>/dev/null)"
-    # Auto-PENDING: write a {verdict:"PENDING"} entry for the milestone step
-    # before emitting the reminder, so verifications[] is never blank once a
-    # milestone is reached. Uses the same jq replace-then-append as Phase 1.
-    pending_step="$(printf '%s' "$msg" | grep -oE 'VERIFY MILESTONE step [0-9]+' | grep -oE '[0-9]+' | head -1)"
-    if [ -n "$pending_step" ]; then
-        new_raw="$(printf '%s' "$scope_raw" | jq --argjson sn "$pending_step" '
-            .verifications = ((.verifications // []) | map(select(.step != $sn)))
-            + [{"step": $sn, "verdict": "PENDING", "diagnosis": "auto: all expected_files touched"}]
-        ' 2>/dev/null)"
-        if [ -n "$new_raw" ]; then
-            write_scope_json_atomic "$scope_path" "$new_raw"
-        fi
-    fi
-    if [ -n "$msg" ]; then
-        emit_json additional_context "$msg"
-    fi
-    exit 0
-fi
-
-# --- python3 path (preferred): full verdict scrape + milestone detect --------
+# --- python3 path: full verdict scrape + milestone detect --------
 # Single python3 pass: phase 1 (scrape verdict, write to .scope.json) +
 # phase 2 (detect unverified completed milestone, emit reminder to stdout).
 msg="$(SCOPE_RAW="$scope_raw" SCOPE_PATH="$scope_path" INPUT="$input" python3 -c '
@@ -253,13 +147,22 @@ if not files:
     sys.exit(0)
 
 verifs = scope.get("verifications") or []
-verified = set()        # any verdict (PENDING/ACCEPT/REVISE) — Phase 2 emit-once skip
-final_verdicts = set()  # ACCEPT/REVISE only — Phase 1 guard, so PENDING is upgradeable
+verified = set()
+recorded_by_step = {}
 for v in verifs:
     if isinstance(v, dict) and isinstance(v.get("step"), int):
         verified.add(v["step"])
-        if v.get("verdict") in ("ACCEPT", "REVISE"):
-            final_verdicts.add(v["step"])
+        recorded_by_step[v["step"]] = v.get("verdict")
+
+def allow_upgrade(step_num, scraped_verdict):
+    rv = recorded_by_step.get(step_num)
+    if rv is None:
+        return True
+    if rv == "ACCEPT":
+        return False
+    if rv == scraped_verdict:
+        return False
+    return True
 
 # --- Phase 1: scrape most-recent ACCEPT/REVISE from assistant turns ---------
 try:
@@ -301,6 +204,10 @@ if tp and os.path.isfile(tp):
                     text += p["text"]
         if not text:
             continue
+        # Skip final-review report turns so axis lines like
+        # "- **7 Role-trace**: FAIL - step 2..." are not scraped as real verdicts.
+        if "**Verdict**:" in text:
+            continue
         # Strip fenced code blocks so verdict keywords inside examples/quoted
         # output are not scraped as real verdicts.
         text = re.sub(r"```.*?```", "", text, flags=re.S)
@@ -321,12 +228,13 @@ if tp and os.path.isfile(tp):
         _, verdict, step_num, diag = candidates[0]
         # Only record verdicts for declared steps; a scraped step not in
         # decomposition[] is hallucinated/stale and would pollute verifications[].
-        if step_num > 0 and step_num not in final_verdicts and step_num in decomp_steps:
+        if step_num > 0 and step_num in decomp_steps and allow_upgrade(step_num, verdict):
             new_verifs = [v for v in verifs if not (isinstance(v, dict) and v.get("step") == step_num)]
             new_verifs.append({"step": step_num, "verdict": verdict, "diagnosis": diag})
             scope["verifications"] = new_verifs
             verified.add(step_num)
-            final_verdicts.add(step_num)
+            recorded_by_step[step_num] = verdict
+            verifs = new_verifs
             atomic_write_scope(scope)
         break
 

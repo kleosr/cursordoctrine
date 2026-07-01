@@ -74,23 +74,18 @@ except Exception:
 }
 
 # ponytail: dependency-free extraction of a top-level "key":"value" string
-# field, used when neither jq nor python3 is present so permission-gate keeps
-# matching the command field instead of going blind on the raw JSON envelope.
-# Ceiling = value contains an escaped quote (\"), an escaped solidus (\/), or
-# spans multiple lines; upgrade = require jq/python3 at install time.
+# field when neither jq nor python3 is present.
 json_get_string_native() {
     local json="$1" key="$2"
     [ -n "$json" ] || return 0
     printf '%s' "$json" |
-        sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" |
+        sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"\\]*\(\\.[^\"\\]*\)*\)\".*/\1/p" |
         head -n1
 }
 
 # Atomic, crash-safe .scope.json write: mkdir lock (portable atomic primitive),
-# write a temp file, mv -f over the target. Closes (a) the truncation/data-loss
-# bug where `> "$scope_path"` / open("w") truncates BEFORE the transform runs,
-# so a failed jq/python leaves an empty file; and (b) the read-modify-write race
-# where parallel postToolUse hooks each overwrote the other's update.
+# write a temp file, mv -f over the target. Serializes the write only — callers
+# that read-modify-write outside this lock can still lose updates.
 # ponytail: lock ceiling = stale lockdir left by a hard-killed process is swept
 # after 10s; not flock(2). Upgrade = flock where available.
 write_scope_json_atomic() {
@@ -126,6 +121,50 @@ write_scope_json_atomic() {
     rm -rf "$lock" 2>/dev/null
 }
 
+read_scope_file_lines() {
+    local path="$1"
+    [ -f "$path" ] || return 0
+    have_py || return 0
+    SCOPE_PATH="$path" python3 -c '
+import json, os
+try:
+    for f in (json.load(open(os.environ["SCOPE_PATH"])).get("files") or []):
+        s = str(f).strip()
+        if s and not s.startswith("<") and s != ".scope.json":
+            print(s.replace("\\\\", "/").lstrip("/"))
+except Exception: pass' 2>/dev/null
+}
+
+scope_json_string_field() {
+    local raw="$1" field="$2"
+    [ -n "$raw" ] || return 0
+    have_py || return 0
+    SCOPE_RAW="$raw" FIELD="$field" python3 -c '
+import json, os
+try:
+    v = json.loads(os.environ["SCOPE_RAW"]).get(os.environ["FIELD"]) or ""
+    if isinstance(v, str):
+        print(v)
+except Exception: pass' 2>/dev/null
+}
+
+read_nudge_flag() {
+    local flag="$1" last_count=-1 nudge_count=0 parts
+    if [ -f "$flag" ]; then
+        IFS=':' read -r last_count nudge_count _ < "$flag" 2>/dev/null || true
+        [ -z "$last_count" ] && last_count=-1
+        [ -z "$nudge_count" ] && nudge_count=0
+    fi
+    printf '%s:%s' "$last_count" "$nudge_count"
+}
+
+write_nudge_flag() {
+    local flag="$1" files_count="$2" nudge_count="$3" dir
+    dir="$(dirname "$flag")"
+    mkdir -p "$dir" 2>/dev/null
+    printf '%s:%s' "$files_count" "$nudge_count" > "$flag" 2>/dev/null
+}
+
 # emit_json <key> <value>  -> compact, ASCII-escaped {"key":"value"} on stdout
 emit_json() {
     local key="$1" value="$2"
@@ -153,6 +192,61 @@ safe_conversation_id() {
         fi
     fi
     printf '%s' "${cid:-default}"
+}
+
+session_stamp_path() {
+    local input="$1" cid
+    cid="$(safe_conversation_id "$input")"
+    printf '%s' "$HOME/.cursor/.hooks-pending/session-start-${cid}.txt"
+}
+
+write_session_start_stamp() {
+    local input="$1" path dir
+    [ -n "$input" ] || return 0
+    path="$(session_stamp_path "$input")"
+    dir="$(dirname "$path")"
+    mkdir -p "$dir" 2>/dev/null
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$path" 2>/dev/null
+}
+
+ensure_session_start_stamp() {
+    local input="$1" path
+    path="$(session_stamp_path "$input")"
+    [ -f "$path" ] || write_session_start_stamp "$input"
+}
+
+get_session_start_epoch() {
+    local input="$1" path ts ep
+    path="$(session_stamp_path "$input")"
+    [ -f "$path" ] || return 1
+    ts="$(cat "$path" 2>/dev/null | tr -d '\r\n')"
+    [ -n "$ts" ] || return 1
+    if have_py; then
+        TS="$ts" python3 -c '
+from datetime import datetime, timezone
+import os, sys
+raw = os.environ["TS"].replace("Z", "+00:00")
+try:
+    t = datetime.fromisoformat(raw)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    ep = int(t.timestamp())
+    if ep > 0:
+        print(ep)
+except Exception:
+    sys.exit(1)' 2>/dev/null && return 0
+    fi
+    ep="$(date -d "$ts" +%s 2>/dev/null)"
+    [ -n "$ep" ] && [ "$ep" -gt 0 ] 2>/dev/null || return 1
+    printf '%s' "$ep"
+}
+
+path_modified_since_session() {
+    local fullpath="$1" input="$2" session_epoch file_epoch
+    session_epoch="$(get_session_start_epoch "$input")" || return 1
+    [ -e "$fullpath" ] || return 1
+    file_epoch="$(date -r "$fullpath" +%s 2>/dev/null || stat -c %Y "$fullpath" 2>/dev/null || echo 0)"
+    [ "$file_epoch" -ge "$(( session_epoch - 1 ))" ] 2>/dev/null
 }
 
 # resolve_project_root <json> -> project root ('' if none resolves; NO $HOME
@@ -246,6 +340,51 @@ scope_relative_path() {
         if [ -n "$out" ]; then out="$out/$part"; else out="$part"; fi
     done
     printf '%s' "$out"
+}
+
+scope_relative_any_root() {
+    local p="$1" input="$2" root w
+    p="$(printf '%s' "$p")"
+    input="$(printf '%s' "$input")"
+    w="$(json_get "$input" cwd)"
+    if [ -n "$w" ]; then
+        root="$(printf '%s' "$w" | tr '\\' '/' | sed 's|/*$||')"
+        if [ -n "$(scope_relative_path "$p" "$root")" ]; then
+            scope_relative_path "$p" "$root"
+            return 0
+        fi
+    fi
+    while IFS= read -r w; do
+        [ -n "$w" ] || continue
+        root="$(printf '%s' "$w" | tr '\\' '/' | sed 's|/*$||')"
+        if [ -n "$(scope_relative_path "$p" "$root")" ]; then
+            scope_relative_path "$p" "$root"
+            return 0
+        fi
+    done <<EOF
+$(json_get_array "$input" workspace_roots)
+EOF
+    root="$(resolve_project_root "$input")"
+    [ -n "$root" ] && scope_relative_path "$p" "$root"
+}
+
+redact_secrets_from_intent() {
+    local text="$1"
+    [ -n "$text" ] || return 0
+    if have_py; then
+        T="$text" python3 -c '
+import os, re
+t = os.environ["T"]
+t = re.sub(r"\bnpm_[A-Za-z0-9]{10,}\b", "[REDACTED_NPM_TOKEN]", t)
+t = re.sub(r"\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b", "[REDACTED_TOKEN]", t)
+t = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+", r"\1=[REDACTED]", t)
+print(t)' 2>/dev/null
+        return
+    fi
+    printf '%s' "$text" | sed -E \
+        -e 's/\bnpm_[A-Za-z0-9]{10,}\b/[REDACTED_NPM_TOKEN]/g' \
+        -e 's/\b(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})\b/[REDACTED_TOKEN]/g' \
+        -e 's/(api[_-]?key|token|secret|password)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/Ig'
 }
 
 is_plan_artifact_path() {

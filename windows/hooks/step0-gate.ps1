@@ -57,11 +57,14 @@ $intent = $intent.Trim()
 $intentEmpty = [string]::IsNullOrWhiteSpace($intent) -or ($intent -match '^\[DRAFT\]')
 
 $realFiles = 0
+$filesLower = @{}
 if ($sj.PSObject.Properties['files'] -and $sj.files) {
     foreach ($e in @($sj.files)) {
         $s = [string]$e
         if (-not $s -or $s -match '^\s*<TODO' -or [string]::IsNullOrWhiteSpace($s) -or ($s.Trim() -ieq '.scope.json')) { continue }
         $realFiles++
+        $norm = $s.Replace('\', '/').TrimStart('/').ToLowerInvariant()
+        if ($norm) { $filesLower[$norm] = $true }
     }
 }
 
@@ -73,16 +76,6 @@ if ($sj.PSObject.Properties['decomposition'] -and $sj.decomposition) {
         if ($d -is [string]) { $sub = $d }
         elseif ($d.PSObject.Properties['subtask'] -and $d.subtask) { $sub = [string]$d.subtask }
         if (-not [string]::IsNullOrWhiteSpace($sub) -and $sub -notmatch '^\s*<TODO') { $decompCount++ }
-    }
-}
-
-# Normalized files[] set for the "second DISTINCT file" check (bug fix: re-editing
-# the same file must not be blocked, only editing a new file without decomposition).
-$filesLower = @{}
-if ($sj.PSObject.Properties['files'] -and $sj.files) {
-    foreach ($e in @($sj.files)) {
-        $s = ([string]$e).Replace('\', '/').TrimStart('/').ToLowerInvariant()
-        if ($s) { $filesLower[$s] = $true }
     }
 }
 
@@ -120,8 +113,8 @@ if ($targetPaths.Count -eq 0) {
 }
 
 foreach ($targetPath in $targetPaths) {
-    $rel = ConvertTo-ScopeRelativePath $targetPath $root
-    if (-not $rel) { Deny-Step0 'edit target is outside the resolved project root or could not be normalized.' }
+    $rel = ConvertTo-ScopeRelativePathAnyRoot $targetPath $obj
+    if (-not $rel) { Deny-Step0 'edit target is outside all workspace roots or could not be normalized.' }
     if ($rel -ieq '.scope.json') { continue }
     if ($intentEmpty) {
         Deny-Step0 'intent is empty — write your one-line Step 0 restatement to .scope.json before editing code.'

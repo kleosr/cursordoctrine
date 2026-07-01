@@ -6,7 +6,7 @@ If an axis is clean, one line — don't manufacture work.
 
 Copy this template. Replace each verdict. One line per axis. No prose between lines.
 For trivial diffs (1 file, <10 lines, typo/literal): collapse to axes 0+1 only,
-mark the rest N/A.
+mark 2–6 N/A and 7 SKIP.
 
     - **0 Intent trace**: PASS | FAIL — <one line>
     - **1 Correctness**: PASS | FAIL — <one line>
@@ -25,8 +25,9 @@ Rules:
 - **N/A** = axis doesn't apply (e.g. no UI = wiring N/A, no tests exist = coverage N/A).
 - **SKIP** = axis 7 only, when decomposition is empty on a TRIVIAL one-liner (<=1 file).
 - **ACCEPT** = all axes PASS, N/A, or SKIP. Stop immediately after the report.
-- **REVISE** = any axis FAIL. Fix every FAIL, re-run tests, emit the report again
-  with those lines now showing PASS. Then ACCEPT and stop.
+- **REVISE** = any axis FAIL. Fix every FAIL, re-run tests, emit ONE report where fixed
+  axes read `PASS — fixed: <what>`. Verdict REVISE only if unresolved FAILs remain
+  — the harness re-reviews the new diff automatically.
 
 No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 
@@ -34,7 +35,7 @@ No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 "Clean code, wrong feature" is the worst failure; no later axis catches it.
 - [ ] Every hunk traces to a sentence in ORIGINAL REQUEST. None → hallucinated → revert.
 - [ ] Hunks from a prior turn (in working tree at turn start) → prior accepted work → leave.
-- [ ] Touched but not in `.scope.json` `files[]` → scope creep IF added this turn → revert.
+- [ ] Non-doctrine fallback only: touched but not in git diff/untracked → scope creep IF added this turn → revert.
 - [ ] Unsure if hunk is yours-this-turn → ASK, never auto-revert.
 - [ ] No ORIGINAL REQUEST (sandboxed run) → skip this axis.
 - [ ] `.scope.json` `intent` field is non-empty AND reflects THIS turn's task. It must be YOUR restatement — clearer/better than the verbatim prompt, NOT a copy of it. Empty (or a stale `[DRAFT]` from a legacy install) → rewrite it now (one-line, your own words). This axis FAILs on empty intent — do not ACCEPT until it's written.
@@ -63,8 +64,8 @@ No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 - [ ] `.scope.json` declared acceptance → that's the bar.
 
 ## 4. Anti-slop
-- [ ] Apply ALL 40 items in `~/.agents/hooks/anti-slop.md` to every hunk (source of truth).
-- [ ] If scanner available: `python ~/.cursor/skills/anti-slop/scripts/scan_slop.py <files>`.
+- [ ] Apply the anti-slop anchors in `~/.agents/hooks/anti-slop.md` to every hunk (source of truth).
+- [ ] If scanner available: `python3 ~/.cursor/skills/anti-slop/scripts/scan_slop.py <files>`.
 - [ ] NEVER use `--all` at review time — audits pre-existing codebase, out of scope.
 - [ ] Whole-codebase audit is separate (`cursordoctrine sweep`).
 - [ ] MINIMALITY (over-editing): read the injected MINIMALITY line. If DISPROPORTIONATE,
@@ -82,16 +83,11 @@ No summary paragraph. No "in conclusion." No explanation unless an axis FAILs.
 
 ## 6. Mechanics & stack integrity
 Fix by name (don't explain — delete and write the correct pattern).
-- [ ] Data integrity: N+1 in loops → batch/join. Non-idempotent retry → idempotency-key. Multi-write → txn/Saga.
-- [ ] Boundaries: unvalidated input → Zod/Pydantic at the boundary.
-- [ ] React: zombie listener (useEffect without cleanup `return`). God component (>150 lines). Index-as-key in non-static lists.
 - [ ] State: inline `Date.now()` / `Math.random()` / `process.env` in logic → inject. In-place mutation of shared state → new structures.
-- [ ] Control flow: arrow code >2 nesting → guard clauses. Switch / 5+ if-else → Map dispatch. Mixed abstraction (SLAP).
-- [ ] Styling: Tailwind soup / magic tokens / hardcoded hex / `z-[9999]`.
-- [ ] Types: primitive obsession. Imperative `for` where `.map` / `.filter` work.
+- [ ] Side effects not covered by anti-slop: zombie listeners, God components, index-as-key, Tailwind soup, N+1 loops, non-idempotent retries.
 
 ## 7. Role-trace (FAIL if decomposition is empty on a multi-file task)
-- [ ] Each `decomposition[i]` has a matching `verifications[i]` (else unfinished work — verify or remove the step).
-- [ ] Each `verifications[i].verdict == "ACCEPT"` (open REVISE → fix or convert with one-line justification).
+- [ ] Each declared step has a recorded verdict (else unfinished work — verify or remove the step).
+- [ ] Each `verifications[i].verdict == "ACCEPT"` (open REVISE → fix or re-emit `ACCEPT step N` after the fix; do not edit verifications[] manually).
 - [ ] No files touched this session outside any step's `expected_files` (else cross-step leakage — justify or revert).
 - [ ] Multi-file task (Session footprint >= 2) with empty decomposition → FAIL. Declare `decomposition[]` now: each entry `{ step, subtask, expected_files }`. This axis only SKIPs for a genuine trivial one-liner (<=1 file). YAGNI rung 1 governs only that case.
