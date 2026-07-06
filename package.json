@@ -1,11 +1,11 @@
 {
   "name": "cursordoctrine",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Cursor hook pack: doctrine at session start, Step 0 hard gate on writes, shell deny-list without force-push, one final review at stop.",
   "main": "bin/cli.mjs",
   "type": "module",
   "bin": {
-    "cursordoctrine": "./bin/cli.mjs"
+    "cursordoctrine": "bin/cli.mjs"
   },
   "scripts": {
     "install": "node bin/cli.mjs install",
@@ -36,6 +36,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kleosr/cursordoctrine.git"
+    "url": "git+https://github.com/kleosr/cursordoctrine.git"
   }
 }
