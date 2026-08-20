@@ -8,7 +8,7 @@
     "cursordoctrine": "bin/cli.mjs"
   },
   "scripts": {
-    "install": "node bin/cli.mjs install",
+    "hooks:install": "node bin/cli.mjs install",
     "verify": "node bin/cli.mjs verify",
     "uninstall": "node bin/cli.mjs uninstall"
   },
