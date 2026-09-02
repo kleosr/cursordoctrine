@@ -3,7 +3,6 @@ __pycache__/
 
 # Cursor IDE + agent dev config (repo-local, not shipped doctrine)
 .cursor/rules/
-AGENTS.md
 
 # secrets
 .env
